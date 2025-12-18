@@ -14,6 +14,9 @@ import com.craftzero.graphics.TextRenderer;
 import com.craftzero.inventory.ItemStack;
 import com.craftzero.ui.CraftingTableScreen;
 import com.craftzero.ui.InventoryScreen;
+import com.craftzero.graphics.SkyRenderer;
+import com.craftzero.graphics.CloudRenderer;
+import com.craftzero.world.DayCycleManager;
 import com.craftzero.world.World;
 
 import static org.lwjgl.glfw.GLFW.*;
@@ -32,6 +35,9 @@ public class Main implements Runnable {
     private Window window;
     private Timer timer;
     private Renderer renderer;
+    private SkyRenderer skyRenderer;
+    private CloudRenderer cloudRenderer;
+    private DayCycleManager dayCycleManager;
     private HudRenderer hudRenderer;
     private SurvivalHudRenderer survivalHudRenderer;
     private BlockHighlightRenderer blockHighlightRenderer;
@@ -68,6 +74,17 @@ public class Main implements Runnable {
         textRenderer = new TextRenderer();
         textRenderer.init(window.getWidth(), window.getHeight());
 
+        // Initialize day/night cycle
+        dayCycleManager = new DayCycleManager();
+
+        // Initialize sky renderer
+        skyRenderer = new SkyRenderer();
+        skyRenderer.init();
+
+        // Initialize cloud renderer
+        cloudRenderer = new CloudRenderer();
+        cloudRenderer.init();
+
         // Initialize HUD
         hudRenderer = new HudRenderer();
         hudRenderer.init(window);
@@ -76,6 +93,14 @@ public class Main implements Runnable {
         survivalHudRenderer = new SurvivalHudRenderer();
         survivalHudRenderer.init(window);
         survivalHudRenderer.setTextRenderer(textRenderer);
+
+        // Initialize GUI textures (hearts, hunger, hotbar from icons.png and gui.png)
+        com.craftzero.graphics.GuiTexture.init();
+        survivalHudRenderer.setGuiTextures(
+                com.craftzero.graphics.GuiTexture.getIconsTexture(),
+                com.craftzero.graphics.GuiTexture.getGuiTexture());
+        survivalHudRenderer.setItemsTexture(
+                com.craftzero.graphics.GuiTexture.getItemsTexture());
 
         // Initialize block highlight
         blockHighlightRenderer = new BlockHighlightRenderer();
@@ -102,6 +127,13 @@ public class Main implements Runnable {
         // Pass atlas to UI renderers for textured block icons
         survivalHudRenderer.setAtlas(world.getAtlas());
         inventoryRenderer.setAtlas(world.getAtlas());
+
+        // Pass GUI textures for inventory and crafting table backgrounds
+        inventoryRenderer.setGuiTextures(
+                com.craftzero.graphics.GuiTexture.getInventoryTexture(),
+                com.craftzero.graphics.GuiTexture.getCraftingTexture());
+        inventoryRenderer.setItemsTexture(
+                com.craftzero.graphics.GuiTexture.getItemsTexture());
 
         // Create player at spawn point (closer to typical terrain height)
         // Player has 5 seconds of spawn invincibility to handle any remaining fall
@@ -272,6 +304,42 @@ public class Main implements Runnable {
         // Update player physics and collision
         player.update(deltaTime, world);
 
+        // Update fog based on underwater state
+        if (player.isHeadInWater()) {
+            // Calculate depth (distance to surface)
+            int depth = 0;
+            org.joml.Vector3f pos = player.getPosition();
+            for (int i = 1; i <= 20; i++) {
+                if (world.getBlock((int) pos.x, (int) pos.y + 1 + i,
+                        (int) pos.z) == com.craftzero.world.BlockType.WATER) {
+                    depth++;
+                } else {
+                    break;
+                }
+            }
+
+            // Adjust density based on depth
+            // Depth 0 (surface): 0.15, Depth 10+: 0.35
+            float t = Math.min(depth, 10) / 10.0f;
+            float density = 0.15f + t * 0.20f;
+
+            renderer.setFogDensity(density);
+
+            // Darker blue as we go deeper
+            float r = 0.1f * (1 - t) + 0.02f * t;
+            float g = 0.4f * (1 - t) + 0.1f * t;
+            float b = 0.8f * (1 - t) + 0.4f * t;
+
+            renderer.setFogColor(new org.joml.Vector3f(r, g, b));
+            renderer.setClearColor(r, g, b, 1.0f);
+        } else {
+            // Standard fog (Grey/White)
+            renderer.setFogDensity(0.007f);
+            renderer.setFogColor(new org.joml.Vector3f(0.6f, 0.6f, 0.6f));
+            // Default Sky Blue
+            renderer.setClearColor(0.529f, 0.808f, 0.922f, 1.0f);
+        }
+
         // Handle block interaction
         player.handleBlockInteraction(world, deltaTime);
 
@@ -295,6 +363,9 @@ public class Main implements Runnable {
         // Update world (load/unload chunks around player)
         world.update(player.getCamera());
 
+        // Update day/night cycle
+        dayCycleManager.update(deltaTime);
+
         // Update dropped items (physics, animation)
         world.updateDroppedItems(deltaTime);
     }
@@ -310,14 +381,29 @@ public class Main implements Runnable {
             window.setResized(false);
         }
 
-        // Clear the framebuffer
+        // Apply day/night cycle lighting BEFORE clearing
+        org.joml.Vector3f skyColor = dayCycleManager.getSkyColor();
+        renderer.setClearColor(skyColor.x, skyColor.y, skyColor.z, 1.0f);
+        renderer.setFogColor(dayCycleManager.getFogColor());
+        renderer.setAmbientLight(dayCycleManager.getAmbientIntensity());
+        renderer.setLightDirection(dayCycleManager.getSunDirection());
+        renderer.setSunBrightness(dayCycleManager.getSunBrightness()); // Day/night sky light multiplier
+
+        // Clear the framebuffer (uses the color set above)
         renderer.clear();
+
+        // Render sky (before world, behind everything)
+        skyRenderer.render(renderer, dayCycleManager, player.getCamera());
 
         // Render world
         world.render(renderer, player.getCamera());
 
-        // Render dropped items
-        droppedItemRenderer.render(player.getCamera(), world.getDroppedItems(), world.getAtlas());
+        // Render clouds (after world, in front of terrain but behind UI)
+        cloudRenderer.render(renderer, dayCycleManager, player.getCamera(), deltaTime);
+
+        // Render dropped items (with world sky light)
+        droppedItemRenderer.render(player.getCamera(), world.getDroppedItems(), world.getAtlas(),
+                com.craftzero.graphics.GuiTexture.getItemsTexture(), dayCycleManager, world);
 
         // Render block highlight
         blockHighlightRenderer.render(player.getCamera(), player.getTargetBlock());
@@ -350,6 +436,12 @@ public class Main implements Runnable {
         }
         if (renderer != null) {
             renderer.cleanup();
+        }
+        if (skyRenderer != null) {
+            skyRenderer.cleanup();
+        }
+        if (cloudRenderer != null) {
+            cloudRenderer.cleanup();
         }
         if (hudRenderer != null) {
             hudRenderer.cleanup();

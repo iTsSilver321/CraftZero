@@ -3,18 +3,22 @@
 in vec2 texCoord;
 in vec3 fragPos;
 in vec3 normal;
+in vec3 vertexColor;
 in float visibility;
 
 out vec4 fragColor;
 
 uniform sampler2D textureSampler;
-uniform vec3 fogColor = vec3(0.6, 0.6, 0.6); // Default grey fog
+uniform vec3 fogColor = vec3(0.6, 0.6, 0.6);
 uniform bool fogEnabled;
 
 // Lighting
 uniform float ambientLight;
 uniform vec3 lightDirection;
 uniform vec3 lightColor;
+
+// Day/Night: multiplies sky light (0.0 at midnight, 1.0 at noon)
+uniform float sunBrightness = 1.0;
 
 void main() {
     // Sample texture
@@ -25,25 +29,24 @@ void main() {
         discard;
     }
     
-    // Calculate lighting
-    vec3 norm = normalize(normal);
-    vec3 lightDir = normalize(lightDirection);
+    // vertexColor contains: biomeColor * faceShade * skyLight
+    // Apply sunBrightness (day/night cycle) to the sky light component
+    vec3 dynamicVertexColor = vertexColor * sunBrightness;
     
-    // Diffuse lighting
-    float diff = max(dot(norm, lightDir), 0.0);
-    vec3 diffuse = diff * lightColor;
+    // Minimum floor for deep caves (uses ambientLight to keep uniform alive)
+    dynamicVertexColor = max(dynamicVertexColor, vec3(ambientLight * 0.15));
     
-    // Combine ambient and diffuse
-    vec3 lighting = ambientLight + diffuse * (1.0 - ambientLight);
-    lighting = clamp(lighting, 0.0, 1.0);
-    
-    // Apply lighting to texture
-    vec3 result = textureColor.rgb * lighting;
+    // Apply to texture
+    vec3 result = textureColor.rgb * dynamicVertexColor;
     
     // Apply fog
     if (fogEnabled) {
         result = mix(fogColor, result, visibility);
     }
+    
+    // Touch lightDirection and lightColor to prevent optimizer from removing them
+    // (they may be used by other features like sun/moon rendering)
+    result += lightColor * 0.0001 * max(0.0, dot(normalize(normal), normalize(lightDirection)));
     
     fragColor = vec4(result, textureColor.a);
 }

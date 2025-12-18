@@ -13,42 +13,48 @@ public enum BlockType {
     // HarvestLevel
     // Hardness based on Minecraft wiki - time to break by hand in seconds
     // HarvestLevel: 0=hand, 1=wood, 2=stone, 3=iron, 4=diamond
+    // Texture indices match Minecraft's Terrain.png (16x16 grid, index = row*16 +
+    // col)
     AIR(0, false, true, 0f, -1, -1, -1, ToolType.Category.NONE, 0),
-    GRASS(1, true, false, 0.9f, 0, 2, 1, ToolType.Category.SHOVEL, 0),
-    DIRT(2, true, false, 0.75f, 2, 2, 2, ToolType.Category.SHOVEL, 0),
-    STONE(3, true, false, 3.0f, 3, 3, 3, ToolType.Category.PICKAXE, 1), // Requires wood pickaxe
-    COBBLESTONE(4, true, false, 3.5f, 4, 4, 4, ToolType.Category.PICKAXE, 1),
-    BEDROCK(5, true, false, -1f, 5, 5, 5, ToolType.Category.NONE, 99), // Unbreakable
-    SAND(6, true, false, 0.5f, 6, 6, 6, ToolType.Category.SHOVEL, 0),
-    GRAVEL(7, true, false, 0.6f, 7, 7, 7, ToolType.Category.SHOVEL, 0),
-    OAK_LOG(8, true, false, 2.0f, 8, 8, 9, ToolType.Category.AXE, 0),
-    OAK_PLANKS(9, true, false, 2.0f, 10, 10, 10, ToolType.Category.AXE, 0),
-    LEAVES(10, true, false, 0.2f, 11, 11, 11, ToolType.Category.NONE, 0),
-    GLASS(11, true, true, 0.3f, 12, 12, 12, ToolType.Category.NONE, 0),
-    WATER(12, false, true, 0f, 13, 13, 13, ToolType.Category.NONE, 0),
-    BRICK(13, true, false, 2.0f, 14, 14, 14, ToolType.Category.PICKAXE, 1),
-    COAL_ORE(14, true, false, 4.5f, 15, 15, 15, ToolType.Category.PICKAXE, 1), // Wood pickaxe
-    IRON_ORE(15, true, false, 5.0f, 16, 16, 16, ToolType.Category.PICKAXE, 2), // Stone pickaxe
-    GOLD_ORE(16, true, false, 5.0f, 17, 17, 17, ToolType.Category.PICKAXE, 3), // Iron pickaxe
-    DIAMOND_ORE(17, true, false, 6.0f, 18, 18, 18, ToolType.Category.PICKAXE, 3), // Iron pickaxe
-    SNOW(18, true, false, 0.1f, 19, 2, 20, ToolType.Category.SHOVEL, 0),
-    ICE(19, true, true, 0.5f, 21, 21, 21, ToolType.Category.PICKAXE, 0),
-    STICK(20, false, true, 0f, 22, 22, 22, ToolType.Category.NONE, 0),
-    CRAFTING_TABLE(21, true, false, 2.5f, 23, 10, 24, ToolType.Category.AXE, 0),
+    GRASS(1, true, false, 0.9f, 0, 2, 3, ToolType.Category.SHOVEL, 0), // Top=grass, Bottom=dirt, Side=grass_side
+    DIRT(2, true, false, 0.75f, 2, 2, 2, ToolType.Category.SHOVEL, 0), // All dirt
+    STONE(3, true, false, 3.0f, 1, 1, 1, ToolType.Category.PICKAXE, 1), // All stone
+    COBBLESTONE(4, true, false, 3.5f, 16, 16, 16, ToolType.Category.PICKAXE, 1), // Row 1, col 0
+    BEDROCK(5, true, false, -1f, 17, 17, 17, ToolType.Category.NONE, 99), // Row 1, col 1
+    SAND(6, true, false, 0.5f, 18, 18, 18, ToolType.Category.SHOVEL, 0), // Row 1, col 2
+    GRAVEL(7, true, false, 0.6f, 19, 19, 19, ToolType.Category.SHOVEL, 0), // Row 1, col 3
+    OAK_LOG(8, true, false, 2.0f, 21, 21, 20, ToolType.Category.AXE, 0), // Top/Bottom=log_top, Side=log_side
+    OAK_PLANKS(9, true, false, 2.0f, 4, 4, 4, ToolType.Category.AXE, 0), // Row 0, col 4
+    LEAVES(10, true, false, 0.2f, 52, 52, 52, ToolType.Category.NONE, 0), // Row 3, col 4 (fancy leaves)
+    GLASS(11, true, true, 0.3f, 49, 49, 49, ToolType.Category.NONE, 0), // Row 3, col 1
+    WATER(12, false, true, 0f, 205, 205, 205, ToolType.Category.NONE, 0), // Row 12, col 13 (still water)
+    LAVA(30, false, true, 0f, 237, 237, 237, ToolType.Category.NONE, 0), // Row 14, col 13 (lava placeholder)
+    BRICK(13, true, false, 2.0f, 7, 7, 7, ToolType.Category.PICKAXE, 1), // Row 0, col 7
+    COAL_ORE(14, true, false, 4.5f, 34, 34, 34, ToolType.Category.PICKAXE, 1), // Row 2, col 2
+    IRON_ORE(15, true, false, 5.0f, 33, 33, 33, ToolType.Category.PICKAXE, 2), // Row 2, col 1
+    GOLD_ORE(16, true, false, 5.0f, 32, 32, 32, ToolType.Category.PICKAXE, 3), // Row 2, col 0
+    DIAMOND_ORE(17, true, false, 6.0f, 50, 50, 50, ToolType.Category.PICKAXE, 3), // Row 3, col 2
+    REDSTONE_ORE(28, true, false, 4.5f, 51, 51, 51, ToolType.Category.PICKAXE, 2), // Row 3, col 3
+    LAPIS_ORE(29, true, false, 4.5f, 160, 160, 160, ToolType.Category.PICKAXE, 2), // Row 10, col 0
+    SNOW(18, true, false, 0.1f, 66, 2, 68, ToolType.Category.SHOVEL, 0), // Top=snow, Bottom=dirt, Side=snow_side
+    ICE(19, true, true, 0.5f, 67, 67, 67, ToolType.Category.PICKAXE, 0), // Row 4, col 3
+    STICK(20, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0), // Item - uses items.png
+    CRAFTING_TABLE(21, true, false, 2.5f, 43, 4, 59, ToolType.Category.AXE, 0), // Top=crafting, Bottom=planks,
+                                                                                // Side=crafting_side
 
-    // Tools - all are items (not placeable)
-    WOODEN_PICKAXE(22, false, true, 0f, 25, 25, 25, ToolType.Category.NONE, 0),
-    STONE_PICKAXE(23, false, true, 0f, 26, 26, 26, ToolType.Category.NONE, 0),
-    IRON_PICKAXE(24, false, true, 0f, 27, 27, 27, ToolType.Category.NONE, 0),
-    DIAMOND_PICKAXE(25, false, true, 0f, 28, 28, 28, ToolType.Category.NONE, 0),
-    WOODEN_SHOVEL(26, false, true, 0f, 29, 29, 29, ToolType.Category.NONE, 0),
-    STONE_SHOVEL(27, false, true, 0f, 30, 30, 30, ToolType.Category.NONE, 0),
-    IRON_SHOVEL(28, false, true, 0f, 31, 31, 31, ToolType.Category.NONE, 0),
-    DIAMOND_SHOVEL(29, false, true, 0f, 32, 32, 32, ToolType.Category.NONE, 0),
-    WOODEN_AXE(30, false, true, 0f, 33, 33, 33, ToolType.Category.NONE, 0),
-    STONE_AXE(31, false, true, 0f, 34, 34, 34, ToolType.Category.NONE, 0),
-    IRON_AXE(32, false, true, 0f, 35, 35, 35, ToolType.Category.NONE, 0),
-    DIAMOND_AXE(33, false, true, 0f, 36, 36, 36, ToolType.Category.NONE, 0);
+    // Tools - all are items (not placeable) - will use items.png separately
+    WOODEN_PICKAXE(22, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    STONE_PICKAXE(23, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    IRON_PICKAXE(24, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    DIAMOND_PICKAXE(25, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    WOODEN_SHOVEL(26, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    STONE_SHOVEL(27, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    IRON_SHOVEL(28, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    DIAMOND_SHOVEL(29, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    WOODEN_AXE(30, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    STONE_AXE(31, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    IRON_AXE(32, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    DIAMOND_AXE(33, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0);
 
     private final int id;
     private final boolean solid;
@@ -218,6 +224,57 @@ public enum BlockType {
         v2 -= inset;
 
         return new float[] { u1, v1, u2, v2 };
+    }
+
+    /**
+     * Get texture UV coordinates for items from items.png.
+     * Returns the column and row in the 16x16 grid.
+     * Based on Minecraft's items.png layout.
+     * 
+     * @return int[2] = {col, row} in the 16x16 grid, or null if not an item
+     */
+    public int[] getItemTexturePos() {
+        // Minecraft items.png layout (16x16 grid, each cell is 16x16 pixels)
+        switch (this) {
+            case STICK:
+                return new int[] { 5, 3 }; // Stick at col 5, row 3
+            // Pickaxes (row 6)
+            case WOODEN_PICKAXE:
+                return new int[] { 0, 6 };
+            case STONE_PICKAXE:
+                return new int[] { 1, 6 };
+            case IRON_PICKAXE:
+                return new int[] { 2, 6 };
+            case DIAMOND_PICKAXE:
+                return new int[] { 3, 6 };
+            // Shovels (row 5)
+            case WOODEN_SHOVEL:
+                return new int[] { 0, 5 };
+            case STONE_SHOVEL:
+                return new int[] { 1, 5 };
+            case IRON_SHOVEL:
+                return new int[] { 2, 5 };
+            case DIAMOND_SHOVEL:
+                return new int[] { 3, 5 };
+            // Axes (row 7)
+            case WOODEN_AXE:
+                return new int[] { 0, 7 };
+            case STONE_AXE:
+                return new int[] { 1, 7 };
+            case IRON_AXE:
+                return new int[] { 2, 7 };
+            case DIAMOND_AXE:
+                return new int[] { 3, 7 };
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * Check if this block type should use items.png instead of terrain atlas.
+     */
+    public boolean usesItemTexture() {
+        return isItem() && getItemTexturePos() != null;
     }
 
     /**

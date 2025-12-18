@@ -132,6 +132,20 @@ public class InventoryRenderer {
         this.atlas = atlas;
     }
 
+    // GUI textures for inventory and crafting backgrounds
+    private Texture inventoryTexture; // inventory.png
+    private Texture craftingTexture; // crafting.png
+    private Texture itemsTexture; // items.png for sticks and tools
+
+    public void setGuiTextures(Texture inventory, Texture crafting) {
+        this.inventoryTexture = inventory;
+        this.craftingTexture = crafting;
+    }
+
+    public void setItemsTexture(Texture items) {
+        this.itemsTexture = items;
+    }
+
     public void updateOrtho(int width, int height) {
         this.windowWidth = width;
         this.windowHeight = height;
@@ -154,85 +168,159 @@ public class InventoryRenderer {
         int winX = screen.getWindowX();
         int winY = screen.getWindowY();
         Inventory inv = screen.getInventory();
+        float scale = InventoryScreen.GUI_SCALE;
 
         // 1. Dim background (full screen overlay)
         drawRect(0, 0, windowWidth, windowHeight, 0.0f, 0.0f, 0.0f, 0.5f);
 
-        // 2. Window background
-        drawRect(winX, winY, InventoryScreen.WINDOW_WIDTH, InventoryScreen.WINDOW_HEIGHT,
-                BG_COLOR[0], BG_COLOR[1], BG_COLOR[2], BG_COLOR[3]);
+        // 2. Draw textured inventory background from inventory.png
+        if (inventoryTexture != null) {
+            shader.unbind();
+            inventoryTexture.bind(0);
+            texturedShader.bind();
+            texturedShader.setUniform("projection", ortho);
+            texturedShader.setUniform("textureSampler", 0);
+            texturedShader.setUniform("brightness", 1.0f);
 
-        // 3. Draw slots - Main Inventory (slots 0-26)
-        int slotStartX = winX + InventoryScreen.PADDING;
-        int slotStartY = winY + InventoryScreen.PADDING;
+            // UV coordinates for inventory region (176x166 out of 256x256)
+            float u1 = 0.0f, v1 = 0.0f;
+            float u2 = 176.0f / 256.0f;
+            float v2 = 166.0f / 256.0f;
+
+            drawTexturedQuad(
+                    winX, winY,
+                    winX + InventoryScreen.WINDOW_WIDTH, winY,
+                    winX + InventoryScreen.WINDOW_WIDTH, winY + InventoryScreen.WINDOW_HEIGHT,
+                    winX, winY + InventoryScreen.WINDOW_HEIGHT,
+                    u1, v1, u2, v2);
+
+            texturedShader.unbind();
+            inventoryTexture.unbind();
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+
+        // 3. Draw items in main inventory slots (0-26) at texture positions
+        int itemSize = InventoryScreen.ITEM_SIZE;
+        int itemOffset = (int) ((InventoryScreen.TEX_SLOT_SIZE - InventoryScreen.TEX_ITEM_SIZE) / 2 * scale);
 
         for (int row = 0; row < InventoryScreen.MAIN_ROWS; row++) {
             for (int col = 0; col < InventoryScreen.COLS; col++) {
                 int slotIndex = row * InventoryScreen.COLS + col;
-                int x = slotStartX + col * (SLOT_SIZE + SLOT_SPACING);
-                int y = slotStartY + row * (SLOT_SIZE + SLOT_SPACING);
+                int x = winX + (int) ((InventoryScreen.TEX_MAIN_INV_X + col * InventoryScreen.TEX_SLOT_SIZE) * scale)
+                        + itemOffset;
+                int y = winY + (int) ((InventoryScreen.TEX_MAIN_INV_Y + row * InventoryScreen.TEX_SLOT_SIZE) * scale)
+                        + itemOffset;
 
-                drawSlot(x, y, slotIndex, screen.getHoveredSlot() == slotIndex, inv.getMainInventory()[slotIndex]);
+                ItemStack item = inv.getMainInventory()[slotIndex];
+                if (item != null && !item.isEmpty()) {
+                    drawItemIconAt(x, y, itemSize, item.getType());
+                    if (item.getCount() > 1) {
+                        drawStackCountAt(x, y, itemSize, item.getCount());
+                    }
+                }
+
+                // Draw hover highlight
+                if (screen.getHoveredSlot() == slotIndex) {
+                    int slotX = winX
+                            + (int) ((InventoryScreen.TEX_MAIN_INV_X + col * InventoryScreen.TEX_SLOT_SIZE) * scale);
+                    int slotY = winY
+                            + (int) ((InventoryScreen.TEX_MAIN_INV_Y + row * InventoryScreen.TEX_SLOT_SIZE) * scale);
+                    drawRect(slotX + 1, slotY + 1, InventoryScreen.SLOT_SIZE - 2, InventoryScreen.SLOT_SIZE - 2,
+                            HOVER_OVERLAY[0], HOVER_OVERLAY[1], HOVER_OVERLAY[2], HOVER_OVERLAY[3]);
+                }
             }
         }
 
-        // 4. Draw slots - Hotbar (slots 27-35)
-        int hotbarY = slotStartY + InventoryScreen.MAIN_ROWS * (SLOT_SIZE + SLOT_SPACING) + InventoryScreen.HOTBAR_GAP;
+        // 4. Draw items in hotbar slots (27-35) at texture positions
         for (int col = 0; col < InventoryScreen.COLS; col++) {
             int slotIndex = 27 + col;
-            int x = slotStartX + col * (SLOT_SIZE + SLOT_SPACING);
+            int x = winX + (int) ((InventoryScreen.TEX_HOTBAR_X + col * InventoryScreen.TEX_SLOT_SIZE) * scale)
+                    + itemOffset;
+            int y = winY + (int) (InventoryScreen.TEX_HOTBAR_Y * scale) + itemOffset;
 
-            drawSlot(x, hotbarY, slotIndex, screen.getHoveredSlot() == slotIndex, inv.getHotbar()[col]);
+            ItemStack item = inv.getHotbar()[col];
+            if (item != null && !item.isEmpty()) {
+                drawItemIconAt(x, y, itemSize, item.getType());
+                if (item.getCount() > 1) {
+                    drawStackCountAt(x, y, itemSize, item.getCount());
+                }
+            }
+
+            // Draw hover highlight
+            if (screen.getHoveredSlot() == slotIndex) {
+                int slotX = winX + (int) ((InventoryScreen.TEX_HOTBAR_X + col * InventoryScreen.TEX_SLOT_SIZE) * scale);
+                int slotY = winY + (int) (InventoryScreen.TEX_HOTBAR_Y * scale);
+                drawRect(slotX + 1, slotY + 1, InventoryScreen.SLOT_SIZE - 2, InventoryScreen.SLOT_SIZE - 2,
+                        HOVER_OVERLAY[0], HOVER_OVERLAY[1], HOVER_OVERLAY[2], HOVER_OVERLAY[3]);
+            }
         }
 
-        // 5. Draw Crafting Area (right side)
-        int craftingStartX = winX + InventoryScreen.PADDING + InventoryScreen.INVENTORY_WIDTH
-                + InventoryScreen.CRAFTING_GAP;
-        int craftingStartY = winY + InventoryScreen.PADDING;
-
-        // 5a. Crafting grid (2x2) - slots 36-39
+        // 5. Draw items in crafting grid (36-39) at texture positions
         for (int row = 0; row < InventoryScreen.CRAFTING_ROWS; row++) {
             for (int col = 0; col < InventoryScreen.CRAFTING_COLS; col++) {
                 int slotIndex = 36 + row * InventoryScreen.CRAFTING_COLS + col;
-                int x = craftingStartX + col * (SLOT_SIZE + SLOT_SPACING);
-                int y = craftingStartY + row * (SLOT_SIZE + SLOT_SPACING);
+                int x = winX + (int) ((InventoryScreen.TEX_CRAFT_GRID_X + col * InventoryScreen.TEX_SLOT_SIZE) * scale)
+                        + itemOffset;
+                int y = winY + (int) ((InventoryScreen.TEX_CRAFT_GRID_Y + row * InventoryScreen.TEX_SLOT_SIZE) * scale)
+                        + itemOffset;
 
-                drawSlot(x, y, slotIndex, screen.getHoveredSlot() == slotIndex, inv.getCraftingGrid()[slotIndex - 36]);
+                ItemStack item = inv.getCraftingGrid()[slotIndex - 36];
+                if (item != null && !item.isEmpty()) {
+                    drawItemIconAt(x, y, itemSize, item.getType());
+                    if (item.getCount() > 1) {
+                        drawStackCountAt(x, y, itemSize, item.getCount());
+                    }
+                }
+
+                // Draw hover highlight
+                if (screen.getHoveredSlot() == slotIndex) {
+                    int slotX = winX
+                            + (int) ((InventoryScreen.TEX_CRAFT_GRID_X + col * InventoryScreen.TEX_SLOT_SIZE) * scale);
+                    int slotY = winY
+                            + (int) ((InventoryScreen.TEX_CRAFT_GRID_Y + row * InventoryScreen.TEX_SLOT_SIZE) * scale);
+                    drawRect(slotX + 1, slotY + 1, InventoryScreen.SLOT_SIZE - 2, InventoryScreen.SLOT_SIZE - 2,
+                            HOVER_OVERLAY[0], HOVER_OVERLAY[1], HOVER_OVERLAY[2], HOVER_OVERLAY[3]);
+                }
             }
         }
 
-        // 5b. Arrow pointing to output
-        int arrowX = craftingStartX + InventoryScreen.CRAFTING_COLS * (SLOT_SIZE + SLOT_SPACING) + 5;
-        int arrowY = craftingStartY + (InventoryScreen.CRAFTING_ROWS * (SLOT_SIZE + SLOT_SPACING) - SLOT_SIZE) / 2;
-        drawArrow(arrowX, arrowY + SLOT_SIZE / 2);
-
-        // 5c. Output slot (slot 40)
-        int outputX = craftingStartX + InventoryScreen.CRAFTING_COLS * (SLOT_SIZE + SLOT_SPACING)
-                + InventoryScreen.CRAFTING_ARROW_WIDTH;
-        int outputY = craftingStartY + (InventoryScreen.CRAFTING_ROWS * (SLOT_SIZE + SLOT_SPACING) - SLOT_SIZE) / 2;
-
-        // Get crafting output from recipe matching
+        // 6. Draw crafting output (slot 40)
         com.craftzero.world.BlockType[] pattern = inv.getCraftingPattern();
         com.craftzero.crafting.CraftingRecipe recipe = com.craftzero.crafting.CraftingRegistry.findRecipe(pattern);
         ItemStack outputItem = recipe != null ? recipe.getOutput() : null;
 
-        drawSlot(outputX, outputY, 40, screen.getHoveredSlot() == 40, outputItem);
+        int outputX = winX + (int) (InventoryScreen.TEX_CRAFT_OUTPUT_X * scale) + itemOffset;
+        int outputY = winY + (int) (InventoryScreen.TEX_CRAFT_OUTPUT_Y * scale) + itemOffset;
 
-        // 6. Draw cursor item (following mouse)
+        if (outputItem != null && !outputItem.isEmpty()) {
+            drawItemIconAt(outputX, outputY, itemSize, outputItem.getType());
+            if (outputItem.getCount() > 1) {
+                drawStackCountAt(outputX, outputY, itemSize, outputItem.getCount());
+            }
+        }
+
+        // Output hover highlight
+        if (screen.getHoveredSlot() == 40) {
+            int slotX = winX + (int) (InventoryScreen.TEX_CRAFT_OUTPUT_X * scale);
+            int slotY = winY + (int) (InventoryScreen.TEX_CRAFT_OUTPUT_Y * scale);
+            drawRect(slotX + 1, slotY + 1, InventoryScreen.SLOT_SIZE - 2, InventoryScreen.SLOT_SIZE - 2,
+                    HOVER_OVERLAY[0], HOVER_OVERLAY[1], HOVER_OVERLAY[2], HOVER_OVERLAY[3]);
+        }
+
+        // 7. Draw cursor item (following mouse)
         ItemStack cursorItem = inv.getCursorItem();
         if (cursorItem != null && !cursorItem.isEmpty()) {
             int mx = (int) Input.getMouseX();
             int my = (int) Input.getMouseY();
             // Center the item on cursor
-            drawItemIcon(mx - SLOT_SIZE / 2, my - SLOT_SIZE / 2, cursorItem.getType());
-            // Draw cursor item count
+            drawItemIconAt(mx - itemSize / 2, my - itemSize / 2, itemSize, cursorItem.getType());
             if (cursorItem.getCount() > 1) {
-                drawStackCount(mx - SLOT_SIZE / 2, my - SLOT_SIZE / 2, cursorItem.getCount());
+                drawStackCountAt(mx - itemSize / 2, my - itemSize / 2, itemSize, cursorItem.getCount());
             }
         }
 
-        // 7. Draw Tooltip (LAST, on top of everything)
-        // Check if hovering any slot
+        // 8. Draw Tooltip (LAST, on top of everything)
         int hoveredSlot = screen.getHoveredSlot();
         if (hoveredSlot != -1) {
             ItemStack item = null;
@@ -254,8 +342,49 @@ public class InventoryRenderer {
 
         // Restore GL state
         glEnable(GL_DEPTH_TEST);
-        glDisable(GL_BLEND);
         glEnable(GL_CULL_FACE);
+    }
+
+    /**
+     * Draw an item icon at an exact position with specified size.
+     */
+    private void drawItemIconAt(int x, int y, int size, com.craftzero.world.BlockType type) {
+        if (atlas != null) {
+            if (type.isItem()) {
+                drawItemSprite(x, y, size, type);
+            } else {
+                drawIsometricBlockIcon(x, y, size, type);
+            }
+        }
+    }
+
+    /**
+     * Draw stack count at an exact position.
+     */
+    private void drawStackCountAt(int slotX, int slotY, int size, int count) {
+        String countStr = String.valueOf(count);
+        int digitWidth = 6;
+        int digitHeight = 8;
+        int spacing = 1;
+        int totalWidth = countStr.length() * (digitWidth + spacing) - spacing;
+
+        int baseX = slotX + size - totalWidth - 2;
+        int baseY = slotY + size - digitHeight - 2;
+
+        // Draw shadow first
+        for (int i = 0; i < countStr.length(); i++) {
+            int digit = countStr.charAt(i) - '0';
+            int dx = baseX + i * (digitWidth + spacing) + 1;
+            int dy = baseY + 1;
+            drawDigit(dx, dy, digit, 0.1f, 0.1f, 0.1f);
+        }
+
+        // Draw white digits
+        for (int i = 0; i < countStr.length(); i++) {
+            int digit = countStr.charAt(i) - '0';
+            int dx = baseX + i * (digitWidth + spacing);
+            drawDigit(dx, baseY, digit, 1.0f, 1.0f, 1.0f);
+        }
     }
 
     /**
@@ -271,110 +400,172 @@ public class InventoryRenderer {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDisable(GL_CULL_FACE);
 
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        shader.bind();
+        shader.setUniform("projection", ortho);
+
         Inventory inventory = screen.getInventory();
         ItemStack[] craftingGrid = screen.getCraftingGrid();
         int hoveredSlot = screen.getHoveredSlot();
-        int windowX = screen.getWindowX();
-        int windowY = screen.getWindowY();
+        int winX = screen.getWindowX();
+        int winY = screen.getWindowY();
+        float scale = CraftingTableScreen.GUI_SCALE;
 
-        int padding = CraftingTableScreen.PADDING;
-        int windowWidth = CraftingTableScreen.WINDOW_WIDTH;
-        int windowHeight = CraftingTableScreen.WINDOW_HEIGHT;
-        int craftingGridWidth = CraftingTableScreen.CRAFTING_GRID_WIDTH;
-        int craftingGridHeight = CraftingTableScreen.CRAFTING_GRID_HEIGHT;
-        int craftingToOutputGap = CraftingTableScreen.CRAFTING_TO_OUTPUT_GAP;
-        int craftingToInvGap = CraftingTableScreen.CRAFTING_TO_INVENTORY_GAP;
-        int invToHotbarGap = CraftingTableScreen.INVENTORY_TO_HOTBAR_GAP;
-        int invHeight = CraftingTableScreen.INVENTORY_HEIGHT;
-
-        int cellWidth = SLOT_SIZE + SLOT_SPACING;
-        int cellHeight = SLOT_SIZE + SLOT_SPACING;
-
-        shader.bind();
-
-        // Draw semi-transparent background overlay
+        // 1. Draw semi-transparent background overlay
         drawRect(0, 0, this.windowWidth, this.windowHeight, 0.0f, 0.0f, 0.0f, 0.5f);
 
-        // Draw window background
-        drawRect(windowX, windowY, windowWidth, windowHeight, BG_COLOR[0], BG_COLOR[1], BG_COLOR[2], BG_COLOR[3]);
+        // 2. Draw textured crafting table background from crafting.png
+        if (craftingTexture != null) {
+            shader.unbind();
+            craftingTexture.bind(0);
+            texturedShader.bind();
+            texturedShader.setUniform("projection", ortho);
+            texturedShader.setUniform("textureSampler", 0);
+            texturedShader.setUniform("brightness", 1.0f);
 
-        // Draw border
-        drawRect(windowX, windowY, windowWidth, 3, 0.95f, 0.95f, 0.95f, 1.0f);
-        drawRect(windowX, windowY, 3, windowHeight, 0.95f, 0.95f, 0.95f, 1.0f);
-        drawRect(windowX, windowY + windowHeight - 3, windowWidth, 3, 0.4f, 0.4f, 0.4f, 1.0f);
-        drawRect(windowX + windowWidth - 3, windowY, 3, windowHeight, 0.4f, 0.4f, 0.4f, 1.0f);
+            // UV coordinates for crafting region (176x166 out of 256x256)
+            float u1 = 0.0f, v1 = 0.0f;
+            float u2 = 176.0f / 256.0f;
+            float v2 = 166.0f / 256.0f;
 
-        int gridStartX = windowX + padding;
-        int gridStartY = windowY + padding;
+            drawTexturedQuad(
+                    winX, winY,
+                    winX + CraftingTableScreen.WINDOW_WIDTH, winY,
+                    winX + CraftingTableScreen.WINDOW_WIDTH, winY + CraftingTableScreen.WINDOW_HEIGHT,
+                    winX, winY + CraftingTableScreen.WINDOW_HEIGHT,
+                    u1, v1, u2, v2);
 
-        // ===== CRAFTING GRID (3x3) =====
-        for (int row = 0; row < 3; row++) {
-            for (int col = 0; col < 3; col++) {
-                int slotIndex = row * 3 + col;
-                int slotX = gridStartX + col * cellWidth;
-                int slotY = gridStartY + row * cellHeight;
-                boolean isHovered = (hoveredSlot == slotIndex);
+            texturedShader.unbind();
+            craftingTexture.unbind();
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+
+        int itemSize = CraftingTableScreen.ITEM_SIZE;
+        int itemOffset = (int) ((CraftingTableScreen.TEX_SLOT_SIZE - CraftingTableScreen.TEX_ITEM_SIZE) / 2 * scale);
+
+        // 3. Draw items in crafting grid (0-8)
+        for (int row = 0; row < CraftingTableScreen.CRAFTING_ROWS; row++) {
+            for (int col = 0; col < CraftingTableScreen.CRAFTING_COLS; col++) {
+                int slotIndex = row * CraftingTableScreen.CRAFTING_COLS + col;
+                int x = winX + (int) ((CraftingTableScreen.TEX_CRAFT_GRID_X + col * CraftingTableScreen.TEX_SLOT_SIZE)
+                        * scale) + itemOffset;
+                int y = winY + (int) ((CraftingTableScreen.TEX_CRAFT_GRID_Y + row * CraftingTableScreen.TEX_SLOT_SIZE)
+                        * scale) + itemOffset;
+
                 ItemStack item = craftingGrid[slotIndex];
-                drawSlot(slotX, slotY, slotIndex, isHovered, item);
+                if (item != null && !item.isEmpty()) {
+                    drawItemIconAt(x, y, itemSize, item.getType());
+                    if (item.getCount() > 1) {
+                        drawStackCountAt(x, y, itemSize, item.getCount());
+                    }
+                }
+
+                if (hoveredSlot == slotIndex) {
+                    int slotX = winX
+                            + (int) ((CraftingTableScreen.TEX_CRAFT_GRID_X + col * CraftingTableScreen.TEX_SLOT_SIZE)
+                                    * scale);
+                    int slotY = winY
+                            + (int) ((CraftingTableScreen.TEX_CRAFT_GRID_Y + row * CraftingTableScreen.TEX_SLOT_SIZE)
+                                    * scale);
+                    drawRect(slotX + 1, slotY + 1, CraftingTableScreen.SLOT_SIZE - 2, CraftingTableScreen.SLOT_SIZE - 2,
+                            HOVER_OVERLAY[0], HOVER_OVERLAY[1], HOVER_OVERLAY[2], HOVER_OVERLAY[3]);
+                }
             }
         }
 
-        // ===== ARROW =====
-        int arrowX = gridStartX + craftingGridWidth + 5;
-        int arrowY = gridStartY + craftingGridHeight / 2;
-        drawArrow(arrowX, arrowY);
-
-        // ===== OUTPUT SLOT =====
-        int outputX = gridStartX + craftingGridWidth + craftingToOutputGap;
-        int outputY = gridStartY + (craftingGridHeight - SLOT_SIZE) / 2;
-        boolean outputHovered = (hoveredSlot == 9);
-
+        // 4. Draw crafting output (slot 9)
         com.craftzero.crafting.CraftingRecipe recipe = com.craftzero.crafting.CraftingRegistry
                 .findRecipe3x3(getCraftingPattern(craftingGrid));
         ItemStack outputItem = (recipe != null) ? recipe.getOutput() : null;
-        drawSlot(outputX, outputY, 9, outputHovered, outputItem);
 
-        // ===== MAIN INVENTORY (3 rows x 9 cols) =====
-        int invStartY = gridStartY + craftingGridHeight + craftingToInvGap;
-        for (int row = 0; row < 3; row++) {
-            for (int col = 0; col < 9; col++) {
-                int slotIndex = 10 + row * 9 + col;
-                int slotX = gridStartX + col * cellWidth;
-                int slotY = invStartY + row * cellHeight;
-                boolean isHovered = (hoveredSlot == slotIndex);
-                ItemStack item = inventory.getMainInventory()[row * 9 + col];
-                drawSlot(slotX, slotY, slotIndex, isHovered, item);
+        int outputX = winX + (int) (CraftingTableScreen.TEX_CRAFT_OUTPUT_X * scale) + itemOffset;
+        int outputY = winY + (int) (CraftingTableScreen.TEX_CRAFT_OUTPUT_Y * scale) + itemOffset;
+
+        if (outputItem != null && !outputItem.isEmpty()) {
+            drawItemIconAt(outputX, outputY, itemSize, outputItem.getType());
+            if (outputItem.getCount() > 1) {
+                drawStackCountAt(outputX, outputY, itemSize, outputItem.getCount());
             }
         }
 
-        // ===== HOTBAR (1 row x 9 cols) =====
-        int hotbarStartY = invStartY + invHeight + invToHotbarGap;
-        for (int col = 0; col < 9; col++) {
-            int slotIndex = 37 + col;
-            int slotX = gridStartX + col * cellWidth;
-            int slotY = hotbarStartY;
-            boolean isHovered = (hoveredSlot == slotIndex);
-            ItemStack item = inventory.getHotbar()[col];
-            drawSlot(slotX, slotY, slotIndex, isHovered, item);
+        if (hoveredSlot == 9) {
+            int slotX = winX + (int) (CraftingTableScreen.TEX_CRAFT_OUTPUT_X * scale);
+            int slotY = winY + (int) (CraftingTableScreen.TEX_CRAFT_OUTPUT_Y * scale);
+            drawRect(slotX + 1, slotY + 1, CraftingTableScreen.SLOT_SIZE - 2, CraftingTableScreen.SLOT_SIZE - 2,
+                    HOVER_OVERLAY[0], HOVER_OVERLAY[1], HOVER_OVERLAY[2], HOVER_OVERLAY[3]);
         }
 
-        // ===== CURSOR ITEM =====
+        // 5. Draw items in main inventory (10-36)
+        for (int row = 0; row < CraftingTableScreen.INVENTORY_ROWS; row++) {
+            for (int col = 0; col < CraftingTableScreen.INVENTORY_COLS; col++) {
+                int slotIndex = 10 + row * CraftingTableScreen.INVENTORY_COLS + col;
+                int x = winX
+                        + (int) ((CraftingTableScreen.TEX_MAIN_INV_X + col * CraftingTableScreen.TEX_SLOT_SIZE) * scale)
+                        + itemOffset;
+                int y = winY
+                        + (int) ((CraftingTableScreen.TEX_MAIN_INV_Y + row * CraftingTableScreen.TEX_SLOT_SIZE) * scale)
+                        + itemOffset;
+
+                ItemStack item = inventory.getMainInventory()[row * CraftingTableScreen.INVENTORY_COLS + col];
+                if (item != null && !item.isEmpty()) {
+                    drawItemIconAt(x, y, itemSize, item.getType());
+                    if (item.getCount() > 1) {
+                        drawStackCountAt(x, y, itemSize, item.getCount());
+                    }
+                }
+
+                if (hoveredSlot == slotIndex) {
+                    int slotX = winX
+                            + (int) ((CraftingTableScreen.TEX_MAIN_INV_X + col * CraftingTableScreen.TEX_SLOT_SIZE)
+                                    * scale);
+                    int slotY = winY
+                            + (int) ((CraftingTableScreen.TEX_MAIN_INV_Y + row * CraftingTableScreen.TEX_SLOT_SIZE)
+                                    * scale);
+                    drawRect(slotX + 1, slotY + 1, CraftingTableScreen.SLOT_SIZE - 2, CraftingTableScreen.SLOT_SIZE - 2,
+                            HOVER_OVERLAY[0], HOVER_OVERLAY[1], HOVER_OVERLAY[2], HOVER_OVERLAY[3]);
+                }
+            }
+        }
+
+        // 6. Draw items in hotbar (37-45)
+        for (int col = 0; col < CraftingTableScreen.INVENTORY_COLS; col++) {
+            int slotIndex = 37 + col;
+            int x = winX + (int) ((CraftingTableScreen.TEX_HOTBAR_X + col * CraftingTableScreen.TEX_SLOT_SIZE) * scale)
+                    + itemOffset;
+            int y = winY + (int) (CraftingTableScreen.TEX_HOTBAR_Y * scale) + itemOffset;
+
+            ItemStack item = inventory.getHotbar()[col];
+            if (item != null && !item.isEmpty()) {
+                drawItemIconAt(x, y, itemSize, item.getType());
+                if (item.getCount() > 1) {
+                    drawStackCountAt(x, y, itemSize, item.getCount());
+                }
+            }
+
+            if (hoveredSlot == slotIndex) {
+                int slotX = winX
+                        + (int) ((CraftingTableScreen.TEX_HOTBAR_X + col * CraftingTableScreen.TEX_SLOT_SIZE) * scale);
+                int slotY = winY + (int) (CraftingTableScreen.TEX_HOTBAR_Y * scale);
+                drawRect(slotX + 1, slotY + 1, CraftingTableScreen.SLOT_SIZE - 2, CraftingTableScreen.SLOT_SIZE - 2,
+                        HOVER_OVERLAY[0], HOVER_OVERLAY[1], HOVER_OVERLAY[2], HOVER_OVERLAY[3]);
+            }
+        }
+
+        // 7. Draw cursor item
         ItemStack cursorItem = inventory.getCursorItem();
         if (cursorItem != null && !cursorItem.isEmpty()) {
             int mx = (int) Input.getMouseX();
             int my = (int) Input.getMouseY();
-            int iconX = mx - SLOT_SIZE / 2 + 4;
-            int iconY = my - SLOT_SIZE / 2 + 4;
-            drawItemIcon(iconX, iconY, cursorItem.getType());
+            drawItemIconAt(mx - itemSize / 2, my - itemSize / 2, itemSize, cursorItem.getType());
             if (cursorItem.getCount() > 1) {
-                drawStackCount(iconX, iconY, cursorItem.getCount());
+                drawStackCountAt(mx - itemSize / 2, my - itemSize / 2, itemSize, cursorItem.getCount());
             }
         }
 
-        // ===== TOOLTIP (3x3 Table) =====
+        // 8. Draw Tooltip
         if (hoveredSlot != -1) {
             ItemStack item = null;
-            // Map slot to item (simpler logic than render())
             if (hoveredSlot < 9)
                 item = craftingGrid[hoveredSlot];
             else if (hoveredSlot == 9)
@@ -393,7 +584,6 @@ public class InventoryRenderer {
 
         // Restore GL state
         glEnable(GL_DEPTH_TEST);
-        glDisable(GL_BLEND);
         glEnable(GL_CULL_FACE);
     }
 
@@ -608,13 +798,29 @@ public class InventoryRenderer {
     }
 
     /**
-     * Draw an item as a flat 2D sprite (for sticks, etc).
+     * Draw an item as a flat 2D sprite (for sticks, tools, etc).
+     * Uses items.png for items that have defined texture positions there.
      */
     private void drawItemSprite(int x, int y, int size, BlockType type) {
-        float[] uv = type.getTextureCoords(2);
+        float[] uv;
+        Texture texToUse;
+
+        // Check if this item uses items.png
+        if (type.usesItemTexture() && itemsTexture != null) {
+            int[] pos = type.getItemTexturePos();
+            uv = GuiTexture.getItemUV(pos[0], pos[1]);
+            texToUse = itemsTexture;
+        } else {
+            // Fallback to terrain atlas
+            uv = type.getTextureCoords(2);
+            texToUse = atlas;
+        }
+
+        if (texToUse == null)
+            return;
 
         shader.unbind();
-        atlas.bind(0);
+        texToUse.bind(0);
         texturedShader.bind();
         Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
         texturedShader.setUniform("projection", ortho);
@@ -625,7 +831,7 @@ public class InventoryRenderer {
                 uv[0], uv[1], uv[2], uv[3]);
 
         texturedShader.unbind();
-        atlas.unbind();
+        texToUse.unbind();
         shader.bind();
         shader.setUniform("projection", ortho);
     }
@@ -694,6 +900,52 @@ public class InventoryRenderer {
         glBindVertexArray(texturedVao);
         glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
         glBindVertexArray(0);
+    }
+
+    /**
+     * Draw textured inventory background from inventory.png.
+     * Uses the full texture as the background.
+     */
+    private void drawTexturedInventoryBackground(int x, int y, int width, int height) {
+        shader.unbind();
+        inventoryTexture.bind(0);
+        texturedShader.bind();
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+
+        // Draw full texture as background
+        drawTexturedQuad(x, y, x + width, y, x + width, y + height, x, y + height,
+                0.0f, 0.0f, 1.0f, 1.0f);
+
+        texturedShader.unbind();
+        inventoryTexture.unbind();
+        shader.bind();
+        shader.setUniform("projection", ortho);
+    }
+
+    /**
+     * Draw textured crafting table background from crafting.png.
+     * Uses the full texture as the background.
+     */
+    private void drawTexturedCraftingBackground(int x, int y, int width, int height) {
+        shader.unbind();
+        craftingTexture.bind(0);
+        texturedShader.bind();
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+
+        // Draw full texture as background
+        drawTexturedQuad(x, y, x + width, y, x + width, y + height, x, y + height,
+                0.0f, 0.0f, 1.0f, 1.0f);
+
+        texturedShader.unbind();
+        craftingTexture.unbind();
+        shader.bind();
+        shader.setUniform("projection", ortho);
     }
 
     private void drawRect(int x, int y, int width, int height, float r, float g, float b, float a) {

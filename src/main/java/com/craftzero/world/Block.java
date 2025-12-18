@@ -18,11 +18,18 @@ public class Block {
          * Returns 12 floats (4 vertices * 3 components).
          */
         public static float[] getFaceVertices(int face, int x, int y, int z) {
+                return getFaceVertices(face, x, y, z, 1.0f);
+        }
+
+        /**
+         * Get vertex positions for a face with custom height (e.g. 0.875 for water).
+         */
+        public static float[] getFaceVertices(int face, int x, int y, int z, float height) {
                 float x0 = x;
                 float y0 = y;
                 float z0 = z;
                 float x1 = x + 1;
-                float y1 = y + 1;
+                float y1 = y + height;
                 float z1 = z + 1;
 
                 // Standard CCW Winding: TL -> BL -> BR -> TR

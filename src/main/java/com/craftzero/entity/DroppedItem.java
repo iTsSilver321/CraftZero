@@ -199,10 +199,13 @@ public class DroppedItem {
 
     /**
      * Get the visual Y position including bob animation.
+     * Uses abs(sin) to only bob upward - prevents items from clipping through
+     * ground.
      */
     public float getVisualY() {
         if (onGround) {
-            return y + (float) Math.sin(bobPhase) * BOB_AMPLITUDE;
+            // Only bob upward (abs of sin gives 0 to 1 range, not -1 to 1)
+            return y + Math.abs((float) Math.sin(bobPhase)) * BOB_AMPLITUDE;
         }
         return y;
     }

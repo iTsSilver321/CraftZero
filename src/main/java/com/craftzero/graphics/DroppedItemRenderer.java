@@ -43,6 +43,7 @@ public class DroppedItemRenderer {
         shader.createUniform("ambientLight");
         shader.createUniform("lightDirection");
         shader.createUniform("lightColor");
+        shader.createUniform("sunBrightness");
 
         // Create the cube mesh for rendering items
         createCubeMesh();
@@ -54,8 +55,8 @@ public class DroppedItemRenderer {
      */
     private void createCubeMesh() {
         // We'll create mesh data dynamically per block type, but for now
-        // just set up the VAO structure. The actual rendering will use
-        // the Block class to get proper UV coordinates.
+        // just set up the VAO structure.
+        // Vertex format: pos(3) + uv(2) + normal(3) + color(3) = 11 floats per vertex
 
         vao = glGenVertexArrays();
         vbo = glGenBuffers();
@@ -65,19 +66,25 @@ public class DroppedItemRenderer {
 
         // Reserve buffer space - will be filled per item type
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, 1024 * Float.BYTES, GL_DYNAMIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, 1536 * Float.BYTES, GL_DYNAMIC_DRAW);
+
+        int stride = 11 * Float.BYTES;
 
         // Position attribute (location 0)
-        glVertexAttribPointer(0, 3, GL_FLOAT, false, 8 * Float.BYTES, 0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, false, stride, 0);
         glEnableVertexAttribArray(0);
 
         // Texture coord attribute (location 1)
-        glVertexAttribPointer(1, 2, GL_FLOAT, false, 8 * Float.BYTES, 3 * Float.BYTES);
+        glVertexAttribPointer(1, 2, GL_FLOAT, false, stride, 3 * Float.BYTES);
         glEnableVertexAttribArray(1);
 
         // Normal attribute (location 2)
-        glVertexAttribPointer(2, 3, GL_FLOAT, false, 8 * Float.BYTES, 5 * Float.BYTES);
+        glVertexAttribPointer(2, 3, GL_FLOAT, false, stride, 5 * Float.BYTES);
         glEnableVertexAttribArray(2);
+
+        // Color attribute (location 3) - white for all dropped items
+        glVertexAttribPointer(3, 3, GL_FLOAT, false, stride, 8 * Float.BYTES);
+        glEnableVertexAttribArray(3);
 
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, 256 * Integer.BYTES, GL_DYNAMIC_DRAW);
@@ -87,11 +94,11 @@ public class DroppedItemRenderer {
 
     /**
      * Build mesh data for a specific block type.
-     * Returns vertex data interleaved: pos(3) + uv(2) + normal(3) = 8 floats per
-     * vertex
+     * Returns vertex data interleaved: pos(3) + uv(2) + normal(3) + color(3) = 11
+     * floats per vertex
      */
     private float[] buildCubeVertices(BlockType type) {
-        float[] vertices = new float[6 * 4 * 8]; // 6 faces * 4 verts * 8 floats
+        float[] vertices = new float[6 * 4 * 11]; // 6 faces * 4 verts * 11 floats
         int idx = 0;
 
         // Half size for centering at origin
@@ -116,6 +123,11 @@ public class DroppedItemRenderer {
                 vertices[idx++] = faceNormals[v * 3];
                 vertices[idx++] = faceNormals[v * 3 + 1];
                 vertices[idx++] = faceNormals[v * 3 + 2];
+
+                // Color (white - no tinting for dropped items)
+                vertices[idx++] = 1.0f;
+                vertices[idx++] = 1.0f;
+                vertices[idx++] = 1.0f;
             }
         }
 
@@ -142,7 +154,8 @@ public class DroppedItemRenderer {
     /**
      * Render all dropped items in the world.
      */
-    public void render(Camera camera, List<DroppedItem> items, Texture atlas) {
+    public void render(Camera camera, List<DroppedItem> items, Texture atlas, Texture itemsTexture,
+            com.craftzero.world.DayCycleManager dayCycle, com.craftzero.world.World world) {
         if (items.isEmpty()) {
             return;
         }
@@ -150,6 +163,8 @@ public class DroppedItemRenderer {
         glDisable(GL_CULL_FACE); // Show all faces of small items
 
         atlas.bind(0);
+        Texture currentTexture = atlas;
+
         shader.bind();
 
         // Set camera matrices
@@ -157,22 +172,42 @@ public class DroppedItemRenderer {
         shader.setUniform("viewMatrix", camera.getViewMatrix());
         shader.setUniform("textureSampler", 0);
 
-        // Fog settings (match world renderer)
+        // Fog settings from day cycle
         shader.setUniform("fogEnabled", true);
         shader.setUniform("fogDensity", 0.007f);
-        shader.setUniform("fogColor", new org.joml.Vector3f(0.6f, 0.6f, 0.6f));
+        shader.setUniform("fogColor", dayCycle.getFogColor());
 
-        // Lighting
-        shader.setUniform("ambientLight", 0.4f); // Slightly brighter for items
-        shader.setUniform("lightDirection", new org.joml.Vector3f(0.5f, 1.0f, 0.3f).normalize());
-        shader.setUniform("lightColor", new org.joml.Vector3f(1.0f, 1.0f, 0.9f));
+        // Base lighting from day cycle
+        shader.setUniform("ambientLight", dayCycle.getAmbientIntensity());
+        shader.setUniform("lightDirection", dayCycle.getSunDirection());
+        shader.setUniform("lightColor", dayCycle.getLightColor());
 
         glBindVertexArray(vao);
 
         // Render each item
         for (DroppedItem item : items) {
+            // Query sky light at item position
+            int worldX = (int) Math.floor(item.getX());
+            int worldY = (int) Math.floor(item.getY());
+            int worldZ = (int) Math.floor(item.getZ());
+            int skyLight = world.getSkyLight(worldX, worldY, worldZ);
+
+            // Apply gamma curve and combine with day/night brightness
+            float lightFactor = skyLight / 15.0f;
+            float gammaLight = lightFactor / (3.0f - 2.0f * lightFactor);
+            float finalBrightness = Math.max(0.08f, gammaLight) * dayCycle.getSunBrightness();
+            shader.setUniform("sunBrightness", finalBrightness);
+
             // Rebuild mesh for each item (different types need different meshes)
             BlockType type = item.getBlockType();
+
+            // Switch texture if needed
+            Texture requiredTexture = (type.usesItemTexture() && itemsTexture != null) ? itemsTexture : atlas;
+            if (requiredTexture != currentTexture) {
+                requiredTexture.bind(0);
+                currentTexture = requiredTexture;
+            }
+
             float[] vertices;
             int[] indices;
 
@@ -236,25 +271,35 @@ public class DroppedItemRenderer {
 
         glBindVertexArray(0);
         shader.unbind();
-        atlas.unbind();
+        if (currentTexture != null)
+            currentTexture.unbind();
         glEnable(GL_CULL_FACE);
     }
 
     /**
      * Build a flat 2D sprite mesh for items (single plane).
+     * Vertex format: pos(3) + uv(2) + normal(3) + color(3) = 11 floats per vertex
      */
     private float[] buildItemSpriteVertices(BlockType type) {
-        float[] vertices = new float[4 * 8]; // 1 quad * 4 verts * 8 floats
+        float[] vertices = new float[4 * 11]; // 1 quad * 4 verts * 11 floats
         float h = 0.5f;
 
-        // Get texture coordinates (use side texture for items)
-        float[] uv = type.getTextureCoords(2);
+        // Get texture coordinates
+        float[] uv;
+        if (type.usesItemTexture()) {
+            int[] pos = type.getItemTexturePos();
+            uv = GuiTexture.getItemUV(pos[0], pos[1]);
+        } else {
+            // Use side texture for blocks as items
+            uv = type.getTextureCoords(2);
+        }
+
         float u0 = uv[0], v0 = uv[1], u1 = uv[2], v1 = uv[3];
 
         int idx = 0;
 
         // Single plane facing camera (will rotate with item rotation)
-        // Vertex format: x, y, z, u, v, nx, ny, nz
+        // Vertex format: x, y, z, u, v, nx, ny, nz, r, g, b
         // Top-left
         vertices[idx++] = -h;
         vertices[idx++] = h;
@@ -264,6 +309,9 @@ public class DroppedItemRenderer {
         vertices[idx++] = 0;
         vertices[idx++] = 0;
         vertices[idx++] = 1;
+        vertices[idx++] = 1.0f;
+        vertices[idx++] = 1.0f;
+        vertices[idx++] = 1.0f;
         // Bottom-left
         vertices[idx++] = -h;
         vertices[idx++] = -h;
@@ -273,6 +321,9 @@ public class DroppedItemRenderer {
         vertices[idx++] = 0;
         vertices[idx++] = 0;
         vertices[idx++] = 1;
+        vertices[idx++] = 1.0f;
+        vertices[idx++] = 1.0f;
+        vertices[idx++] = 1.0f;
         // Bottom-right
         vertices[idx++] = h;
         vertices[idx++] = -h;
@@ -282,6 +333,9 @@ public class DroppedItemRenderer {
         vertices[idx++] = 0;
         vertices[idx++] = 0;
         vertices[idx++] = 1;
+        vertices[idx++] = 1.0f;
+        vertices[idx++] = 1.0f;
+        vertices[idx++] = 1.0f;
         // Top-right
         vertices[idx++] = h;
         vertices[idx++] = h;
@@ -291,6 +345,9 @@ public class DroppedItemRenderer {
         vertices[idx++] = 0;
         vertices[idx++] = 0;
         vertices[idx++] = 1;
+        vertices[idx++] = 1.0f;
+        vertices[idx++] = 1.0f;
+        vertices[idx++] = 1.0f;
 
         return vertices;
     }

@@ -25,6 +25,7 @@ public class Renderer {
     private float ambientLight = 0.3f;
     private Vector3f lightDirection = new Vector3f(0.5f, 1.0f, 0.3f).normalize();
     private Vector3f lightColor = new Vector3f(1.0f, 1.0f, 0.9f);
+    private float sunBrightness = 1.0f; // Day/night sky light multiplier
 
     public void init() throws Exception {
         // Create shader program
@@ -48,6 +49,7 @@ public class Renderer {
         shaderProgram.createUniform("ambientLight");
         shaderProgram.createUniform("lightDirection");
         shaderProgram.createUniform("lightColor");
+        shaderProgram.createUniform("sunBrightness"); // Day/night multiplier
 
         // Sky Blue background
         glClearColor(0.529f, 0.808f, 0.922f, 1.0f);
@@ -132,6 +134,7 @@ public class Renderer {
         shaderProgram.setUniform("ambientLight", ambientLight);
         shaderProgram.setUniform("lightDirection", lightDirection);
         shaderProgram.setUniform("lightColor", lightColor);
+        shaderProgram.setUniform("sunBrightness", sunBrightness);
     }
 
     /**
@@ -179,12 +182,20 @@ public class Renderer {
         this.ambientLight = ambient;
     }
 
+    public void setClearColor(float r, float g, float b, float a) {
+        glClearColor(r, g, b, a);
+    }
+
     public void setDepthMask(boolean enabled) {
         glDepthMask(enabled);
     }
 
     public void setLightDirection(Vector3f direction) {
         this.lightDirection = direction.normalize();
+    }
+
+    public void setSunBrightness(float brightness) {
+        this.sunBrightness = brightness;
     }
 
     public void cleanup() {

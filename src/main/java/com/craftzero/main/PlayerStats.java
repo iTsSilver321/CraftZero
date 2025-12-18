@@ -23,9 +23,9 @@ public class PlayerStats {
 
     // Hunger drain rates (per second)
     private static final float HUNGER_DRAIN_IDLE = 0.0f; // No drain while idle
-    private static final float HUNGER_DRAIN_WALKING = 0.005f; // Slow drain while walking
-    private static final float HUNGER_DRAIN_SPRINTING = 0.1f; // Faster drain while sprinting
-    private static final float HUNGER_DRAIN_JUMPING = 0.05f; // Drain per jump
+    private static final float HUNGER_DRAIN_WALKING = 0.002f; // Very slow drain while walking
+    private static final float HUNGER_DRAIN_SPRINTING = 0.03f; // Slower drain while sprinting
+    private static final float HUNGER_DRAIN_JUMPING = 0.01f; // Reduced drain per jump
 
     // Regeneration
     private static final float REGEN_THRESHOLD = 18.0f; // Hunger level needed to regenerate
@@ -43,11 +43,17 @@ public class PlayerStats {
     // State tracking
     private boolean isDead = false;
 
+    // Air / Breath
+    public static final float MAX_AIR_SECONDS = 15.0f; // 15 seconds of breath
+    private float currentAir;
+    private float drownTimer = 0f;
+
     public PlayerStats() {
         this.health = MAX_HEALTH;
         this.hunger = MAX_HUNGER;
-        this.saturation = 5.0f; // Start with some saturation
+        this.saturation = 15.0f; // Start with high saturation (requested 15)
         this.invincibilityTimer = SPAWN_INVINCIBILITY_TIME;
+        this.currentAir = MAX_AIR_SECONDS;
     }
 
     /**
@@ -110,6 +116,36 @@ public class PlayerStats {
     }
 
     /**
+     * Update air/breath stats.
+     * 
+     * @param isUnderwater whether player's head is underwater
+     * @param deltaTime    time since last frame
+     */
+    public void updateAir(boolean isUnderwater, float deltaTime) {
+        if (isDead)
+            return;
+
+        if (isUnderwater) {
+            currentAir -= deltaTime;
+            if (currentAir <= 0) {
+                currentAir = 0;
+                // Drowning damage (2.0 damage every second)
+                drownTimer += deltaTime;
+                if (drownTimer >= 1.0f) {
+                    damageInternal(2.0f);
+                    drownTimer = 0f;
+                }
+            } else {
+                drownTimer = 0f;
+            }
+        } else {
+            // Recover air quickly when out of water
+            currentAir = Math.min(MAX_AIR_SECONDS, currentAir + deltaTime * 5.0f);
+            drownTimer = 0f;
+        }
+    }
+
+    /**
      * Apply damage to the player (respects invincibility).
      * 
      * @param amount damage amount
@@ -121,7 +157,7 @@ public class PlayerStats {
     }
 
     /**
-     * Internal damage method that ignores invincibility (for starvation).
+     * Internal damage method that ignores invincibility (for starvation/drowning).
      */
     private void damageInternal(float amount) {
         if (isDead)
@@ -174,8 +210,10 @@ public class PlayerStats {
         health = MAX_HEALTH;
         hunger = MAX_HUNGER;
         saturation = 5.0f;
+        currentAir = MAX_AIR_SECONDS;
         isDead = false;
         starvationTimer = 0f;
+        drownTimer = 0f;
         invincibilityTimer = SPAWN_INVINCIBILITY_TIME;
     }
 
@@ -198,6 +236,10 @@ public class PlayerStats {
 
     public float getSaturation() {
         return saturation;
+    }
+
+    public float getCurrentAir() {
+        return currentAir;
     }
 
     public boolean isDead() {

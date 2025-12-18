@@ -28,6 +28,9 @@ public class World {
     private final Noise biomeNoise;
     private final Noise caveNoise;
     private final Noise treeNoise;
+    private final CaveGenerator caveGenerator;
+    private final RavineGenerator ravineGenerator;
+    private final OreGenerator oreGenerator;
     private final long seed;
     private final Random random;
 
@@ -43,12 +46,15 @@ public class World {
         this.biomeNoise = new Noise(seed + 1);
         this.caveNoise = new Noise(seed + 2);
         this.treeNoise = new Noise(seed + 3);
+        this.caveGenerator = new CaveGenerator();
+        this.ravineGenerator = new RavineGenerator();
+        this.oreGenerator = new OreGenerator();
         this.random = new Random(seed);
         this.droppedItems = new ArrayList<>();
     }
 
     public void init() throws Exception {
-        atlas = new Texture("/textures/atlas.png");
+        atlas = new Texture("/textures/terrain/Terrain.png");
         System.out.println("World initialized with seed: " + seed);
     }
 
@@ -96,18 +102,20 @@ public class World {
                 for (int y = 0; y < Chunk.HEIGHT; y++) {
                     BlockType blockType = getBlockType(y, height, biome, globalX, globalZ);
                     // Cave generation
-                    if (y > 5 && y < height - 5 && blockType != BlockType.AIR && blockType != BlockType.WATER) {
-                        double caveValue = caveNoise.octaveNoise3D(
-                                globalX * 0.05, y * 0.05, globalZ * 0.05, 3, 0.5);
-                        // Lower threshold = larger caves (standard Perlin worms/cheese)
-                        if (caveValue > 0.4) {
-                            blockType = BlockType.AIR;
-                        }
-                    }
+
                     chunk.setBlock(x, y, z, blockType);
                 }
             }
         }
+
+        // Pass 1.5: Caves (Worm/Runner based)
+        caveGenerator.generate(chunk, seed);
+
+        // Pass 1.6: Ravines (Vertical Cracks)
+        ravineGenerator.generate(chunk, seed);
+
+        // Pass 1.7: Ores (Replace stone with ore clusters)
+        oreGenerator.generate(chunk, seed);
 
         // Pass 2: Trees (Can overwrite neighbors safely if neighbors are generated)
         for (int x = 0; x < Chunk.WIDTH; x++) {
@@ -448,6 +456,28 @@ public class World {
         int localZ = Math.floorMod(z, Chunk.DEPTH);
 
         return chunk.getBlock(localX, y, localZ);
+    }
+
+    /**
+     * Get sky light level at world coordinates (0-15).
+     */
+    public int getSkyLight(int x, int y, int z) {
+        if (y < 0 || y >= Chunk.HEIGHT) {
+            return y >= Chunk.HEIGHT ? 15 : 0; // Above world = full light, below = none
+        }
+
+        int chunkX = Math.floorDiv(x, Chunk.WIDTH);
+        int chunkZ = Math.floorDiv(z, Chunk.DEPTH);
+
+        Chunk chunk = chunks.get(chunkKey(chunkX, chunkZ));
+        if (chunk == null) {
+            return 15; // Unloaded chunks default to full light
+        }
+
+        int localX = Math.floorMod(x, Chunk.WIDTH);
+        int localZ = Math.floorMod(z, Chunk.DEPTH);
+
+        return chunk.getSkyLight(localX, y, localZ);
     }
 
     /**

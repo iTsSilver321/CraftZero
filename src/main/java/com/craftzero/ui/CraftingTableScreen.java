@@ -25,10 +25,39 @@ import static org.lwjgl.glfw.GLFW.*;
  */
 public class CraftingTableScreen {
 
-    // Layout constants
-    public static final int SLOT_SIZE = 36;
-    public static final int SLOT_SPACING = 4;
-    public static final int PADDING = 14;
+    // === MINECRAFT-ACCURATE LAYOUT (crafting.png: 176x166 at 2x scale) ===
+    public static final float GUI_SCALE = 2.0f;
+
+    // Texture dimensions
+    public static final int TEX_WIDTH = 176;
+    public static final int TEX_HEIGHT = 166;
+
+    // Slot size in texture pixels
+    public static final int TEX_SLOT_SIZE = 18;
+    public static final int TEX_ITEM_SIZE = 16;
+
+    // Scaled dimensions for screen
+    public static final int SLOT_SIZE = (int) (TEX_SLOT_SIZE * GUI_SCALE); // 36 px
+    public static final int ITEM_SIZE = (int) (TEX_ITEM_SIZE * GUI_SCALE); // 32 px
+    public static final int WINDOW_WIDTH = (int) (TEX_WIDTH * GUI_SCALE); // 352 px
+    public static final int WINDOW_HEIGHT = (int) (TEX_HEIGHT * GUI_SCALE); // 332 px
+
+    // === SLOT POSITIONS (in texture pixels) ===
+    // Crafting grid 3x3: starts at (30, 17)
+    public static final int TEX_CRAFT_GRID_X = 30;
+    public static final int TEX_CRAFT_GRID_Y = 17;
+
+    // Crafting output: at (124, 35)
+    public static final int TEX_CRAFT_OUTPUT_X = 124;
+    public static final int TEX_CRAFT_OUTPUT_Y = 35;
+
+    // Main inventory (27 slots): starts at (8, 84)
+    public static final int TEX_MAIN_INV_X = 8;
+    public static final int TEX_MAIN_INV_Y = 84;
+
+    // Hotbar (9 slots): starts at (8, 142)
+    public static final int TEX_HOTBAR_X = 8;
+    public static final int TEX_HOTBAR_Y = 142;
 
     // Grid dimensions
     public static final int CRAFTING_COLS = 3;
@@ -37,24 +66,19 @@ public class CraftingTableScreen {
     public static final int INVENTORY_ROWS = 3;
     public static final int HOTBAR_ROWS = 1;
 
-    // Gaps
-    public static final int CRAFTING_TO_OUTPUT_GAP = 30; // Arrow space
-    public static final int CRAFTING_TO_INVENTORY_GAP = 16;
-    public static final int INVENTORY_TO_HOTBAR_GAP = 8;
-
-    // Calculated dimensions
-    public static final int CELL_WIDTH = SLOT_SIZE + SLOT_SPACING;
-    public static final int CELL_HEIGHT = SLOT_SIZE + SLOT_SPACING;
-    public static final int CRAFTING_GRID_WIDTH = CRAFTING_COLS * SLOT_SIZE + (CRAFTING_COLS - 1) * SLOT_SPACING;
-    public static final int CRAFTING_GRID_HEIGHT = CRAFTING_ROWS * SLOT_SIZE + (CRAFTING_ROWS - 1) * SLOT_SPACING;
-    public static final int INVENTORY_WIDTH = INVENTORY_COLS * SLOT_SIZE + (INVENTORY_COLS - 1) * SLOT_SPACING;
-    public static final int INVENTORY_HEIGHT = INVENTORY_ROWS * SLOT_SIZE + (INVENTORY_ROWS - 1) * SLOT_SPACING;
+    // Legacy constants for compatibility
+    public static final int SLOT_SPACING = 0;
+    public static final int PADDING = 0;
+    public static final int CRAFTING_TO_OUTPUT_GAP = 0;
+    public static final int CRAFTING_TO_INVENTORY_GAP = 0;
+    public static final int INVENTORY_TO_HOTBAR_GAP = 0;
+    public static final int CELL_WIDTH = SLOT_SIZE;
+    public static final int CELL_HEIGHT = SLOT_SIZE;
+    public static final int CRAFTING_GRID_WIDTH = CRAFTING_COLS * SLOT_SIZE;
+    public static final int CRAFTING_GRID_HEIGHT = CRAFTING_ROWS * SLOT_SIZE;
+    public static final int INVENTORY_WIDTH = INVENTORY_COLS * SLOT_SIZE;
+    public static final int INVENTORY_HEIGHT = INVENTORY_ROWS * SLOT_SIZE;
     public static final int HOTBAR_HEIGHT = SLOT_SIZE;
-
-    // Window dimensions
-    public static final int WINDOW_WIDTH = PADDING * 2 + INVENTORY_WIDTH;
-    public static final int WINDOW_HEIGHT = PADDING * 2 + CRAFTING_GRID_HEIGHT + CRAFTING_TO_INVENTORY_GAP
-            + INVENTORY_HEIGHT + INVENTORY_TO_HOTBAR_GAP + HOTBAR_HEIGHT;
 
     private boolean isOpen = false;
     private Inventory inventory;
@@ -188,9 +212,9 @@ public class CraftingTableScreen {
     }
 
     /**
-     * Get slot at mouse position.
+     * Get slot at mouse position using Minecraft-accurate texture coordinates.
      * Returns:
-     * 0-8: Crafting grid
+     * 0-8: Crafting grid (3x3)
      * 9: Crafting output
      * 10-36: Main inventory
      * 37-45: Hotbar
@@ -202,62 +226,42 @@ public class CraftingTableScreen {
             return -1;
         }
 
-        int localX = mx - windowX - PADDING;
-        int localY = my - windowY - PADDING;
+        // Convert to texture-space coordinates (divide by scale)
+        float texX = (mx - windowX) / GUI_SCALE;
+        float texY = (my - windowY) / GUI_SCALE;
 
-        if (localX < 0 || localY < 0)
-            return -1;
-
-        // Check crafting grid (3x3)
-        if (localY < CRAFTING_GRID_HEIGHT) {
-            if (localX < CRAFTING_GRID_WIDTH) {
-                int col = localX / CELL_WIDTH;
-                int row = localY / CELL_HEIGHT;
-                int slotLocalX = localX % CELL_WIDTH;
-                int slotLocalY = localY % CELL_HEIGHT;
-
-                if (col < CRAFTING_COLS && row < CRAFTING_ROWS &&
-                        slotLocalX < SLOT_SIZE && slotLocalY < SLOT_SIZE) {
-                    return row * CRAFTING_COLS + col; // 0-8
-                }
+        // Check crafting grid (3x3) - slots 0-8
+        if (texX >= TEX_CRAFT_GRID_X && texX < TEX_CRAFT_GRID_X + CRAFTING_COLS * TEX_SLOT_SIZE &&
+                texY >= TEX_CRAFT_GRID_Y && texY < TEX_CRAFT_GRID_Y + CRAFTING_ROWS * TEX_SLOT_SIZE) {
+            int col = (int) ((texX - TEX_CRAFT_GRID_X) / TEX_SLOT_SIZE);
+            int row = (int) ((texY - TEX_CRAFT_GRID_Y) / TEX_SLOT_SIZE);
+            if (col < CRAFTING_COLS && row < CRAFTING_ROWS) {
+                return row * CRAFTING_COLS + col;
             }
-
-            // Check output slot (right side of crafting area)
-            int outputX = CRAFTING_GRID_WIDTH + CRAFTING_TO_OUTPUT_GAP;
-            int outputY = (CRAFTING_GRID_HEIGHT - SLOT_SIZE) / 2;
-            if (localX >= outputX && localX < outputX + SLOT_SIZE &&
-                    localY >= outputY && localY < outputY + SLOT_SIZE) {
-                return 9; // Output slot
-            }
-
-            return -1;
         }
 
-        // Check main inventory (3 rows x 9 cols)
-        int invStartY = CRAFTING_GRID_HEIGHT + CRAFTING_TO_INVENTORY_GAP;
-        int invEndY = invStartY + INVENTORY_HEIGHT;
-        if (localY >= invStartY && localY < invEndY) {
-            int invLocalY = localY - invStartY;
-            int col = localX / CELL_WIDTH;
-            int row = invLocalY / CELL_HEIGHT;
-            int slotLocalX = localX % CELL_WIDTH;
-            int slotLocalY = invLocalY % CELL_HEIGHT;
-
-            if (col < INVENTORY_COLS && row < INVENTORY_ROWS &&
-                    slotLocalX < SLOT_SIZE && slotLocalY < SLOT_SIZE) {
-                return 10 + row * INVENTORY_COLS + col; // 10-36
-            }
-            return -1;
+        // Check crafting output - slot 9
+        if (texX >= TEX_CRAFT_OUTPUT_X && texX < TEX_CRAFT_OUTPUT_X + TEX_SLOT_SIZE &&
+                texY >= TEX_CRAFT_OUTPUT_Y && texY < TEX_CRAFT_OUTPUT_Y + TEX_SLOT_SIZE) {
+            return 9;
         }
 
-        // Check hotbar (1 row x 9 cols)
-        int hotbarStartY = invEndY + INVENTORY_TO_HOTBAR_GAP;
-        if (localY >= hotbarStartY && localY < hotbarStartY + SLOT_SIZE) {
-            int col = localX / CELL_WIDTH;
-            int slotLocalX = localX % CELL_WIDTH;
+        // Check main inventory (3 rows x 9 cols) - slots 10-36
+        if (texX >= TEX_MAIN_INV_X && texX < TEX_MAIN_INV_X + INVENTORY_COLS * TEX_SLOT_SIZE &&
+                texY >= TEX_MAIN_INV_Y && texY < TEX_MAIN_INV_Y + INVENTORY_ROWS * TEX_SLOT_SIZE) {
+            int col = (int) ((texX - TEX_MAIN_INV_X) / TEX_SLOT_SIZE);
+            int row = (int) ((texY - TEX_MAIN_INV_Y) / TEX_SLOT_SIZE);
+            if (col < INVENTORY_COLS && row < INVENTORY_ROWS) {
+                return 10 + row * INVENTORY_COLS + col;
+            }
+        }
 
-            if (col < INVENTORY_COLS && slotLocalX < SLOT_SIZE) {
-                return 37 + col; // 37-45
+        // Check hotbar (1 row x 9 cols) - slots 37-45
+        if (texX >= TEX_HOTBAR_X && texX < TEX_HOTBAR_X + INVENTORY_COLS * TEX_SLOT_SIZE &&
+                texY >= TEX_HOTBAR_Y && texY < TEX_HOTBAR_Y + TEX_SLOT_SIZE) {
+            int col = (int) ((texX - TEX_HOTBAR_X) / TEX_SLOT_SIZE);
+            if (col < INVENTORY_COLS) {
+                return 37 + col;
             }
         }
 

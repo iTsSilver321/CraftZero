@@ -46,6 +46,11 @@ public class SurvivalHudRenderer {
     private String currentItemName = "";
     private float animationTime = 0f;
     private int lastSelectedSlot = -1;
+
+    // Bubble Animation State
+    private float[] bubblePopTimers = new float[10];
+    private float lastAir = PlayerStats.MAX_AIR_SECONDS;
+
     private static final float FADE_IN_DURATION = 0.4f;
     private static final float STAY_DURATION = 1.5f;
     private static final float FADE_OUT_DURATION = 0.4f;
@@ -136,6 +141,20 @@ public class SurvivalHudRenderer {
         this.atlas = atlas;
     }
 
+    // GUI textures for hearts, hunger, hotbar
+    private Texture iconsTexture; // icons.png - hearts, hunger icons
+    private Texture guiTexture; // gui.png - hotbar background
+    private Texture itemsTexture; // items.png - sticks, tools
+
+    public void setGuiTextures(Texture icons, Texture gui) {
+        this.iconsTexture = icons;
+        this.guiTexture = gui;
+    }
+
+    public void setItemsTexture(Texture items) {
+        this.itemsTexture = items;
+    }
+
     public void updateOrtho(int width, int height) {
         this.windowWidth = width;
         this.windowHeight = height;
@@ -199,6 +218,21 @@ public class SurvivalHudRenderer {
         int hungerStartX = centerX + 18;
         drawHungerRight(stats, hungerStartX, bottomY);
 
+        // Bubbles go ABOVE hunger (if air < max or animating)
+        // Check if any bubble is popping OR air < max
+        boolean isAnimating = false;
+        for (float t : bubblePopTimers)
+            if (t > 0)
+                isAnimating = true;
+
+        if (stats.getCurrentAir() < PlayerStats.MAX_AIR_SECONDS || isAnimating) {
+            // Move up to avoid overlap (hunger is ~18px tall + padding? bottomY is top of
+            // icons?)
+            // Icons draw downwards? Usually (x, y) is top-left.
+            // If bottomY is 90 from bottom, bubbles at bottomY-26 puts them above.
+            drawBubbles(stats, hungerStartX, bottomY - 26, deltaTime);
+        }
+
         // Hotbar goes BELOW hearts/hunger
         int hotbarY = windowHeight - 60; // 10px from bottom edge
         drawHotbar(inventory, centerX, hotbarY);
@@ -229,18 +263,29 @@ public class SurvivalHudRenderer {
             }
         }
 
+        // Update lastAir for next frame comparison
+        lastAir = stats.getCurrentAir();
+
         // Restore state
         glEnable(GL_DEPTH_TEST);
-        glDisable(GL_BLEND);
+        // glDisable(GL_BLEND); // Keep blending enabled for World renderer
     }
 
     private void drawHotbar(Inventory inventory, int centerX, int y) {
         if (inventory == null)
             return;
 
-        int startX = centerX - (HOTBAR_WIDTH / 2);
         ItemStack[] items = inventory.getHotbar();
         int selected = inventory.getSelectedSlot();
+
+        // Use textured hotbar if gui texture is available
+        if (guiTexture != null) {
+            drawTexturedHotbar(inventory, centerX, y);
+            return;
+        }
+
+        // Fallback to procedural hotbar
+        int startX = centerX - (HOTBAR_WIDTH / 2);
 
         // 1. Draw 9 contiguous slots
         for (int i = 0; i < 9; i++) {
@@ -265,37 +310,126 @@ public class SurvivalHudRenderer {
             int border = 4; // Thicker grid
             int innerH = HOTBAR_SLOT_SIZE - (border * 2);
 
-            // User requested "all around 4 corners light grey"
-            // Using a bright light grey (0.75f) for all sides
-
             // Top Bar (Full Width)
             drawRect(slotX, y, HOTBAR_SLOT_SIZE, border, 0.75f, 0.75f, 0.75f, 1.0f);
-
             // Bottom Bar (Full Width)
             drawRect(slotX, y + HOTBAR_SLOT_SIZE - border, HOTBAR_SLOT_SIZE, border, 0.75f, 0.75f, 0.75f, 1.0f);
-
             // Left Bar (Inner Height)
             drawRect(slotX, y + border, border, innerH, 0.75f, 0.75f, 0.75f, 1.0f);
-
             // Right Bar (Inner Height)
             drawRect(slotX + HOTBAR_SLOT_SIZE - border, y + border, border, innerH, 0.75f, 0.75f, 0.75f, 1.0f);
         }
 
-        // 2. Draw Selection Frame (Refined: Thickness 5, Padding 0)
-        // Manual 4-rect drawing to ensure thickness works
+        // 2. Draw Selection Frame
         int selX = startX + (selected * HOTBAR_SPACING);
         int thickness = 5;
         int innerSize = HOTBAR_SLOT_SIZE;
 
         // White Selection Frame
-        // Top Bar
         drawRect(selX - thickness, y - thickness, innerSize + (thickness * 2), thickness, 1.0f, 1.0f, 1.0f, 1.0f);
-        // Bottom Bar
         drawRect(selX - thickness, y + innerSize, innerSize + (thickness * 2), thickness, 1.0f, 1.0f, 1.0f, 1.0f);
-        // Left Bar
         drawRect(selX - thickness, y, thickness, innerSize, 1.0f, 1.0f, 1.0f, 1.0f);
-        // Right Bar
         drawRect(selX + innerSize, y, thickness, innerSize, 1.0f, 1.0f, 1.0f, 1.0f);
+    }
+
+    /**
+     * Draw hotbar using textures from gui.png.
+     * Hotbar is 182x22 pixels, scaled up to match our slot size.
+     */
+    private void drawTexturedHotbar(Inventory inventory, int centerX, int y) {
+        ItemStack[] items = inventory.getHotbar();
+        int selected = inventory.getSelectedSlot();
+
+        // Scale hotbar to our slot size (original is 182x22 for 9 slots = ~20px per
+        // slot)
+        float scale = HOTBAR_SLOT_SIZE / 20.0f; // Scale factor to match our slot size
+        int hotbarWidth = (int) (182 * scale);
+        int hotbarHeight = (int) (22 * scale);
+        int startX = centerX - hotbarWidth / 2;
+        int hotbarY = y;
+
+        // Draw hotbar background from gui.png
+        float[] hotbarUV = GuiTexture.getHotbarUV();
+
+        shader.unbind();
+        guiTexture.bind(0);
+        texturedShader.bind();
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+
+        // Draw hotbar background
+        drawTexturedQuad(
+                startX, hotbarY,
+                startX + hotbarWidth, hotbarY,
+                startX + hotbarWidth, hotbarY + hotbarHeight,
+                startX, hotbarY + hotbarHeight,
+                hotbarUV[0], hotbarUV[1], hotbarUV[2], hotbarUV[3]);
+
+        // Draw selection frame
+        float[] selectionUV = GuiTexture.getHotbarSelectionUV();
+        int selectionSize = (int) (24 * scale);
+        int slotWidth = (int) (20 * scale);
+        int selX = startX + selected * slotWidth - (selectionSize - slotWidth) / 2;
+        int selY = hotbarY - (selectionSize - hotbarHeight) / 2;
+
+        drawTexturedQuad(
+                selX, selY,
+                selX + selectionSize, selY,
+                selX + selectionSize, selY + selectionSize,
+                selX, selY + selectionSize,
+                selectionUV[0], selectionUV[1], selectionUV[2], selectionUV[3]);
+
+        texturedShader.unbind();
+        guiTexture.unbind();
+        shader.bind();
+        shader.setUniform("projection", ortho);
+
+        // Draw item icons on top of hotbar
+        int itemSize = (int) (16 * scale);
+        int itemOffset = (slotWidth - itemSize) / 2;
+
+        for (int i = 0; i < 9; i++) {
+            ItemStack item = items[i];
+            if (item != null && !item.isEmpty()) {
+                int itemX = startX + i * slotWidth + itemOffset;
+                int itemY = hotbarY + (hotbarHeight - itemSize) / 2;
+
+                if (item.getType().isItem()) {
+                    drawItemSprite(itemX, itemY, itemSize, item.getType());
+                } else {
+                    drawIsometricBlockIcon(itemX, itemY, itemSize, item.getType());
+                }
+
+                // Draw stack count
+                if (item.getCount() > 1) {
+                    drawStackCountAt(startX + i * slotWidth, hotbarY, slotWidth, hotbarHeight, item.getCount());
+                }
+            }
+        }
+    }
+
+    /**
+     * Draw stack count at a specific slot position.
+     */
+    private void drawStackCountAt(int slotX, int slotY, int slotWidth, int slotHeight, int count) {
+        String countStr = String.valueOf(count);
+        int digitWidth = 6;
+        int digitHeight = 8;
+        int spacing = 1;
+        int totalWidth = countStr.length() * (digitWidth + spacing) - spacing;
+
+        int baseX = slotX + slotWidth - totalWidth - 3;
+        int baseY = slotY + slotHeight - digitHeight - 3;
+
+        // Draw shadow first, then digit
+        for (int i = 0; i < countStr.length(); i++) {
+            int digit = countStr.charAt(i) - '0';
+            int dx = baseX + i * (digitWidth + spacing);
+            drawDigit(dx + 1, baseY + 1, digit, 0.2f, 0.2f, 0.2f);
+            drawDigit(dx, baseY, digit, 1.0f, 1.0f, 1.0f);
+        }
     }
 
     private void drawRect(int x, int y, int w, int h, float r, float g, float b, float a) {
@@ -334,13 +468,27 @@ public class SurvivalHudRenderer {
     }
 
     /**
-     * Draw an item as a flat 2D sprite (for sticks, etc).
+     * Draw an item as a flat 2D sprite (for sticks, tools, etc).
      */
     private void drawItemSprite(int x, int y, int size, BlockType type) {
-        float[] uv = type.getTextureCoords(2); // Use side texture for items
+        float[] uv;
+        Texture texToUse;
+
+        // Check if this item uses items.png
+        if (type.usesItemTexture() && itemsTexture != null) {
+            int[] pos = type.getItemTexturePos();
+            uv = GuiTexture.getItemUV(pos[0], pos[1]);
+            texToUse = itemsTexture;
+        } else {
+            uv = type.getTextureCoords(2); // Use side texture for blocks as items
+            texToUse = atlas;
+        }
+
+        if (texToUse == null)
+            return;
 
         shader.unbind();
-        atlas.bind(0);
+        texToUse.bind(0);
         texturedShader.bind();
         Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
         texturedShader.setUniform("projection", ortho);
@@ -352,7 +500,7 @@ public class SurvivalHudRenderer {
                 uv[0], uv[1], uv[2], uv[3]);
 
         texturedShader.unbind();
-        atlas.unbind();
+        texToUse.unbind(); // Unbind correct texture
         shader.bind();
         shader.setUniform("projection", ortho);
     }
@@ -469,61 +617,232 @@ public class SurvivalHudRenderer {
         int fullHearts = stats.getFullHearts();
         boolean hasHalf = stats.hasHalfHeart();
 
+        // Use textured hearts if icons texture available
+        if (iconsTexture != null) {
+            drawTexturedHearts(stats, startX, y);
+            return;
+        }
+
+        // Fallback to procedural hearts
         for (int i = 0; i < 10; i++) {
             int x = startX + (i * SPACING);
 
-            // Choose color based on health
             float r, g, b, a;
             if (i < fullHearts) {
                 r = 1.0f;
                 g = 0.0f;
                 b = 0.0f;
-                a = 1.0f; // Full red
+                a = 1.0f;
             } else if (i == fullHearts && hasHalf) {
                 r = 1.0f;
                 g = 0.5f;
                 b = 0.5f;
-                a = 1.0f; // Pink - HALF HEART
+                a = 1.0f;
             } else {
                 r = 0.4f;
                 g = 0.0f;
                 b = 0.0f;
-                a = 0.8f; // Dark red - EMPTY
+                a = 0.8f;
             }
-
             drawSquare(x, y, ICON_SIZE, r, g, b, a);
         }
+    }
+
+    /**
+     * Draw hearts using textures from icons.png.
+     */
+    private void drawTexturedHearts(PlayerStats stats, int startX, int y) {
+        int fullHearts = stats.getFullHearts();
+        boolean hasHalf = stats.hasHalfHeart();
+
+        float scale = 2.0f; // Scale up the 9x9 icons
+        int iconSize = (int) (9 * scale);
+        int spacing = iconSize + 2;
+
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+
+        shader.unbind();
+        iconsTexture.bind(0);
+        texturedShader.bind();
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+
+        float[] containerUV = GuiTexture.getHeartContainerUV();
+        float[] fullHeartUV = GuiTexture.getFullHeartUV();
+        float[] halfHeartUV = GuiTexture.getHalfHeartUV();
+
+        for (int i = 0; i < 10; i++) {
+            int x = startX + (i * spacing);
+
+            // Draw heart container (background)
+            drawTexturedQuad(x, y, x + iconSize, y, x + iconSize, y + iconSize, x, y + iconSize,
+                    containerUV[0], containerUV[1], containerUV[2], containerUV[3]);
+
+            // Draw heart fill
+            if (i < fullHearts) {
+                drawTexturedQuad(x, y, x + iconSize, y, x + iconSize, y + iconSize, x, y + iconSize,
+                        fullHeartUV[0], fullHeartUV[1], fullHeartUV[2], fullHeartUV[3]);
+            } else if (i == fullHearts && hasHalf) {
+                drawTexturedQuad(x, y, x + iconSize, y, x + iconSize, y + iconSize, x, y + iconSize,
+                        halfHeartUV[0], halfHeartUV[1], halfHeartUV[2], halfHeartUV[3]);
+            }
+        }
+
+        texturedShader.unbind();
+        iconsTexture.unbind();
+        shader.bind();
+        shader.setUniform("projection", ortho);
     }
 
     private void drawHungerRight(PlayerStats stats, int startX, int y) {
         int fullBars = stats.getFullHungerBars();
         boolean hasHalf = stats.hasHalfHungerBar();
 
+        // Use textured hunger if icons texture available
+        if (iconsTexture != null) {
+            drawTexturedHunger(stats, startX, y);
+            return;
+        }
+
+        // Fallback to procedural
         for (int i = 0; i < 10; i++) {
-            // Render from LEFT to RIGHT
             int x = startX + (i * SPACING);
 
-            // Choose color based on hunger
             float r, g, b, a;
             if (i < fullBars) {
                 r = 1.0f;
                 g = 0.7f;
                 b = 0.0f;
-                a = 1.0f; // Orange - FULL
+                a = 1.0f;
             } else if (i == fullBars && hasHalf) {
                 r = 1.0f;
                 g = 0.85f;
                 b = 0.5f;
-                a = 1.0f; // Light orange - HALF
+                a = 1.0f;
             } else {
                 r = 0.4f;
                 g = 0.3f;
                 b = 0.0f;
-                a = 0.8f; // Dark orange - EMPTY
+                a = 0.8f;
             }
-
             drawSquare(x, y, ICON_SIZE, r, g, b, a);
         }
+    }
+
+    /**
+     * Draw hunger icons using textures from icons.png.
+     */
+    private void drawTexturedHunger(PlayerStats stats, int startX, int y) {
+        int fullBars = stats.getFullHungerBars();
+        boolean hasHalf = stats.hasHalfHungerBar();
+
+        float scale = 2.0f; // Scale up the 9x9 icons
+        int iconSize = (int) (9 * scale);
+        int spacing = iconSize + 2;
+
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+
+        shader.unbind();
+        iconsTexture.bind(0);
+        texturedShader.bind();
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+
+        float[] containerUV = GuiTexture.getHungerContainerUV();
+        float[] fullHungerUV = GuiTexture.getFullHungerUV();
+        float[] halfHungerUV = GuiTexture.getHalfHungerUV();
+
+        for (int i = 0; i < 10; i++) {
+            int x = startX + (i * spacing);
+
+            // Draw hunger container (background)
+            drawTexturedQuad(x, y, x + iconSize, y, x + iconSize, y + iconSize, x, y + iconSize,
+                    containerUV[0], containerUV[1], containerUV[2], containerUV[3]);
+
+            // Draw hunger fill (drumstick)
+            if (i < fullBars) {
+                drawTexturedQuad(x, y, x + iconSize, y, x + iconSize, y + iconSize, x, y + iconSize,
+                        fullHungerUV[0], fullHungerUV[1], fullHungerUV[2], fullHungerUV[3]);
+            } else if (i == fullBars && hasHalf) {
+                drawTexturedQuad(x, y, x + iconSize, y, x + iconSize, y + iconSize, x, y + iconSize,
+                        halfHungerUV[0], halfHungerUV[1], halfHungerUV[2], halfHungerUV[3]);
+            }
+        }
+
+        texturedShader.unbind();
+        iconsTexture.unbind();
+        shader.bind();
+        shader.setUniform("projection", ortho);
+    }
+
+    /**
+     * Draw breath bubbles.
+     */
+    private void drawBubbles(PlayerStats stats, int startX, int y, float deltaTime) {
+        if (iconsTexture == null)
+            return;
+
+        float currentAir = stats.getCurrentAir();
+        float airPerBubble = PlayerStats.MAX_AIR_SECONDS / 10.0f;
+
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+
+        shader.unbind();
+        iconsTexture.bind(0);
+        texturedShader.bind();
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+
+        float[] fullBubbleUV = GuiTexture.getFullBubbleUV();
+        float[] poppedBubbleUV = GuiTexture.getEmptyBubbleUV();
+
+        float scale = 2.0f;
+        int iconSize = (int) (9 * scale);
+        int spacing = iconSize + 2;
+
+        // Update logic for pops
+        for (int i = 0; i < 10; i++) {
+            float threshold = i * airPerBubble;
+            boolean hadBubble = lastAir > threshold + 0.1f;
+            boolean hasBubble = currentAir > threshold + 0.1f;
+
+            if (hadBubble && !hasBubble) {
+                bubblePopTimers[i] = 0.1f; // Very short pop animation
+            }
+
+            if (bubblePopTimers[i] > 0) {
+                bubblePopTimers[i] -= deltaTime;
+            }
+        }
+
+        // Draw loop
+        for (int i = 0; i < 10; i++) {
+            int x = startX + (i * spacing);
+
+            float threshold = i * airPerBubble;
+            boolean hasBubble = currentAir > threshold + 0.1f;
+
+            float[] uvToUse = null;
+
+            if (hasBubble) {
+                uvToUse = fullBubbleUV;
+            } else if (bubblePopTimers[i] > 0) {
+                uvToUse = poppedBubbleUV;
+            }
+
+            if (uvToUse != null) {
+                drawTexturedQuad(x, y, x + iconSize, y, x + iconSize, y + iconSize, x, y + iconSize,
+                        uvToUse[0], uvToUse[1], uvToUse[2], uvToUse[3]);
+            }
+        }
+
+        texturedShader.unbind();
+        iconsTexture.unbind();
+        shader.bind();
+        shader.setUniform("projection", ortho);
     }
 
     private void drawSquare(int x, int y, int size, float r, float g, float b, float a) {

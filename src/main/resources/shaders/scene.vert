@@ -3,10 +3,12 @@
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec2 aTexCoord;
 layout (location = 2) in vec3 aNormal;
+layout (location = 3) in vec3 aColor;
 
 out vec2 texCoord;
 out vec3 fragPos;
 out vec3 normal;
+out vec3 vertexColor;
 out float visibility;
 
 uniform mat4 projectionMatrix;
@@ -24,6 +26,7 @@ void main() {
     texCoord = aTexCoord;
     fragPos = worldPosition.xyz;
     normal = mat3(transpose(inverse(modelMatrix))) * aNormal;
+    vertexColor = aColor;
     
     // Calculate fog visibility
     if (fogEnabled) {

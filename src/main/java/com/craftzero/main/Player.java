@@ -27,10 +27,11 @@ public class Player {
     private static final float EYE_HEIGHT = 1.62f;
 
     // Physics constants
-    private static final float GRAVITY = -32.0f;
-    private static final float JUMP_VELOCITY = 9.0f;
-    private static final float WALK_SPEED = 4.317f;
-    private static final float SPRINT_SPEED = 5.612f;
+    // Physics constants
+    private static final float GRAVITY = -28.0f; // Reduced from -32.0f for floatier feel
+    private static final float JUMP_VELOCITY = 9.0f; // Reduced from 9.5f
+    private static final float WALK_SPEED = 4.0f; // Reduced from 4.317f
+    private static final float SPRINT_SPEED = 5.2f; // Reduced from 5.612f
     private static final float SNEAK_SPEED = 1.3f;
     private static final float FRICTION = 0.91f;
     private static final float AIR_FRICTION = 0.98f;
@@ -85,6 +86,11 @@ public class Player {
     private boolean wasFalling; // Track if player was falling last frame
     private boolean dropItemFromHand; // Q key drop flag
     private boolean wantsCraftingTable; // Flag for opening crafting table
+
+    // Water State (Promoted to fields for access in handleInput)
+    private boolean inWater;
+    private boolean headInWater;
+    private float surfaceBobbingTimer; // Timer to disable swimming at surface
 
     public Player(float x, float y, float z) {
         this.position = new Vector3f(x, y, z);
@@ -143,6 +149,13 @@ public class Player {
             strafe -= 1;
         if (Input.isKeyDown(GLFW_KEY_D))
             strafe += 1;
+
+        // Normalize input vector to prevent faster diagonal movement
+        if (forward != 0 || strafe != 0) {
+            float length = (float) Math.sqrt(forward * forward + strafe * strafe);
+            forward /= length;
+            strafe /= length;
+        }
 
         // Sneaking (Shift key) - not while flying
         sneaking = Input.isKeyDown(GLFW_KEY_LEFT_SHIFT) && !flying;
@@ -221,8 +234,10 @@ public class Player {
                 velocity.y *= 0.5f;
             }
         } else {
-            // Normal jump
-            if (Input.isKeyPressed(GLFW_KEY_SPACE) && onGround) {
+            // Normal jump (Auto-jump enabled: use isKeyDown)
+            // Disable ground jump if currently submerged to prevent "bouncing" on ocean
+            // floor
+            if (Input.isKeyDown(GLFW_KEY_SPACE) && onGround && !inWater) {
                 velocity.y = JUMP_VELOCITY;
                 onGround = false;
                 stats.onJump(); // Drain hunger from jumping
@@ -322,6 +337,12 @@ public class Player {
 
                     // Calculate progress increment (1/hardness per second, modified by tool speed)
                     float progressIncrement = (deltaTime * speedMultiplier) / hardness;
+
+                    // Underwater penalty (5x slower)
+                    if (inWater && !flying) {
+                        progressIncrement /= 5.0f;
+                    }
+
                     breakProgress += progressIncrement;
 
                     // Block is broken when progress reaches 1.0
@@ -443,17 +464,89 @@ public class Player {
         }
         wasFalling = isFalling;
 
-        // Apply gravity (if not flying)
-        if (!flying) {
-            velocity.y += GRAVITY * deltaTime;
+        // Store previous water state
+        boolean wasInWater = inWater;
+
+        // Check water state
+        inWater = world.getBlock((int) Math.floor(position.x), (int) Math.floor(position.y),
+                (int) Math.floor(position.z)) == BlockType.WATER ||
+                world.getBlock((int) Math.floor(position.x), (int) Math.floor(position.y + 1),
+                        (int) Math.floor(position.z)) == BlockType.WATER;
+
+        headInWater = world.getBlock((int) Math.floor(position.x), (int) Math.floor(position.y + EYE_HEIGHT),
+                (int) Math.floor(position.z)) == BlockType.WATER;
+
+        // Exit Detection: Player has fully breached (feet left water) while moving up
+        // Trigger bobbing cooldown here to force a sink phase upon re-entry
+        if (wasInWater && !inWater && velocity.y > 0) {
+            surfaceBobbingTimer = 0.3f; // Reduced from 0.5f for faster cycle
         }
 
-        // Apply friction
-        float friction = onGround ? FRICTION : AIR_FRICTION;
-        velocity.x *= friction;
-        velocity.z *= friction;
+        // Update state for visual rendering
+        this.headInWaterState = headInWater;
 
-        // Clamp velocity
+        // Update breath logic
+        stats.updateAir(headInWater, deltaTime);
+
+        // Apply movement physics
+        if (flying) {
+            // Creative flight (already handled in handleInput)
+            // No gravity, high friction handled by input velocity setting
+        } else if (inWater) {
+            // Water physics
+            // Apply reduced gravity (sink faster - 0.6f, separate from air gravity)
+            velocity.y += GRAVITY * 0.6f * deltaTime;
+
+            // Update Bobbing Timer
+            if (surfaceBobbingTimer > 0) {
+                surfaceBobbingTimer -= deltaTime;
+            }
+
+            // Vertical movement (Swimming)
+            if (Input.isKeyDown(GLFW_KEY_SPACE)) {
+                // Only swim up if the "bobbing cooldown" is inactive
+                if (surfaceBobbingTimer <= 0) {
+                    // Swim up (Significantly Faster)
+                    velocity.y += 35.0f * deltaTime;
+                    if (velocity.y > 15.0f)
+                        velocity.y = 15.0f;
+                }
+            } else if (Input.isKeyDown(GLFW_KEY_LEFT_SHIFT)) {
+                // Swim down (Faster)
+                velocity.y -= 35.0f * deltaTime;
+                if (velocity.y < -15.0f)
+                    velocity.y = -15.0f;
+            }
+
+            // Drag in water (Frame-rate independent)
+            // 0.82 reference at 60 FPS
+            float dragFactor = (float) Math.pow(0.82, deltaTime * 60.0f);
+
+            // Momentum Preservation (Cannonball effect)
+            if (velocity.y < -10.0f) {
+                // Falling fast into water -> Glide down
+                velocity.y *= 0.95f; // Cannonball entry preserves more momentum
+                velocity.x *= dragFactor;
+                velocity.z *= dragFactor;
+            } else {
+                velocity.x *= dragFactor;
+                velocity.z *= dragFactor;
+                velocity.y *= dragFactor;
+            }
+
+            // Reset fall distance
+            fallStartY = position.y;
+        } else {
+            // Standard Air/Ground physics
+            velocity.y += GRAVITY * deltaTime;
+
+            // Apply friction
+            float friction = onGround ? FRICTION : AIR_FRICTION;
+            velocity.x *= friction;
+            velocity.z *= friction;
+        }
+
+        // Clamp horizontal velocity
         float maxHorizontal = sprinting ? SPRINT_SPEED : WALK_SPEED;
         float horizontalSpeed = (float) Math.sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
         if (horizontalSpeed > maxHorizontal) {
@@ -472,8 +565,9 @@ public class Player {
         // Move with collision detection
         moveWithCollision(deltaTime, world);
 
-        // Fall damage calculation (only when landing from a fall, not in fly mode)
-        if (onGround && !wasOnGround && !flying) {
+        // Fall damage calculation (only when landing from a fall, not in fly mode or
+        // water)
+        if (onGround && !wasOnGround && !flying && !inWater) {
             float fallDistance = fallStartY - position.y;
             if (fallDistance > 3.0f) {
                 // Minecraft formula: damage = fallDistance - 3
@@ -488,7 +582,7 @@ public class Player {
         stats.update(deltaTime, sprinting, isMoving);
 
         // Collect nearby dropped items (only if inventory has space)
-        java.util.List<DroppedItem> collected = world.collectNearbyItems(
+        List<DroppedItem> collected = world.collectNearbyItems(
                 position.x, position.y + 0.9f, position.z, deltaTime, this);
         for (DroppedItem item : collected) {
             addToInventory(item.getBlockType(), item.getCount());
@@ -513,6 +607,44 @@ public class Player {
         float originalDx = dx;
         float originalDy = dy;
         float originalDz = dz;
+
+        // Safe Walk (Sneaking on edges)
+        if (sneaking && onGround) {
+            float step = 0.05f;
+
+            // Check X axis
+            while (dx != 0) {
+                if (hasGroundBelow(world, dx, 0f))
+                    break;
+                if (Math.abs(dx) < step)
+                    dx = 0;
+                else
+                    dx -= Math.signum(dx) * step;
+            }
+
+            // Check Z axis
+            while (dz != 0) {
+                if (hasGroundBelow(world, 0f, dz))
+                    break;
+                if (Math.abs(dz) < step)
+                    dz = 0;
+                else
+                    dz -= Math.signum(dz) * step;
+            }
+
+            // Check Combined (Diagonal) - ensures we don't fall off corners
+            while (dx != 0 && dz != 0 && !hasGroundBelow(world, dx, dz)) {
+                if (Math.abs(dx) < step)
+                    dx = 0;
+                else
+                    dx -= Math.signum(dx) * step;
+
+                if (Math.abs(dz) < step)
+                    dz = 0;
+                else
+                    dz -= Math.signum(dz) * step;
+            }
+        }
 
         // Get all potential colliders for the entire movement
         List<AABB> colliders = getCollidingBlocks(world, dx, dy, dz);
@@ -594,6 +726,39 @@ public class Player {
         return colliders;
     }
 
+    /**
+     * Check if there is solid ground below the proposed movement.
+     */
+    private boolean hasGroundBelow(World world, float dx, float dz) {
+        // Create a test box moved by dx/dz and slightly down (-0.1f)
+        AABB testBox = new AABB(
+                boundingBox.getMin().x + dx, boundingBox.getMin().y - 0.1f, boundingBox.getMin().z + dz,
+                boundingBox.getMax().x + dx, boundingBox.getMax().y - 0.1f, boundingBox.getMax().z + dz);
+
+        // Scan for blocks
+        int minX = (int) Math.floor(testBox.getMin().x);
+        int minY = (int) Math.floor(testBox.getMin().y);
+        int minZ = (int) Math.floor(testBox.getMin().z);
+        int maxX = (int) Math.ceil(testBox.getMax().x);
+        int maxY = (int) Math.ceil(testBox.getMax().y);
+        int maxZ = (int) Math.ceil(testBox.getMax().z);
+
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    BlockType block = world.getBlock(x, y, z);
+                    if (block.isSolid()) {
+                        // Check actual intersection
+                        if (AABB.forBlock(x, y, z).intersects(testBox)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     // Getters
 
     public Camera getCamera() {
@@ -639,6 +804,17 @@ public class Player {
 
     public boolean isSneaking() {
         return sneaking;
+    }
+
+    /**
+     * Check if player's head is currently underwater.
+     * Uses the world reference passed to update() or needs world passed here.
+     * Since this is a simple getter, we'll need to store the state during update.
+     */
+    private boolean headInWaterState = false;
+
+    public boolean isHeadInWater() {
+        return headInWaterState;
     }
 
     /**

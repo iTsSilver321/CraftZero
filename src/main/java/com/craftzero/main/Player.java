@@ -581,6 +581,9 @@ public class Player {
         boolean isMoving = Math.abs(velocity.x) > 0.01f || Math.abs(velocity.z) > 0.01f;
         stats.update(deltaTime, sprinting, isMoving);
 
+        // Push mobs when player collides with them (Minecraft-style)
+        pushNearbyMobs(world, deltaTime);
+
         // Collect nearby dropped items (only if inventory has space)
         List<DroppedItem> collected = world.collectNearbyItems(
                 position.x, position.y + 0.9f, position.z, deltaTime, this);
@@ -590,6 +593,34 @@ public class Player {
 
         // Update camera position
         camera.setPosition(position.x, position.y + EYE_HEIGHT, position.z);
+    }
+
+    /**
+     * Push nearby mobs away from player.
+     * Minecraft-style soft collision - player can push mobs but not stand on them.
+     */
+    private void pushNearbyMobs(World world, float deltaTime) {
+        for (com.craftzero.entity.Entity entity : world.getEntities()) {
+            if (entity instanceof com.craftzero.entity.LivingEntity mob) {
+                AABB mobBox = mob.getBoundingBox();
+                if (mobBox != null && boundingBox.intersects(mobBox)) {
+                    // Calculate push direction (from mob center to player center)
+                    float dx = mob.getX() - position.x;
+                    float dz = mob.getZ() - position.z;
+                    float dist = (float) Math.sqrt(dx * dx + dz * dz);
+
+                    if (dist > 0.01f) {
+                        // Normalize and apply push force
+                        float pushStrength = 0.05f; // Reduced from 0.15f (too aggressive)
+                        float pushX = (dx / dist) * pushStrength;
+                        float pushZ = (dz / dist) * pushStrength;
+
+                        // Push the mob away
+                        mob.addMotion(pushX, 0, pushZ);
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -691,6 +722,7 @@ public class Player {
 
     /**
      * Get all solid blocks that could collide with the player's path.
+     * Also includes mob bounding boxes for player-mob collision.
      */
     private List<AABB> getCollidingBlocks(World world, float dx, float dy, float dz) {
         List<AABB> colliders = new ArrayList<>();
@@ -722,6 +754,10 @@ public class Player {
                 }
             }
         }
+
+        // Note: Mob collision is handled by pushNearbyMobs() instead of rigid collision
+        // This prevents player from standing on mobs while still allowing push
+        // interactions
 
         return colliders;
     }

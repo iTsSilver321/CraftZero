@@ -8,6 +8,7 @@ import com.craftzero.graphics.BlockHighlightRenderer;
 import com.craftzero.graphics.DroppedItemRenderer;
 import com.craftzero.graphics.HudRenderer;
 import com.craftzero.graphics.InventoryRenderer;
+import com.craftzero.graphics.MobRenderer;
 import com.craftzero.graphics.Renderer;
 import com.craftzero.graphics.SurvivalHudRenderer;
 import com.craftzero.graphics.TextRenderer;
@@ -17,6 +18,7 @@ import com.craftzero.ui.InventoryScreen;
 import com.craftzero.graphics.SkyRenderer;
 import com.craftzero.graphics.CloudRenderer;
 import com.craftzero.world.DayCycleManager;
+import com.craftzero.world.MobSpawner;
 import com.craftzero.world.World;
 
 import static org.lwjgl.glfw.GLFW.*;
@@ -45,8 +47,10 @@ public class Main implements Runnable {
     private InventoryScreen inventoryScreen;
     private InventoryRenderer inventoryRenderer;
     private DroppedItemRenderer droppedItemRenderer;
+    private MobRenderer mobRenderer;
     private CraftingTableScreen craftingTableScreen;
     private World world;
+    private MobSpawner mobSpawner;
     private Player player;
 
     private TextRenderer textRenderer;
@@ -138,6 +142,17 @@ public class Main implements Runnable {
         // Create player at spawn point (closer to typical terrain height)
         // Player has 5 seconds of spawn invincibility to handle any remaining fall
         player = new Player(0, 80, 0);
+
+        // Link world and player for entity systems
+        world.setPlayer(player);
+        world.setDayCycleManager(dayCycleManager);
+
+        // Initialize mob spawner
+        mobSpawner = new MobSpawner(world);
+
+        // Initialize mob renderer
+        mobRenderer = new MobRenderer(renderer);
+        mobRenderer.init();
 
         // Create inventory screen (connects to player's inventory)
         inventoryScreen = new InventoryScreen(player.getInventory());
@@ -368,6 +383,12 @@ public class Main implements Runnable {
 
         // Update dropped items (physics, animation)
         world.updateDroppedItems(deltaTime);
+
+        // Update entities (mobs)
+        world.updateEntities(deltaTime);
+
+        // Spawn mobs
+        mobSpawner.tick();
     }
 
     private void render(float deltaTime) {
@@ -404,6 +425,12 @@ public class Main implements Runnable {
         // Render dropped items (with world sky light)
         droppedItemRenderer.render(player.getCamera(), world.getDroppedItems(), world.getAtlas(),
                 com.craftzero.graphics.GuiTexture.getItemsTexture(), dayCycleManager, world);
+
+        // Render mobs
+        float partialTick = timer.getAlpha(FIXED_DELTA);
+        renderer.beginRender(player.getCamera());
+        mobRenderer.renderAll(world.getEntities(), player.getCamera(), partialTick);
+        renderer.endRender();
 
         // Render block highlight
         blockHighlightRenderer.render(player.getCamera(), player.getTargetBlock());
@@ -454,6 +481,9 @@ public class Main implements Runnable {
         }
         if (survivalHudRenderer != null) {
             survivalHudRenderer.cleanup();
+        }
+        if (mobRenderer != null) {
+            mobRenderer.cleanup();
         }
         window.cleanup();
         System.out.println("CraftZero shut down successfully.");

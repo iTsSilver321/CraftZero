@@ -4,6 +4,7 @@ import com.craftzero.graphics.Camera;
 import com.craftzero.graphics.Renderer;
 import com.craftzero.graphics.Texture;
 import com.craftzero.entity.DroppedItem;
+import com.craftzero.entity.Entity;
 import com.craftzero.math.Noise;
 
 import java.util.ArrayList;
@@ -39,6 +40,17 @@ public class World {
     // Dropped items in the world
     private final List<DroppedItem> droppedItems;
 
+    // Living entities (mobs)
+    private final List<Entity> entities;
+    private final List<Entity> entitiesToAdd;
+    private final List<Entity> entitiesToRemove;
+
+    // Reference to player (for AI targeting)
+    private com.craftzero.main.Player player;
+
+    // Day/night cycle manager reference
+    private DayCycleManager dayCycleManager;
+
     public World(long seed) {
         this.seed = seed;
         this.chunks = new HashMap<>();
@@ -51,6 +63,9 @@ public class World {
         this.oreGenerator = new OreGenerator();
         this.random = new Random(seed);
         this.droppedItems = new ArrayList<>();
+        this.entities = new ArrayList<>();
+        this.entitiesToAdd = new ArrayList<>();
+        this.entitiesToRemove = new ArrayList<>();
     }
 
     public void init() throws Exception {
@@ -609,6 +624,166 @@ public class World {
      */
     public Texture getAtlas() {
         return atlas;
+    }
+
+    // ===== ENTITY MANAGEMENT =====
+
+    /**
+     * Spawn an entity into the world.
+     */
+    public void spawnEntity(Entity entity) {
+        entity.setWorld(this);
+        entitiesToAdd.add(entity);
+    }
+
+    /**
+     * Remove an entity from the world.
+     */
+    public void removeEntity(Entity entity) {
+        entitiesToRemove.add(entity);
+    }
+
+    /**
+     * Update all entities in the world.
+     */
+    public void updateEntities(float deltaTime) {
+        // Add pending entities
+        entities.addAll(entitiesToAdd);
+        entitiesToAdd.clear();
+
+        // Update all entities
+        Iterator<Entity> iterator = entities.iterator();
+        while (iterator.hasNext()) {
+            Entity entity = iterator.next();
+
+            entity.tick();
+            entity.updatePhysics(deltaTime);
+
+            // Remove dead entities
+            if (entity.isRemoved()) {
+                entitiesToRemove.add(entity);
+            }
+        }
+
+        // Remove pending entities
+        entities.removeAll(entitiesToRemove);
+        entitiesToRemove.clear();
+    }
+
+    /**
+     * Get all entities in the world.
+     */
+    public List<Entity> getEntities() {
+        return entities;
+    }
+
+    /**
+     * Set the player reference (for AI targeting).
+     */
+    public void setPlayer(com.craftzero.main.Player player) {
+        this.player = player;
+    }
+
+    /**
+     * Get the player reference.
+     */
+    public com.craftzero.main.Player getPlayer() {
+        return player;
+    }
+
+    /**
+     * Set the day/night cycle manager reference.
+     */
+    public void setDayCycleManager(DayCycleManager manager) {
+        this.dayCycleManager = manager;
+    }
+
+    /**
+     * Get the day/night cycle manager.
+     */
+    public DayCycleManager getDayCycleManager() {
+        return dayCycleManager;
+    }
+
+    /**
+     * Create an explosion at the specified location.
+     * Destroys blocks within radius and damages entities.
+     * 
+     * @param x     Center X
+     * @param y     Center Y
+     * @param z     Center Z
+     * @param power Explosion power (radius = power * 1.5)
+     */
+    public void explode(float x, float y, float z, float power) {
+        float radius = power * 1.5f;
+        int intRadius = (int) Math.ceil(radius);
+
+        // Destroy blocks
+        for (int bx = (int) x - intRadius; bx <= (int) x + intRadius; bx++) {
+            for (int by = (int) y - intRadius; by <= (int) y + intRadius; by++) {
+                for (int bz = (int) z - intRadius; bz <= (int) z + intRadius; bz++) {
+                    float dx = bx + 0.5f - x;
+                    float dy = by + 0.5f - y;
+                    float dz = bz + 0.5f - z;
+                    float dist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+                    if (dist <= radius) {
+                        BlockType block = getBlock(bx, by, bz);
+                        // Don't destroy bedrock or air
+                        if (block != BlockType.BEDROCK && block != BlockType.AIR) {
+                            // Random chance to drop (30%) - skip liquids
+                            if (random.nextFloat() < 0.3f && block != BlockType.WATER && block != BlockType.LAVA) {
+                                spawnDroppedItem(bx + 0.5f, by + 0.5f, bz + 0.5f, block, 1);
+                            }
+                            setBlock(bx, by, bz, BlockType.AIR);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Damage entities
+        for (Entity entity : entities) {
+            float dx = entity.getX() - x;
+            float dy = entity.getY() - y;
+            float dz = entity.getZ() - z;
+            float dist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+            if (dist <= radius * 2) {
+                float damage = (1.0f - dist / (radius * 2)) * power * 7;
+                if (entity instanceof com.craftzero.entity.LivingEntity living) {
+                    living.damage(damage, null);
+                    // Knockback away from explosion
+                    if (dist > 0.1f) {
+                        float knockback = (1.0f - dist / (radius * 2)) * power * 0.5f;
+                        entity.addMotion(
+                                (dx / dist) * knockback,
+                                0.4f * knockback,
+                                (dz / dist) * knockback);
+                    }
+                }
+            }
+        }
+
+        // Damage player if nearby
+        if (player != null) {
+            float dx = player.getPosition().x - x;
+            float dy = player.getPosition().y - y;
+            float dz = player.getPosition().z - z;
+            float dist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+            if (dist <= radius * 2) {
+                float damage = (1.0f - dist / (radius * 2)) * power * 7;
+                player.getStats().damage(damage);
+                // Knockback
+                if (dist > 0.1f) {
+                    float knockback = (1.0f - dist / (radius * 2)) * power * 0.5f;
+                    player.getVelocity().x += (dx / dist) * knockback;
+                    player.getVelocity().y += 0.4f * knockback;
+                    player.getVelocity().z += (dz / dist) * knockback;
+                }
+            }
+        }
     }
 
     /**

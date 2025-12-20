@@ -45,6 +45,9 @@ public class InventoryRenderer {
 
     private TextRenderer textRenderer;
 
+    // Player model renderer for inventory preview
+    private InventoryPlayerRenderer playerRenderer;
+
     public void setTextRenderer(TextRenderer textRenderer) {
         this.textRenderer = textRenderer;
     }
@@ -146,9 +149,16 @@ public class InventoryRenderer {
         this.itemsTexture = items;
     }
 
+    public void setPlayerRenderer(InventoryPlayerRenderer renderer) {
+        this.playerRenderer = renderer;
+    }
+
     public void updateOrtho(int width, int height) {
         this.windowWidth = width;
         this.windowHeight = height;
+        if (playerRenderer != null) {
+            playerRenderer.updateScreenSize(width, height);
+        }
     }
 
     public void render(InventoryScreen screen) {
@@ -306,6 +316,19 @@ public class InventoryRenderer {
             int slotY = winY + (int) (InventoryScreen.TEX_CRAFT_OUTPUT_Y * scale);
             drawRect(slotX + 1, slotY + 1, InventoryScreen.SLOT_SIZE - 2, InventoryScreen.SLOT_SIZE - 2,
                     HOVER_OVERLAY[0], HOVER_OVERLAY[1], HOVER_OVERLAY[2], HOVER_OVERLAY[3]);
+        }
+
+        // 6.5. Render player model (after all items, on top of background)
+        if (playerRenderer != null) {
+            shader.unbind();
+            playerRenderer.render(screen);
+            // Restore GL state after player model rendering
+            glDisable(GL_DEPTH_TEST);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glDisable(GL_CULL_FACE);
+            shader.bind();
+            shader.setUniform("projection", ortho);
         }
 
         // 7. Draw cursor item (following mouse)

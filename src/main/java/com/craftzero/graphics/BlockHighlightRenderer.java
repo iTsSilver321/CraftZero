@@ -14,7 +14,7 @@ import static org.lwjgl.opengl.GL20.*;
 import static org.lwjgl.opengl.GL30.*;
 
 /**
- * Renders a wireframe box around the targeted block.
+ * Renders a wireframe around the targeted face of a block.
  */
 public class BlockHighlightRenderer {
 
@@ -22,6 +22,11 @@ public class BlockHighlightRenderer {
     private int vao;
     private int vbo;
     private Matrix4f modelMatrix;
+    private FloatBuffer vertexBuffer;
+
+    // Slightly larger than 1x1x1 to avoid z-fighting
+    private static final float S = 1.002f;
+    private static final float O = -0.001f;
 
     public void init() throws Exception {
         // Create simple line shader
@@ -42,48 +47,13 @@ public class BlockHighlightRenderer {
         shader.link();
         shader.createUniform("mvp");
 
-        // Create wireframe cube
-        createWireframeCube();
-
-        modelMatrix = new Matrix4f();
-    }
-
-    private void createWireframeCube() {
-        // Slightly larger than 1x1x1 to avoid z-fighting
-        float s = 1.002f;
-        float o = -0.001f; // Offset
-
-        // 12 edges = 24 vertices
-        float[] vertices = {
-                // Bottom face edges
-                o, o, o, s, o, o,
-                s, o, o, s, o, s,
-                s, o, s, o, o, s,
-                o, o, s, o, o, o,
-
-                // Top face edges
-                o, s, o, s, s, o,
-                s, s, o, s, s, s,
-                s, s, s, o, s, s,
-                o, s, s, o, s, o,
-
-                // Vertical edges
-                o, o, o, o, s, o,
-                s, o, o, s, s, o,
-                s, o, s, s, s, s,
-                o, o, s, o, s, s
-        };
-
+        // Create dynamic VBO for face edges (4 edges = 8 vertices = 24 floats)
         vao = glGenVertexArrays();
         vbo = glGenBuffers();
 
         glBindVertexArray(vao);
-
-        FloatBuffer buffer = MemoryUtil.memAllocFloat(vertices.length);
-        buffer.put(vertices).flip();
-
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, buffer, GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, 24 * Float.BYTES, GL_DYNAMIC_DRAW);
 
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 3, GL_FLOAT, false, 0, 0);
@@ -91,15 +61,197 @@ public class BlockHighlightRenderer {
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
 
-        MemoryUtil.memFree(buffer);
+        vertexBuffer = MemoryUtil.memAllocFloat(24);
+        modelMatrix = new Matrix4f();
+    }
+
+    /**
+     * Get the 4 edge vertices for a specific face.
+     * Each face has 4 edges, each edge has 2 vertices (8 vertices total, 24
+     * floats).
+     */
+    private void getFaceVertices(int face, float[] vertices) {
+        switch (face) {
+            case 0: // Top (+Y)
+                // Edge 1
+                vertices[0] = O;
+                vertices[1] = S;
+                vertices[2] = O;
+                vertices[3] = S;
+                vertices[4] = S;
+                vertices[5] = O;
+                // Edge 2
+                vertices[6] = S;
+                vertices[7] = S;
+                vertices[8] = O;
+                vertices[9] = S;
+                vertices[10] = S;
+                vertices[11] = S;
+                // Edge 3
+                vertices[12] = S;
+                vertices[13] = S;
+                vertices[14] = S;
+                vertices[15] = O;
+                vertices[16] = S;
+                vertices[17] = S;
+                // Edge 4
+                vertices[18] = O;
+                vertices[19] = S;
+                vertices[20] = S;
+                vertices[21] = O;
+                vertices[22] = S;
+                vertices[23] = O;
+                break;
+            case 1: // Bottom (-Y)
+                vertices[0] = O;
+                vertices[1] = O;
+                vertices[2] = O;
+                vertices[3] = S;
+                vertices[4] = O;
+                vertices[5] = O;
+                vertices[6] = S;
+                vertices[7] = O;
+                vertices[8] = O;
+                vertices[9] = S;
+                vertices[10] = O;
+                vertices[11] = S;
+                vertices[12] = S;
+                vertices[13] = O;
+                vertices[14] = S;
+                vertices[15] = O;
+                vertices[16] = O;
+                vertices[17] = S;
+                vertices[18] = O;
+                vertices[19] = O;
+                vertices[20] = S;
+                vertices[21] = O;
+                vertices[22] = O;
+                vertices[23] = O;
+                break;
+            case 2: // North (-Z)
+                vertices[0] = O;
+                vertices[1] = O;
+                vertices[2] = O;
+                vertices[3] = S;
+                vertices[4] = O;
+                vertices[5] = O;
+                vertices[6] = S;
+                vertices[7] = O;
+                vertices[8] = O;
+                vertices[9] = S;
+                vertices[10] = S;
+                vertices[11] = O;
+                vertices[12] = S;
+                vertices[13] = S;
+                vertices[14] = O;
+                vertices[15] = O;
+                vertices[16] = S;
+                vertices[17] = O;
+                vertices[18] = O;
+                vertices[19] = S;
+                vertices[20] = O;
+                vertices[21] = O;
+                vertices[22] = O;
+                vertices[23] = O;
+                break;
+            case 3: // South (+Z)
+                vertices[0] = O;
+                vertices[1] = O;
+                vertices[2] = S;
+                vertices[3] = S;
+                vertices[4] = O;
+                vertices[5] = S;
+                vertices[6] = S;
+                vertices[7] = O;
+                vertices[8] = S;
+                vertices[9] = S;
+                vertices[10] = S;
+                vertices[11] = S;
+                vertices[12] = S;
+                vertices[13] = S;
+                vertices[14] = S;
+                vertices[15] = O;
+                vertices[16] = S;
+                vertices[17] = S;
+                vertices[18] = O;
+                vertices[19] = S;
+                vertices[20] = S;
+                vertices[21] = O;
+                vertices[22] = O;
+                vertices[23] = S;
+                break;
+            case 4: // East (+X)
+                vertices[0] = S;
+                vertices[1] = O;
+                vertices[2] = O;
+                vertices[3] = S;
+                vertices[4] = O;
+                vertices[5] = S;
+                vertices[6] = S;
+                vertices[7] = O;
+                vertices[8] = S;
+                vertices[9] = S;
+                vertices[10] = S;
+                vertices[11] = S;
+                vertices[12] = S;
+                vertices[13] = S;
+                vertices[14] = S;
+                vertices[15] = S;
+                vertices[16] = S;
+                vertices[17] = O;
+                vertices[18] = S;
+                vertices[19] = S;
+                vertices[20] = O;
+                vertices[21] = S;
+                vertices[22] = O;
+                vertices[23] = O;
+                break;
+            case 5: // West (-X)
+                vertices[0] = O;
+                vertices[1] = O;
+                vertices[2] = O;
+                vertices[3] = O;
+                vertices[4] = O;
+                vertices[5] = S;
+                vertices[6] = O;
+                vertices[7] = O;
+                vertices[8] = S;
+                vertices[9] = O;
+                vertices[10] = S;
+                vertices[11] = S;
+                vertices[12] = O;
+                vertices[13] = S;
+                vertices[14] = S;
+                vertices[15] = O;
+                vertices[16] = S;
+                vertices[17] = O;
+                vertices[18] = O;
+                vertices[19] = S;
+                vertices[20] = O;
+                vertices[21] = O;
+                vertices[22] = O;
+                vertices[23] = O;
+                break;
+        }
     }
 
     public void render(Camera camera, Raycast.RaycastResult target) {
-        if (target == null || !target.hit) {
+        if (target == null || !target.hit || target.face < 0) {
             return;
         }
 
         Vector3i pos = target.blockPos;
+
+        // Get vertices for the targeted face
+        float[] vertices = new float[24];
+        getFaceVertices(target.face, vertices);
+
+        // Update VBO with face vertices
+        vertexBuffer.clear();
+        vertexBuffer.put(vertices).flip();
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, vertexBuffer);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
 
         // Enable blending for semi-transparent lines
         glEnable(GL_BLEND);
@@ -107,9 +259,6 @@ public class BlockHighlightRenderer {
 
         // Thicker lines
         glLineWidth(2.0f);
-
-        // Disable depth test for always-visible lines (optional)
-        // Or keep it enabled for proper occlusion
 
         shader.bind();
 
@@ -122,7 +271,7 @@ public class BlockHighlightRenderer {
         shader.setUniform("mvp", mvp);
 
         glBindVertexArray(vao);
-        glDrawArrays(GL_LINES, 0, 24);
+        glDrawArrays(GL_LINES, 0, 8); // 4 edges = 8 vertices
         glBindVertexArray(0);
 
         shader.unbind();
@@ -134,6 +283,9 @@ public class BlockHighlightRenderer {
     public void cleanup() {
         if (shader != null) {
             shader.cleanup();
+        }
+        if (vertexBuffer != null) {
+            MemoryUtil.memFree(vertexBuffer);
         }
         glDeleteBuffers(vbo);
         glDeleteVertexArrays(vao);

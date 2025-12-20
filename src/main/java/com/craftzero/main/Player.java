@@ -49,6 +49,7 @@ public class Player {
     private static final float PLACE_COOLDOWN = 0.25f;
 
     private Vector3f position;
+    private Vector3f prevPosition; // Previous position for render interpolation
     private Vector3f velocity;
     private Camera camera;
     private AABB boundingBox;
@@ -92,8 +93,32 @@ public class Player {
     private boolean headInWater;
     private float surfaceBobbingTimer; // Timer to disable swimming at surface
 
+    // Third-person camera support
+    private int cameraMode = 0; // 0=First person, 1=Third person back, 2=Third person front
+    private long lastCameraToggleTime = 0;
+    private float distanceWalked = 0.0f; // For walk animation
+    private float prevDistanceWalked = 0.0f; // For animation interpolation
+    private float bodyYaw = 0.0f; // Player body rotation
+    private float prevBodyYaw = 0.0f; // For rotation interpolation
+    // Orbit angles for third-person camera (stored separately so setLookTarget can
+    // override view direction)
+    private float orbitYaw = 0.0f;
+    private float orbitPitch = 0.0f;
+
+    // Animation State
+    private boolean isSwinging;
+    private boolean isMiningSwing;
+    private float swingProgress;
+    private float prevSwingProgress;
+    private float swingCooldown; // 200ms cooldown between swing animations
+    private float renderYawOffset; // The "Turret" body yaw
+    private float prevRenderYawOffset;
+    private float limbSwingAmount;
+    private float prevLimbSwingAmount;
+
     public Player(float x, float y, float z) {
         this.position = new Vector3f(x, y, z);
+        this.prevPosition = new Vector3f(x, y, z);
         this.velocity = new Vector3f();
         this.camera = new Camera(new Vector3f(x, y + EYE_HEIGHT, z));
         this.boundingBox = createBoundingBox();
@@ -135,7 +160,27 @@ public class Player {
         if (Input.isCursorLocked()) {
             float deltaX = (float) Input.getDeltaX() * MOUSE_SENSITIVITY;
             float deltaY = (float) Input.getDeltaY() * MOUSE_SENSITIVITY;
-            camera.rotate(deltaX, deltaY);
+
+            if (cameraMode == 0) {
+                camera.rotate(deltaX, deltaY);
+            } else {
+                // In 3rd person, update orbit angles directly
+                // (Decouples input from camera visual state)
+                orbitYaw += deltaX;
+                orbitPitch += deltaY;
+
+                // Clamp pitch
+                if (orbitPitch > 90.0f)
+                    orbitPitch = 90.0f;
+                if (orbitPitch < -90.0f)
+                    orbitPitch = -90.0f;
+
+                // Keep yaw in reasonable range (optional but good)
+                if (orbitYaw > 360.0f)
+                    orbitYaw -= 360.0f;
+                if (orbitYaw < 0.0f)
+                    orbitYaw += 360.0f;
+            }
         }
 
         // Movement input
@@ -200,6 +245,9 @@ public class Player {
             }
         }
 
+        // Camera mode toggle (F5 key) - cycles: First Person -> Third Person Back ->
+        // Third Person Front
+
         // Calculate movement speed based on state
         float speed;
         if (sneaking) {
@@ -211,7 +259,10 @@ public class Player {
         }
 
         // Get camera direction for movement
-        float yawRad = (float) Math.toRadians(camera.getYaw());
+        // In Mode 2 (Front View), forward means "Away from Camera" (North if Camera
+        // looks South)
+        // Camera Yaw + 180 gives the correct "Forward" vector for the player
+        float yawRad = (float) Math.toRadians(camera.getYaw() + (cameraMode == 2 ? 180 : 0));
         float sinYaw = (float) Math.sin(yawRad);
         float cosYaw = (float) Math.cos(yawRad);
 
@@ -296,12 +347,51 @@ public class Player {
      */
 
     public void handleBlockInteraction(World world, float deltaTime) {
-        // Update target block
-        targetBlock = Raycast.cast(world, camera.getPosition(), camera.getForward(), REACH_DISTANCE);
+        // Always use eye position for raycast origin - reach should be from the
+        // player's body, not the camera
+        float currentEyeHeight = sneaking ? EYE_HEIGHT - 0.125f : EYE_HEIGHT;
+        Vector3f rayOrigin = new Vector3f(position.x, position.y + currentEyeHeight, position.z);
 
-        // Handle block breaking (left click held down)
+        // Mode 0: from camera (which follows mouse)
+        // Mode 1 & 2: from orbit angles (which follow mouse)
+        float rayYaw = (cameraMode == 0) ? camera.getYaw() : orbitYaw;
+        float rayPitch = (cameraMode == 0) ? camera.getPitch() : orbitPitch;
+
+        // In front-facing mode, the vertical orbit is inverted relative to the
+        // character's gaze.
+        // If the camera is orbitally high (positive pitch), the character must look UP
+        // (negative pitch) to face towards the camera.
+        if (cameraMode == 2) {
+            rayPitch = -rayPitch;
+        }
+
+        float yawRad = (float) Math.toRadians(rayYaw);
+        float pitchRad = (float) Math.toRadians(rayPitch);
+
+        // Calculate direction vector manually to ensure it's independent of visual
+        // camera overrides
+        Vector3f rayDirection = new Vector3f(
+                (float) (Math.sin(yawRad) * Math.cos(pitchRad)),
+                (float) (-Math.sin(pitchRad)),
+                (float) (-Math.cos(yawRad) * Math.cos(pitchRad)));
+        rayDirection.normalize();
+
+        // Update target block using REACH_DISTANCE from eyes
+        targetBlock = Raycast.cast(world, rayOrigin, rayDirection, REACH_DISTANCE);
+
+        // Handle block interaction (left click)
+        if (Input.isButtonPressed(GLFW_MOUSE_BUTTON_LEFT)) {
+            // Initial click always triggers a swing
+            swingArm();
+        }
+
         if (Input.isButtonDown(GLFW_MOUSE_BUTTON_LEFT)) {
-            if (targetBlock.hit) {
+            if (targetBlock.hit && breakCooldown <= 0) {
+                // We are actively mining - keep the arm swinging
+                if (!isSwinging) {
+                    swingArm();
+                }
+
                 Vector3i currentTarget = targetBlock.blockPos;
                 BlockType targetType = world.getBlock(currentTarget.x, currentTarget.y, currentTarget.z);
 
@@ -455,6 +545,21 @@ public class Player {
      * Update physics.
      */
     public void update(float deltaTime, World world) {
+        // FIRST: Store previous values for render interpolation
+        prevPosition.set(position);
+        prevDistanceWalked = distanceWalked;
+        prevRenderYawOffset = renderYawOffset;
+        prevSwingProgress = swingProgress;
+
+        updateSwing(deltaTime);
+        updateTurretRotation();
+
+        // Update physics state (falling, etc.)
+        boolean wasOnGround = onGround;
+
+        // Update body yaw to follow camera (for interpolation)
+        bodyYaw = camera.getYaw();
+
         // Track falling for fall damage
         boolean isFalling = velocity.y < -0.1f && !onGround && !flying;
 
@@ -560,7 +665,7 @@ public class Player {
         }
 
         // Store pre-collision state for fall damage check
-        boolean wasOnGround = onGround;
+        // boolean wasOnGround = onGround; // Moved to top of method
 
         // Move with collision detection
         moveWithCollision(deltaTime, world);
@@ -581,6 +686,18 @@ public class Player {
         boolean isMoving = Math.abs(velocity.x) > 0.01f || Math.abs(velocity.z) > 0.01f;
         stats.update(deltaTime, sprinting, isMoving);
 
+        // Track distance walked for animation
+        float dx = position.x - prevPosition.x;
+        float dz = position.z - prevPosition.z;
+        distanceWalked += (float) Math.sqrt(dx * dx + dz * dz);
+
+        // Smoothed limb swing amount
+        prevLimbSwingAmount = limbSwingAmount;
+        float horizontalSpeedForLimb = (float) Math.sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
+        float targetAmount = horizontalSpeedForLimb < 0.01f ? 0 : Math.min(horizontalSpeedForLimb * 4.0f, 1.0f);
+        // Linear interpolation for smoothing (about 0.4 speed)
+        limbSwingAmount += (targetAmount - limbSwingAmount) * 0.4f;
+
         // Push mobs when player collides with them (Minecraft-style)
         pushNearbyMobs(world, deltaTime);
 
@@ -591,8 +708,135 @@ public class Player {
             addToInventory(item.getBlockType(), item.getCount());
         }
 
-        // Update camera position
-        camera.setPosition(position.x, position.y + EYE_HEIGHT, position.z);
+        // Update camera position based on camera mode
+        updateCameraPosition();
+    }
+
+    /**
+     * Update camera position based on camera mode.
+     * Mode 0: First person (camera at eye level)
+     * Mode 1: Third person back (camera behind player)
+     * Mode 2: Third person front (camera in front of player, looking at player)
+     * 
+     * In modes 1 and 2, orbit angles control position while camera yaw/pitch is
+     * synced in mode 0-1 but overridden in mode 2 to look at player.
+     */
+    private void updateCameraPosition() {
+        // Reduce eye height when sneaking
+        float currentEyeHeight = sneaking ? EYE_HEIGHT - 0.125f : EYE_HEIGHT;
+        float eyeY = position.y + currentEyeHeight;
+
+        if (cameraMode == 0) {
+            // First person - camera at eye position
+            camera.setPosition(position.x, eyeY, position.z);
+            // Sync orbit angles from camera for when switching to 3rd person
+            orbitYaw = camera.getYaw();
+            orbitPitch = camera.getPitch();
+        } else {
+            // In 3rd person, sync orbit from camera (mouse changes camera yaw/pitch)
+            // In 3rd person, orbit angles are master (updated by Input)
+            // NO SYNC from camera here - this breaks the feedback loop!
+            // orbitYaw = camera.getYaw();
+            // orbitPitch = camera.getPitch();
+
+            // Third person - camera orbits around player using orbit angles
+            float distance = 6.0f; // Distance from player
+            float yawRad = (float) Math.toRadians(orbitYaw);
+            float pitchRad = (float) Math.toRadians(orbitPitch);
+
+            // Calculate camera offset based on yaw and pitch
+            float horizontal = (float) Math.cos(pitchRad) * distance;
+            float vertical = (float) Math.sin(pitchRad) * distance;
+
+            float offsetX = (float) Math.sin(yawRad) * horizontal;
+            float offsetZ = (float) -Math.cos(yawRad) * horizontal;
+            float offsetY = vertical;
+
+            float camX, camY, camZ;
+
+            if (cameraMode == 1) {
+                // Third person back - camera behind player, keeps camera yaw/pitch
+                camX = position.x - offsetX;
+                camY = eyeY + offsetY;
+                camZ = position.z - offsetZ;
+                camera.setPosition(camX, camY, camZ);
+                camera.setYaw(orbitYaw);
+                camera.setPitch(orbitPitch);
+            } else {
+                // Third person front - camera in front of player, looks at player
+                camX = position.x + offsetX;
+                camY = eyeY + offsetY;
+                camZ = position.z + offsetZ;
+                camera.setPosition(camX, camY, camZ);
+                // Make camera look back at the player (this changes camera yaw/pitch)
+                camera.setLookTarget(position.x, eyeY, position.z);
+            }
+        }
+    }
+
+    /**
+     * Set camera position based on interpolated player position for smooth 60fps
+     * rendering.
+     * This eliminates 3rd person camera jitter caused by physics running at 20fps.
+     * NOTE: This overwrites the camera position set in update(), which is fine as
+     * it's
+     * called every frame before render.
+     */
+    public void setInterpolatedCameraPosition(float partialTick) {
+        // Interpolate player position
+        float interpX = prevPosition.x + (position.x - prevPosition.x) * partialTick;
+        float interpY = prevPosition.y + (position.y - prevPosition.y) * partialTick;
+        float interpZ = prevPosition.z + (position.z - prevPosition.z) * partialTick;
+
+        // Reduce eye height when sneaking
+        float currentEyeHeight = sneaking ? EYE_HEIGHT - 0.125f : EYE_HEIGHT;
+        float eyeY = interpY + currentEyeHeight;
+
+        if (cameraMode == 0) {
+            // First person - camera at interpolated eye position
+            camera.setPosition(interpX, eyeY, interpZ);
+        } else {
+            // Third person logic using interpolated origin
+
+            // Use current orbit angles
+            // For mode 1, camera.getYaw() is valid and smooth (mouse input)
+            // For mode 2, camera.getYaw() is locked to player, so use orbitYaw
+            // Use current orbit angles (Master)
+            // Decoupled input means orbitYaw is always up to date
+            float yawToUse = orbitYaw;
+            float pitchToUse = orbitPitch;
+
+            float distance = 6.0f;
+            float yawRad = (float) Math.toRadians(yawToUse);
+            float pitchRad = (float) Math.toRadians(pitchToUse);
+
+            float horizontal = (float) Math.cos(pitchRad) * distance;
+            float vertical = (float) Math.sin(pitchRad) * distance;
+
+            float offsetX = (float) Math.sin(yawRad) * horizontal;
+            float offsetZ = (float) -Math.cos(yawRad) * horizontal;
+            float offsetY = vertical;
+
+            float camX, camY, camZ;
+
+            if (cameraMode == 1) {
+                // Third person back
+                camX = interpX - offsetX;
+                camY = eyeY + offsetY;
+                camZ = interpZ - offsetZ;
+                camera.setPosition(camX, camY, camZ);
+                camera.setYaw(yawToUse);
+                camera.setPitch(pitchToUse);
+            } else {
+                // Third person front
+                camX = interpX + offsetX;
+                camY = eyeY + offsetY;
+                camZ = interpZ + offsetZ;
+                camera.setPosition(camX, camY, camZ);
+                // Camera looks at interpolated player position
+                camera.setLookTarget(interpX, eyeY, interpZ);
+            }
+        }
     }
 
     /**
@@ -803,6 +1047,38 @@ public class Player {
 
     public Vector3f getPosition() {
         return position;
+    }
+
+    public Vector3f getPrevPosition() {
+        return prevPosition;
+    }
+
+    public float getDistanceWalked() {
+        return distanceWalked;
+    }
+
+    public float getPrevDistanceWalked() {
+        return prevDistanceWalked;
+    }
+
+    public float getLimbSwingAmount(float partialTick) {
+        return prevLimbSwingAmount + (limbSwingAmount - prevLimbSwingAmount) * partialTick;
+    }
+
+    public float getBodyYaw() {
+        return bodyYaw;
+    }
+
+    public float getPrevBodyYaw() {
+        return prevBodyYaw;
+    }
+
+    public int getCameraMode() {
+        return cameraMode;
+    }
+
+    public void setCameraMode(int mode) {
+        this.cameraMode = mode % 3; // Cycle through 0, 1, 2
     }
 
     public void setPosition(float x, float y, float z) {
@@ -1044,5 +1320,139 @@ public class Player {
      */
     public boolean wantsCraftingTable() {
         return wantsCraftingTable;
+    }
+
+    public void cycleCameraMode() {
+        long now = System.currentTimeMillis();
+        // Debounce toggle (200ms) to prevent rapid glitching
+        if (now - lastCameraToggleTime > 200) {
+            int oldMode = cameraMode;
+            cameraMode = (cameraMode + 1) % 3;
+            lastCameraToggleTime = now;
+            System.out.println("Camera Mode toggled to: " + cameraMode);
+
+            // Sync Orientation to prevents flipping
+            if (oldMode == 0) {
+                // FPS -> 3rd Person: Init orbit from current view direction
+                orbitYaw = camera.getYaw();
+                orbitPitch = camera.getPitch();
+            } else if (cameraMode == 0) {
+                // 3rd Person -> FPS: Align camera to orbit direction
+                camera.setYaw(orbitYaw);
+                camera.setPitch(orbitPitch);
+            }
+        }
+    }
+
+    private void updateSwing(float deltaTime) {
+        // Update swing cooldown
+        if (swingCooldown > 0) {
+            swingCooldown -= deltaTime;
+        }
+
+        if (isSwinging) {
+            // Air swing speed: Slow for visibility. Mining: 6.4f as before.
+            float swingSpeed = isMiningSwing ? 6.4f : 6.0f;
+
+            swingProgress += deltaTime * swingSpeed;
+            if (swingProgress >= 1.0f) {
+                swingProgress = 0.0f;
+                isSwinging = false;
+                isMiningSwing = false;
+            }
+        } else {
+            swingProgress = 0.0f;
+            isMiningSwing = false;
+        }
+    }
+
+    private void updateTurretRotation() {
+        // Body rotation is based on MOVEMENT direction when strafing/diagonal
+        // NOT triggered by mouse movement or forward/backward movement
+
+        float velX = velocity.x;
+        float velZ = velocity.z;
+        float speed = velX * velX + velZ * velZ;
+
+        if (speed > 0.001f) {
+            // Calculate movement yaw
+            // atan2(velX, -velZ) correctly maps move coords to camera yaw (0 = North/-Z)
+            float moveYaw = (float) Math.toDegrees(Math.atan2(velX, -velZ));
+
+            // Normalize to -180 to 180
+            while (moveYaw >= 180)
+                moveYaw -= 360;
+            while (moveYaw < -180)
+                moveYaw += 360;
+
+            // Check angle difference between movement and look
+            float lookYaw = camera.getYaw();
+            float diffFromLook = moveYaw - lookYaw;
+            while (diffFromLook >= 180)
+                diffFromLook -= 360;
+            while (diffFromLook < -180)
+                diffFromLook += 360;
+
+            // Trigger animation instantly when clearly strafing (>30 degrees from look)
+            // Forward (0°±30) and backward (180°±30) are excluded
+            if (Math.abs(diffFromLook) > 30 && Math.abs(diffFromLook) < 150) {
+                // Strafing or diagonal - body slowly rotates toward movement direction
+                float bodyDiff = moveYaw - renderYawOffset;
+                while (bodyDiff >= 180)
+                    bodyDiff -= 360;
+                while (bodyDiff < -180)
+                    bodyDiff += 360;
+                renderYawOffset += bodyDiff * 0.1f;
+            } else {
+                // Forward/backward - body MUST face look direction (reset strafe pose)
+                float bodyDiff = lookYaw - renderYawOffset;
+                while (bodyDiff >= 180)
+                    bodyDiff -= 360;
+                while (bodyDiff < -180)
+                    bodyDiff += 360;
+                renderYawOffset += bodyDiff * 0.1f;
+            }
+        } else {
+            // Not moving - body slowly returns to face look direction
+            float bodyDiff = camera.getYaw() - renderYawOffset;
+            while (bodyDiff >= 180)
+                bodyDiff -= 360;
+            while (bodyDiff < -180)
+                bodyDiff += 360;
+            renderYawOffset += bodyDiff * 0.05f;
+        }
+
+        // Clamp head relative to body - head can turn 30 degrees before body follows
+        float headDiff = camera.getYaw() - renderYawOffset;
+        while (headDiff >= 180)
+            headDiff -= 360;
+        while (headDiff < -180)
+            headDiff += 360;
+
+        if (headDiff > 30)
+            renderYawOffset = camera.getYaw() - 30;
+        if (headDiff < -30)
+            renderYawOffset = camera.getYaw() + 30;
+    }
+
+    public void swingArm() {
+        // 200ms animation cooldown - prevents jitter from rapid clicks
+        if (swingCooldown > 0) {
+            return; // Still in cooldown, ignore this swing request
+        }
+
+        isSwinging = true;
+        swingProgress = 0;
+        prevSwingProgress = 0;
+        swingCooldown = 0.2f; // 200ms cooldown
+        isMiningSwing = targetBlock != null && targetBlock.hit;
+    }
+
+    public float getSwingProgress(float partialTick) {
+        return prevSwingProgress + (swingProgress - prevSwingProgress) * partialTick;
+    }
+
+    public float getRenderYawOffset(float partialTick) {
+        return prevRenderYawOffset + (renderYawOffset - prevRenderYawOffset) * partialTick;
     }
 }

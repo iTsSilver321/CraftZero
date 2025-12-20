@@ -16,30 +16,30 @@ public enum BlockType {
     // Texture indices match Minecraft's Terrain.png (16x16 grid, index = row*16 +
     // col)
     AIR(0, false, true, 0f, -1, -1, -1, ToolType.Category.NONE, 0),
-    GRASS(1, true, false, 0.9f, 0, 2, 3, ToolType.Category.SHOVEL, 0), // Top=grass, Bottom=dirt, Side=grass_side
-    DIRT(2, true, false, 0.75f, 2, 2, 2, ToolType.Category.SHOVEL, 0), // All dirt
-    STONE(3, true, false, 3.0f, 1, 1, 1, ToolType.Category.PICKAXE, 1), // All stone
-    COBBLESTONE(4, true, false, 3.5f, 16, 16, 16, ToolType.Category.PICKAXE, 1), // Row 1, col 0
+    GRASS(1, true, false, 1.5f, 0, 2, 3, ToolType.Category.SHOVEL, 0), // Top=grass, Bottom=dirt, Side=grass_side
+    DIRT(2, true, false, 1.3f, 2, 2, 2, ToolType.Category.SHOVEL, 0), // All dirt
+    STONE(3, true, false, 5.0f, 1, 1, 1, ToolType.Category.PICKAXE, 1), // All stone
+    COBBLESTONE(4, true, false, 6.0f, 16, 16, 16, ToolType.Category.PICKAXE, 1), // Row 1, col 0
     BEDROCK(5, true, false, -1f, 17, 17, 17, ToolType.Category.NONE, 99), // Row 1, col 1
-    SAND(6, true, false, 0.5f, 18, 18, 18, ToolType.Category.SHOVEL, 0), // Row 1, col 2
-    GRAVEL(7, true, false, 0.6f, 19, 19, 19, ToolType.Category.SHOVEL, 0), // Row 1, col 3
-    OAK_LOG(8, true, false, 2.0f, 21, 21, 20, ToolType.Category.AXE, 0), // Top/Bottom=log_top, Side=log_side
-    OAK_PLANKS(9, true, false, 2.0f, 4, 4, 4, ToolType.Category.AXE, 0), // Row 0, col 4
-    LEAVES(10, true, false, 0.2f, 52, 52, 52, ToolType.Category.NONE, 0), // Row 3, col 4 (fancy leaves)
-    GLASS(11, true, true, 0.3f, 49, 49, 49, ToolType.Category.NONE, 0), // Row 3, col 1
+    SAND(6, true, false, 0.8f, 18, 18, 18, ToolType.Category.SHOVEL, 0), // Row 1, col 2
+    GRAVEL(7, true, false, 1.0f, 19, 19, 19, ToolType.Category.SHOVEL, 0), // Row 1, col 3
+    OAK_LOG(8, true, false, 3.4f, 21, 21, 20, ToolType.Category.AXE, 0), // Top/Bottom=log_top, Side=log_side
+    OAK_PLANKS(9, true, false, 3.4f, 4, 4, 4, ToolType.Category.AXE, 0), // Row 0, col 4
+    LEAVES(10, true, false, 0.3f, 53, 53, 53, ToolType.Category.NONE, 0), // Row 3, col 5 (opaque leaves)
+    GLASS(11, true, true, 0.5f, 49, 49, 49, ToolType.Category.NONE, 0), // Row 3, col 1
     WATER(12, false, true, 0f, 205, 205, 205, ToolType.Category.NONE, 0), // Row 12, col 13 (still water)
     LAVA(30, false, true, 0f, 237, 237, 237, ToolType.Category.NONE, 0), // Row 14, col 13 (lava placeholder)
-    BRICK(13, true, false, 2.0f, 7, 7, 7, ToolType.Category.PICKAXE, 1), // Row 0, col 7
-    COAL_ORE(14, true, false, 4.5f, 34, 34, 34, ToolType.Category.PICKAXE, 1), // Row 2, col 2
-    IRON_ORE(15, true, false, 5.0f, 33, 33, 33, ToolType.Category.PICKAXE, 2), // Row 2, col 1
-    GOLD_ORE(16, true, false, 5.0f, 32, 32, 32, ToolType.Category.PICKAXE, 3), // Row 2, col 0
-    DIAMOND_ORE(17, true, false, 6.0f, 50, 50, 50, ToolType.Category.PICKAXE, 3), // Row 3, col 2
-    REDSTONE_ORE(28, true, false, 4.5f, 51, 51, 51, ToolType.Category.PICKAXE, 2), // Row 3, col 3
-    LAPIS_ORE(29, true, false, 4.5f, 160, 160, 160, ToolType.Category.PICKAXE, 2), // Row 10, col 0
-    SNOW(18, true, false, 0.1f, 66, 2, 68, ToolType.Category.SHOVEL, 0), // Top=snow, Bottom=dirt, Side=snow_side
-    ICE(19, true, true, 0.5f, 67, 67, 67, ToolType.Category.PICKAXE, 0), // Row 4, col 3
+    BRICK(13, true, false, 3.4f, 7, 7, 7, ToolType.Category.PICKAXE, 1), // Row 0, col 7
+    COAL_ORE(14, true, false, 7.6f, 34, 34, 34, ToolType.Category.PICKAXE, 1), // Row 2, col 2
+    IRON_ORE(15, true, false, 8.4f, 33, 33, 33, ToolType.Category.PICKAXE, 2), // Row 2, col 1
+    GOLD_ORE(16, true, false, 8.4f, 32, 32, 32, ToolType.Category.PICKAXE, 3), // Row 2, col 0
+    DIAMOND_ORE(17, true, false, 10.0f, 50, 50, 50, ToolType.Category.PICKAXE, 3), // Row 3, col 2
+    REDSTONE_ORE(28, true, false, 7.6f, 51, 51, 51, ToolType.Category.PICKAXE, 2), // Row 3, col 3
+    LAPIS_ORE(29, true, false, 7.6f, 160, 160, 160, ToolType.Category.PICKAXE, 2), // Row 10, col 0
+    SNOW(18, true, false, 0.15f, 66, 2, 68, ToolType.Category.SHOVEL, 0), // Top=snow, Bottom=dirt, Side=snow_side
+    ICE(19, true, true, 0.8f, 67, 67, 67, ToolType.Category.PICKAXE, 0), // Row 4, col 3
     STICK(20, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0), // Item - uses items.png
-    CRAFTING_TABLE(21, true, false, 2.5f, 43, 4, 59, ToolType.Category.AXE, 0), // Top=crafting, Bottom=planks,
+    CRAFTING_TABLE(21, true, false, 4.2f, 43, 4, 59, ToolType.Category.AXE, 0), // Top=crafting, Bottom=planks,
                                                                                 // Side=crafting_side
 
     // Tools - all are items (not placeable) - will use items.png separately

@@ -7,12 +7,12 @@ import com.craftzero.graphics.BlockBreakingRenderer;
 import com.craftzero.graphics.BlockHighlightRenderer;
 import com.craftzero.graphics.DroppedItemRenderer;
 import com.craftzero.graphics.HudRenderer;
+import com.craftzero.graphics.InventoryPlayerRenderer;
 import com.craftzero.graphics.InventoryRenderer;
 import com.craftzero.graphics.MobRenderer;
 import com.craftzero.graphics.Renderer;
 import com.craftzero.graphics.SurvivalHudRenderer;
 import com.craftzero.graphics.TextRenderer;
-import com.craftzero.inventory.ItemStack;
 import com.craftzero.ui.CraftingTableScreen;
 import com.craftzero.ui.InventoryScreen;
 import com.craftzero.graphics.SkyRenderer;
@@ -46,8 +46,10 @@ public class Main implements Runnable {
     private BlockBreakingRenderer blockBreakingRenderer;
     private InventoryScreen inventoryScreen;
     private InventoryRenderer inventoryRenderer;
+    private InventoryPlayerRenderer inventoryPlayerRenderer;
     private DroppedItemRenderer droppedItemRenderer;
     private MobRenderer mobRenderer;
+    private com.craftzero.graphics.PlayerRenderer playerRenderer;
     private CraftingTableScreen craftingTableScreen;
     private World world;
     private MobSpawner mobSpawner;
@@ -139,6 +141,13 @@ public class Main implements Runnable {
         inventoryRenderer.setItemsTexture(
                 com.craftzero.graphics.GuiTexture.getItemsTexture());
 
+        // Initialize inventory player model renderer (for player preview with cursor
+        // tracking)
+        inventoryPlayerRenderer = new InventoryPlayerRenderer();
+        inventoryPlayerRenderer.init();
+        inventoryPlayerRenderer.updateScreenSize(window.getWidth(), window.getHeight());
+        inventoryRenderer.setPlayerRenderer(inventoryPlayerRenderer);
+
         // Create player at spawn point (closer to typical terrain height)
         // Player has 5 seconds of spawn invincibility to handle any remaining fall
         player = new Player(0, 80, 0);
@@ -153,6 +162,10 @@ public class Main implements Runnable {
         // Initialize mob renderer
         mobRenderer = new MobRenderer(renderer);
         mobRenderer.init();
+
+        // Initialize player renderer (for third-person view)
+        playerRenderer = new com.craftzero.graphics.PlayerRenderer(renderer);
+        playerRenderer.init();
 
         // Create inventory screen (connects to player's inventory)
         inventoryScreen = new InventoryScreen(player.getInventory());
@@ -239,6 +252,11 @@ public class Main implements Runnable {
     }
 
     private void handleInput() {
+        // Toggle camera mode with F5
+        if (Input.isKeyPressed(GLFW_KEY_F5)) {
+            player.cycleCameraMode();
+        }
+
         // Toggle inventory with E (only when crafting table not open)
         if (Input.isKeyPressed(GLFW_KEY_E) && !craftingTableScreen.isOpen()) {
             inventoryScreen.toggle(window.getWidth(), window.getHeight());
@@ -304,6 +322,9 @@ public class Main implements Runnable {
         if (!paused && !inventoryScreen.isOpen() && !craftingTableScreen.isOpen()) {
             player.handleInput(timer.getDeltaTime());
 
+            // Handle block interaction
+            player.handleBlockInteraction(world, timer.getDeltaTime());
+
             // Check if player wants to open crafting table
             if (player.wantsCraftingTable()) {
                 craftingTableScreen.open(window.getWidth(), window.getHeight());
@@ -354,9 +375,6 @@ public class Main implements Runnable {
             // Default Sky Blue
             renderer.setClearColor(0.529f, 0.808f, 0.922f, 1.0f);
         }
-
-        // Handle block interaction
-        player.handleBlockInteraction(world, deltaTime);
 
         // Handle Q key item drop (only when inventory closed)
         if (!inventoryScreen.isOpen() && player.wantsToDropItem()) {
@@ -413,6 +431,12 @@ public class Main implements Runnable {
         // Clear the framebuffer (uses the color set above)
         renderer.clear();
 
+        // Calculate partial tick for smooth interpolation
+        float partialTick = timer.getAlpha(FIXED_DELTA);
+
+        // Update camera position to interpolated location (fixes 3rd person jitter)
+        player.setInterpolatedCameraPosition(partialTick);
+
         // Render sky (before world, behind everything)
         skyRenderer.render(renderer, dayCycleManager, player.getCamera());
 
@@ -427,9 +451,11 @@ public class Main implements Runnable {
                 com.craftzero.graphics.GuiTexture.getItemsTexture(), dayCycleManager, world);
 
         // Render mobs
-        float partialTick = timer.getAlpha(FIXED_DELTA);
         renderer.beginRender(player.getCamera());
         mobRenderer.renderAll(world.getEntities(), player.getCamera(), partialTick);
+
+        // Render player model (only in third-person)
+        playerRenderer.render(player, player.getCamera(), partialTick, player.getCameraMode());
         renderer.endRender();
 
         // Render block highlight
@@ -484,6 +510,12 @@ public class Main implements Runnable {
         }
         if (mobRenderer != null) {
             mobRenderer.cleanup();
+        }
+        if (playerRenderer != null) {
+            playerRenderer.cleanup();
+        }
+        if (inventoryPlayerRenderer != null) {
+            inventoryPlayerRenderer.cleanup();
         }
         window.cleanup();
         System.out.println("CraftZero shut down successfully.");

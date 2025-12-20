@@ -35,7 +35,7 @@ public class DroppedItem {
     private static final float DESPAWN_TIME = 300.0f; // 5 minutes
     private static final float ATTRACTION_RADIUS = 2.0f; // Start moving toward player
     private static final float PICKUP_RADIUS = 1.0f; // Actually collect item
-    private static final float ATTRACTION_SPEED = 5.0f; // Speed when attracted to player
+    private static final float ATTRACTION_SPEED = 15.0f; // Speed when attracted to player
 
     // Visual
     private static final float SCALE = 0.25f; // Size relative to full block

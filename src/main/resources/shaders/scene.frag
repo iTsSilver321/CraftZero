@@ -25,7 +25,7 @@ void main() {
     vec4 textureColor = texture(textureSampler, texCoord);
     
     // Discard transparent pixels
-    if (textureColor.a < 0.1) {
+    if (textureColor.a < 0.0) {
         discard;
     }
     

@@ -10,23 +10,31 @@ import java.util.List;
  * A single box part of a mob model (head, body, limb, etc).
  * Supports hierarchical transforms with pivot points for proper joint rotation.
  * 
- * PIVOT POINT LOGIC:
- * When rotating, we: 1) Translate to pivot, 2) Rotate, 3) Translate back
- * This makes limbs rotate around their joints, not their corners.
+ * SCENE GRAPH APPROACH (Authentic Minecraft Beta 1.7.3):
+ * - Pivot point defines the joint location (e.g., shoulder, hip)
+ * - Box coordinates are defined RELATIVE to the pivot using addBox()
+ * - Transform order: Translate to pivot -> Rotate (Z, Y, X) -> Scale
+ * - NO "translate back" - box vertices are already offset from pivot
  */
 public class ModelPart {
 
-    // Dimensions
-    private final float width, height, depth;
+    // Dimensions (set via constructor or addBox)
+    private float width, height, depth;
 
-    // Position offset from parent
+    // Box offset relative to pivot (set via addBox)
+    private float boxOffsetX, boxOffsetY, boxOffsetZ;
+
+    // Position offset from parent (legacy mode for old models)
     private float offsetX, offsetY, offsetZ;
 
-    // Pivot point for rotation (relative to this part's origin)
+    // Pivot point for rotation (joint location in parent space)
     private float pivotX, pivotY, pivotZ;
 
     // Current rotation (radians)
     private float rotationX, rotationY, rotationZ;
+
+    // Scale (default 1.0)
+    private float scaleX = 1.0f, scaleY = 1.0f, scaleZ = 1.0f;
 
     // UV texture coordinates
     private float u, v;
@@ -42,6 +50,20 @@ public class ModelPart {
     private final Matrix4f localTransform;
     private final Matrix4f worldTransform;
 
+    // Flag to indicate if this is using the new addBox system
+    private boolean usesBoxOffset = false;
+
+    /**
+     * Create an empty ModelPart (root node or use addBox to define geometry).
+     */
+    public ModelPart() {
+        this(0, 0, 0);
+    }
+
+    /**
+     * Create a ModelPart with dimensions (legacy centered box mode).
+     * For new code, prefer using the empty constructor + addBox().
+     */
     public ModelPart(float width, float height, float depth) {
         this.width = width;
         this.height = height;
@@ -54,7 +76,31 @@ public class ModelPart {
     }
 
     /**
-     * Set offset position from parent.
+     * Add a box with offset relative to the pivot point.
+     * This is the authentic Minecraft Beta 1.7.3 approach.
+     * 
+     * @param x      Starting X offset from pivot
+     * @param y      Starting Y offset from pivot
+     * @param z      Starting Z offset from pivot
+     * @param width  Box width (X size)
+     * @param height Box height (Y size)
+     * @param depth  Box depth (Z size)
+     * @return this for chaining
+     */
+    public ModelPart addBox(float x, float y, float z, float width, float height, float depth) {
+        this.boxOffsetX = x;
+        this.boxOffsetY = y;
+        this.boxOffsetZ = z;
+        this.width = width;
+        this.height = height;
+        this.depth = depth;
+        this.usesBoxOffset = true;
+        return this;
+    }
+
+    /**
+     * Set offset position from parent (legacy compatibility).
+     * For new code, use addBox() with proper box offsets instead.
      */
     public ModelPart setOffset(float x, float y, float z) {
         this.offsetX = x;
@@ -64,7 +110,7 @@ public class ModelPart {
     }
 
     /**
-     * Set pivot point for rotation.
+     * Set pivot point for rotation (joint location).
      */
     public ModelPart setPivot(float x, float y, float z) {
         this.pivotX = x;
@@ -92,6 +138,26 @@ public class ModelPart {
     }
 
     /**
+     * Set uniform scale.
+     */
+    public ModelPart setScale(float scale) {
+        this.scaleX = scale;
+        this.scaleY = scale;
+        this.scaleZ = scale;
+        return this;
+    }
+
+    /**
+     * Set non-uniform scale.
+     */
+    public ModelPart setScale(float x, float y, float z) {
+        this.scaleX = x;
+        this.scaleY = y;
+        this.scaleZ = z;
+        return this;
+    }
+
+    /**
      * Set rotation (radians).
      */
     public void setRotation(float x, float y, float z) {
@@ -113,16 +179,36 @@ public class ModelPart {
      */
     public void buildMesh() {
         if (width <= 0 && height <= 0 && depth <= 0) {
-            // Empty root part
+            // Empty root part - just build children
             for (ModelPart child : children) {
                 child.buildMesh();
             }
             return;
         }
 
-        float hw = width / 2;
-        float hh = height / 2;
-        float hd = depth / 2;
+        // Calculate box vertices based on offset mode
+        float x1, y1, z1, x2, y2, z2;
+
+        if (usesBoxOffset) {
+            // New addBox mode: box starts at offset and extends by dimensions
+            x1 = boxOffsetX;
+            y1 = boxOffsetY;
+            z1 = boxOffsetZ;
+            x2 = boxOffsetX + width;
+            y2 = boxOffsetY + height;
+            z2 = boxOffsetZ + depth;
+        } else {
+            // Legacy centered mode: box centered at origin
+            float hw = width / 2;
+            float hh = height / 2;
+            float hd = depth / 2;
+            x1 = -hw;
+            y1 = -hh;
+            z1 = -hd;
+            x2 = hw;
+            y2 = hh;
+            z2 = hd;
+        }
 
         // Minecraft box texture UV layout:
         // The texture is laid out as an unwrapped box:
@@ -163,32 +249,32 @@ public class ModelPart {
         // Front face (-Z direction in model space = facing the mob)
         // This is where the FACE/EYES should be
         idx = addFace(positions, texCoords, normals, indices, idx,
-                -hw, -hh, -hd, hw, -hh, -hd, hw, hh, -hd, -hw, hh, -hd,
+                x1, y1, z1, x2, y1, z1, x2, y2, z1, x1, y2, z1,
                 uBase + du, vBase + dv, wu, hv, 0, 0, -1);
 
         // Back face (+Z direction)
         idx = addFace(positions, texCoords, normals, indices, idx,
-                hw, -hh, hd, -hw, -hh, hd, -hw, hh, hd, hw, hh, hd,
+                x2, y1, z2, x1, y1, z2, x1, y2, z2, x2, y2, z2,
                 uBase + du + wu + du, vBase + dv, wu, hv, 0, 0, 1);
 
         // Right face (+X direction, looking at front)
         idx = addFace(positions, texCoords, normals, indices, idx,
-                hw, -hh, -hd, hw, -hh, hd, hw, hh, hd, hw, hh, -hd,
+                x2, y1, z1, x2, y1, z2, x2, y2, z2, x2, y2, z1,
                 uBase + du + wu, vBase + dv, du, hv, 1, 0, 0);
 
         // Left face (-X direction, looking at front)
         idx = addFace(positions, texCoords, normals, indices, idx,
-                -hw, -hh, hd, -hw, -hh, -hd, -hw, hh, -hd, -hw, hh, hd,
+                x1, y1, z2, x1, y1, z1, x1, y2, z1, x1, y2, z2,
                 uBase, vBase + dv, du, hv, -1, 0, 0);
 
         // Top face (+Y direction)
         idx = addFace(positions, texCoords, normals, indices, idx,
-                -hw, hh, -hd, hw, hh, -hd, hw, hh, hd, -hw, hh, hd,
+                x1, y2, z1, x2, y2, z1, x2, y2, z2, x1, y2, z2,
                 uBase + du, vBase, wu, dv, 0, 1, 0);
 
         // Bottom face (-Y direction)
         idx = addFace(positions, texCoords, normals, indices, idx,
-                -hw, -hh, hd, hw, -hh, hd, hw, -hh, -hd, -hw, -hh, -hd,
+                x1, y1, z2, x2, y1, z2, x2, y1, z1, x1, y1, z1,
                 uBase + du + wu, vBase, wu, dv, 0, -1, 0);
 
         // Convert to arrays
@@ -270,24 +356,53 @@ public class ModelPart {
     }
 
     /**
-     * Calculate transform matrix with proper pivot point rotation.
+     * Calculate transform matrix.
+     * 
+     * For LEGACY mode (uses setOffset + centered box):
+     * 1. Translate to offset position
+     * 2. Translate to pivot point
+     * 3. Rotate (Z, Y, X)
+     * 4. Translate back from pivot
+     * 
+     * For SCENE GRAPH mode (uses addBox):
+     * 1. Translate to pivot point (joint location)
+     * 2. Rotate (Z, Y, X)
+     * 3. Scale
+     * No translate back - box vertices are already offset via addBox().
      */
     public void calculateTransform(Matrix4f parentTransform) {
         localTransform.identity();
 
-        // 1. Translate to position
-        localTransform.translate(offsetX, offsetY, offsetZ);
+        if (usesBoxOffset) {
+            // SCENE GRAPH MODE (new addBox approach)
+            // 1. Translate to pivot point (joint location)
+            localTransform.translate(pivotX, pivotY, pivotZ);
 
-        // 2. Translate to pivot point
-        localTransform.translate(pivotX, pivotY, pivotZ);
+            // 2. Apply rotation (Z, Y, X order)
+            localTransform.rotateZ(rotationZ);
+            localTransform.rotateY(rotationY);
+            localTransform.rotateX(rotationX);
 
-        // 3. Apply rotation
-        localTransform.rotateZ(rotationZ);
-        localTransform.rotateY(rotationY);
-        localTransform.rotateX(rotationX);
+            // 3. Apply scale
+            localTransform.scale(scaleX, scaleY, scaleZ);
 
-        // 4. Translate back from pivot
-        localTransform.translate(-pivotX, -pivotY, -pivotZ);
+            // Note: NO translate back - box coordinates are relative to pivot
+        } else {
+            // LEGACY MODE (centered box with offset)
+            // 1. Translate to offset position from parent
+            localTransform.translate(offsetX, offsetY, offsetZ);
+
+            // 2. Translate to pivot point
+            localTransform.translate(pivotX, pivotY, pivotZ);
+
+            // 3. Apply rotation
+            localTransform.rotateZ(rotationZ);
+            localTransform.rotateY(rotationY);
+            localTransform.rotateX(rotationX);
+
+            // 4. Translate back from pivot (legacy behavior)
+            localTransform.translate(-pivotX, -pivotY, -pivotZ);
+        }
 
         // Combine with parent
         parentTransform.mul(localTransform, worldTransform);
@@ -342,5 +457,17 @@ public class ModelPart {
 
     public float getRotationZ() {
         return rotationZ;
+    }
+
+    public float getPivotX() {
+        return pivotX;
+    }
+
+    public float getPivotY() {
+        return pivotY;
+    }
+
+    public float getPivotZ() {
+        return pivotZ;
     }
 }

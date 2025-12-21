@@ -88,6 +88,9 @@ public class Player {
     private boolean dropItemFromHand; // Q key drop flag
     private boolean wantsCraftingTable; // Flag for opening crafting table
 
+    // World reference for lighting lookups
+    private World world;
+
     // Water State (Promoted to fields for access in handleInput)
     private boolean inWater;
     private boolean headInWater;
@@ -115,6 +118,19 @@ public class Player {
     private float prevRenderYawOffset;
     private float limbSwingAmount;
     private float prevLimbSwingAmount;
+
+    // Use animation state (for block placing)
+    private boolean isUsingItem;
+    private float useProgress;
+    private float prevUseProgress;
+    private float useCooldown;
+
+    // Slot switch animation state (for smooth item change)
+    private int lastSelectedSlot = 0;
+    private float slotSwitchProgress = 1.0f; // 0 = fully retracted, 1 = fully visible
+    private float prevSlotSwitchProgress = 1.0f;
+    private boolean isRetracting = false; // true = going down, false = coming up
+    private com.craftzero.world.BlockType lastHeldItemType = null; // Track for inventory changes
 
     public Player(float x, float y, float z) {
         this.position = new Vector3f(x, y, z);
@@ -259,16 +275,18 @@ public class Player {
         }
 
         // Get camera direction for movement
-        // In Mode 2 (Front View), forward means "Away from Camera" (North if Camera
-        // looks South)
-        // Camera Yaw + 180 gives the correct "Forward" vector for the player
+        // In Mode 2 (Front View), we want Standard Control (W=Away, A=Left)
+        // To make A move Screen Left (+X) while facing Camera (South/180),
+        // we need to invert the strafe sign relative to the camera vector.
         float yawRad = (float) Math.toRadians(camera.getYaw() + (cameraMode == 2 ? 180 : 0));
         float sinYaw = (float) Math.sin(yawRad);
         float cosYaw = (float) Math.cos(yawRad);
 
+        float strafeSign = (cameraMode == 2) ? -strafe : strafe;
+
         // Calculate movement direction
-        float moveX = (forward * sinYaw + strafe * cosYaw) * speed * ACCELERATION;
-        float moveZ = (-forward * cosYaw + strafe * sinYaw) * speed * ACCELERATION;
+        float moveX = (forward * sinYaw + strafeSign * cosYaw) * speed * ACCELERATION;
+        float moveZ = (-forward * cosYaw + strafeSign * sinYaw) * speed * ACCELERATION;
 
         // Apply movement (normalized to 60 FPS)
         float frameScale = deltaTime * 60.0f;
@@ -299,33 +317,37 @@ public class Player {
         float scrollY = (float) Input.getScrollY();
         if (scrollY != 0) {
             int current = inventory.getSelectedSlot();
+            int newSlot;
             if (scrollY > 0) {
-                current = (current - 1 + 9) % 9; // Scroll Up -> Previous Slot
+                newSlot = (current - 1 + 9) % 9; // Scroll Up -> Previous Slot
             } else {
-                current = (current + 1) % 9; // Scroll Down -> Next Slot
+                newSlot = (current + 1) % 9; // Scroll Down -> Next Slot
             }
-            inventory.setSelectedSlot(current);
+            if (newSlot != current) {
+                triggerSlotSwitch(newSlot);
+            }
         }
 
-        // Block type selection (number keys)
-        if (Input.isKeyPressed(GLFW_KEY_1))
-            inventory.setSelectedSlot(0);
-        if (Input.isKeyPressed(GLFW_KEY_2))
-            inventory.setSelectedSlot(1);
-        if (Input.isKeyPressed(GLFW_KEY_3))
-            inventory.setSelectedSlot(2);
-        if (Input.isKeyPressed(GLFW_KEY_4))
-            inventory.setSelectedSlot(3);
-        if (Input.isKeyPressed(GLFW_KEY_5))
-            inventory.setSelectedSlot(4);
-        if (Input.isKeyPressed(GLFW_KEY_6))
-            inventory.setSelectedSlot(5);
-        if (Input.isKeyPressed(GLFW_KEY_7))
-            inventory.setSelectedSlot(6);
-        if (Input.isKeyPressed(GLFW_KEY_8))
-            inventory.setSelectedSlot(7);
-        if (Input.isKeyPressed(GLFW_KEY_9))
-            inventory.setSelectedSlot(8);
+        // Block type selection (number keys) - trigger switch animation
+        int current = inventory.getSelectedSlot();
+        if (Input.isKeyPressed(GLFW_KEY_1) && current != 0)
+            triggerSlotSwitch(0);
+        if (Input.isKeyPressed(GLFW_KEY_2) && current != 1)
+            triggerSlotSwitch(1);
+        if (Input.isKeyPressed(GLFW_KEY_3) && current != 2)
+            triggerSlotSwitch(2);
+        if (Input.isKeyPressed(GLFW_KEY_4) && current != 3)
+            triggerSlotSwitch(3);
+        if (Input.isKeyPressed(GLFW_KEY_5) && current != 4)
+            triggerSlotSwitch(4);
+        if (Input.isKeyPressed(GLFW_KEY_6) && current != 5)
+            triggerSlotSwitch(5);
+        if (Input.isKeyPressed(GLFW_KEY_7) && current != 6)
+            triggerSlotSwitch(6);
+        if (Input.isKeyPressed(GLFW_KEY_8) && current != 7)
+            triggerSlotSwitch(7);
+        if (Input.isKeyPressed(GLFW_KEY_9) && current != 8)
+            triggerSlotSwitch(8);
 
         // Q key to drop one item from selected slot
         if (Input.isKeyPressed(GLFW_KEY_Q)) {
@@ -428,9 +450,12 @@ public class Player {
                     // Calculate progress increment (1/hardness per second, modified by tool speed)
                     float progressIncrement = (deltaTime * speedMultiplier) / hardness;
 
-                    // Underwater penalty (5x slower)
+                    // Underwater penalty (3x slower)
                     if (inWater && !flying) {
-                        progressIncrement /= 5.0f;
+                        progressIncrement /= 3.0f;
+                    } else if (!onGround && !flying) {
+                        // Air/Jump penalty (2.5x slower)
+                        progressIncrement /= 2.5f;
                     }
 
                     breakProgress += progressIncrement;
@@ -488,7 +513,7 @@ public class Player {
         wantsCraftingTable = false;
 
         // Place block (right click)
-        if (Input.isButtonDown(GLFW_MOUSE_BUTTON_RIGHT) && placeCooldown <= 0) {
+        if (Input.isButtonPressed(GLFW_MOUSE_BUTTON_RIGHT) && placeCooldown <= 0) {
             if (targetBlock.hit) {
                 // Check if clicking on a crafting table - open it instead of placing
                 BlockType clickedBlock = world.getBlock(
@@ -513,9 +538,15 @@ public class Player {
                                 world.setBlock(placePos.x, placePos.y, placePos.z, stack.getType());
                                 stack.remove(1);
 
-                                // Clear slot if empty
+                                // Clear slot if empty and trigger pop-up animation
                                 if (stack.isEmpty()) {
                                     inventory.getHotbar()[inventory.getSelectedSlot()] = null;
+                                    // Trigger pop-up animation (hand appears from bottom)
+                                    slotSwitchProgress = 0.0f;
+                                    isRetracting = false;
+                                    prevSlotSwitchProgress = 0.0f;
+                                } else {
+                                    startUseAnimation(); // Trigger use animation when placing block
                                 }
 
                                 placeCooldown = PLACE_COOLDOWN;
@@ -550,9 +581,26 @@ public class Player {
         prevDistanceWalked = distanceWalked;
         prevRenderYawOffset = renderYawOffset;
         prevSwingProgress = swingProgress;
+        prevUseProgress = useProgress;
 
         updateSwing(deltaTime);
+        updateUse(deltaTime);
+        updateSlotSwitch(deltaTime);
         updateTurretRotation();
+
+        // Check if held item type changed (from inventory manipulation)
+        // This triggers animation when moving items in/out of selected slot
+        com.craftzero.inventory.ItemStack currentHeld = inventory.getItemInHand();
+        com.craftzero.world.BlockType currentType = (currentHeld != null && !currentHeld.isEmpty())
+                ? currentHeld.getType()
+                : null;
+        if (currentType != lastHeldItemType && slotSwitchProgress >= 1.0f && !isUsingItem) {
+            // Item type changed and not already animating - trigger animation
+            if (lastHeldItemType != null || currentType != null) {
+                triggerItemChangeAnimation();
+            }
+        }
+        lastHeldItemType = currentType;
 
         // Update physics state (falling, etc.)
         boolean wasOnGround = onGround;
@@ -702,10 +750,22 @@ public class Player {
         pushNearbyMobs(world, deltaTime);
 
         // Collect nearby dropped items (only if inventory has space)
+        // Track if the held slot was empty before pickup
+        com.craftzero.inventory.ItemStack heldBefore = inventory.getItemInHand();
+        boolean wasEmpty = heldBefore == null || heldBefore.isEmpty();
+
         List<DroppedItem> collected = world.collectNearbyItems(
                 position.x, position.y + 0.9f, position.z, deltaTime, this);
         for (DroppedItem item : collected) {
             addToInventory(item.getBlockType(), item.getCount());
+        }
+
+        // Trigger animation if held slot changed from empty to having item
+        if (!collected.isEmpty() && wasEmpty) {
+            com.craftzero.inventory.ItemStack heldAfter = inventory.getItemInHand();
+            if (heldAfter != null && !heldAfter.isEmpty()) {
+                triggerItemChangeAnimation();
+            }
         }
 
         // Update camera position based on camera mode
@@ -824,15 +884,53 @@ public class Player {
                 camX = interpX - offsetX;
                 camY = eyeY + offsetY;
                 camZ = interpZ - offsetZ;
-                camera.setPosition(camX, camY, camZ);
-                camera.setYaw(yawToUse);
-                camera.setPitch(pitchToUse);
             } else {
                 // Third person front
                 camX = interpX + offsetX;
                 camY = eyeY + offsetY;
                 camZ = interpZ + offsetZ;
-                camera.setPosition(camX, camY, camZ);
+            }
+
+            // Camera collision: prevent camera from being inside blocks
+            if (world != null) {
+                // Ray-cast from player eye to camera position
+                float dx = camX - interpX;
+                float dy = camY - eyeY;
+                float dz = camZ - interpZ;
+                float totalDist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+                // Step along the ray and check for solid blocks
+                float step = 0.1f;
+                float safeDistance = totalDist;
+                for (float t = step; t <= totalDist; t += step) {
+                    float ratio = t / totalDist;
+                    int checkX = (int) Math.floor(interpX + dx * ratio);
+                    int checkY = (int) Math.floor(eyeY + dy * ratio);
+                    int checkZ = (int) Math.floor(interpZ + dz * ratio);
+
+                    BlockType block = world.getBlock(checkX, checkY, checkZ);
+                    if (!block.isAir() && !block.isTransparent()) {
+                        // Found a solid block - camera should stop before this
+                        safeDistance = Math.max(0.5f, t - step);
+                        break;
+                    }
+                }
+
+                // Move camera to safe distance
+                if (safeDistance < totalDist) {
+                    float ratio = safeDistance / totalDist;
+                    camX = interpX + dx * ratio;
+                    camY = eyeY + dy * ratio;
+                    camZ = interpZ + dz * ratio;
+                }
+            }
+
+            camera.setPosition(camX, camY, camZ);
+
+            if (cameraMode == 1) {
+                camera.setYaw(yawToUse);
+                camera.setPitch(pitchToUse);
+            } else {
                 // Camera looks at interpolated player position
                 camera.setLookTarget(interpX, eyeY, interpZ);
             }
@@ -1045,6 +1143,14 @@ public class Player {
         return camera;
     }
 
+    public World getWorld() {
+        return world;
+    }
+
+    public void setWorld(World world) {
+        this.world = world;
+    }
+
     public Vector3f getPosition() {
         return position;
     }
@@ -1079,6 +1185,14 @@ public class Player {
 
     public void setCameraMode(int mode) {
         this.cameraMode = mode % 3; // Cycle through 0, 1, 2
+
+        // Reset rotation offset to prevent "Owl Neck" during transition
+        float targetYaw = camera.getYaw();
+        if (cameraMode == 2)
+            targetYaw += 180;
+
+        renderYawOffset = targetYaw;
+        prevRenderYawOffset = targetYaw;
     }
 
     public void setPosition(float x, float y, float z) {
@@ -1351,17 +1465,21 @@ public class Player {
         }
 
         if (isSwinging) {
-            // Air swing speed: Slow for visibility. Mining: 6.4f as before.
-            float swingSpeed = isMiningSwing ? 6.4f : 6.0f;
+            // Faster swing when holding an item, normal speed when empty hand
+            com.craftzero.inventory.ItemStack heldItem = inventory.getItemInHand();
+            boolean holdingItem = heldItem != null && !heldItem.isEmpty();
+            float swingSpeed = holdingItem ? 4.0f : 3.5f;
 
             swingProgress += deltaTime * swingSpeed;
             if (swingProgress >= 1.0f) {
                 swingProgress = 0.0f;
+                prevSwingProgress = 0.0f; // Reset prev too to avoid ghosting interpolation
                 isSwinging = false;
                 isMiningSwing = false;
             }
         } else {
             swingProgress = 0.0f;
+            prevSwingProgress = 0.0f; // Keep in sync
             isMiningSwing = false;
         }
     }
@@ -1385,7 +1503,7 @@ public class Player {
             while (moveYaw < -180)
                 moveYaw += 360;
 
-            // Check angle difference between movement and look
+            // Calculate diff from Camera Yaw (0 North, 180 South)
             float lookYaw = camera.getYaw();
             float diffFromLook = moveYaw - lookYaw;
             while (diffFromLook >= 180)
@@ -1393,28 +1511,38 @@ public class Player {
             while (diffFromLook < -180)
                 diffFromLook += 360;
 
-            // Trigger animation instantly when clearly strafing (>30 degrees from look)
-            // Forward (0°±30) and backward (180°±30) are excluded
-            if (Math.abs(diffFromLook) > 30 && Math.abs(diffFromLook) < 150) {
-                // Strafing or diagonal - body slowly rotates toward movement direction
-                float bodyDiff = moveYaw - renderYawOffset;
-                while (bodyDiff >= 180)
-                    bodyDiff -= 360;
-                while (bodyDiff < -180)
-                    bodyDiff += 360;
-                renderYawOffset += bodyDiff * 0.1f;
-            } else {
-                // Forward/backward - body MUST face look direction (reset strafe pose)
-                float bodyDiff = lookYaw - renderYawOffset;
-                while (bodyDiff >= 180)
-                    bodyDiff -= 360;
-                while (bodyDiff < -180)
-                    bodyDiff += 360;
-                renderYawOffset += bodyDiff * 0.1f;
+            float targetYaw = moveYaw;
+
+            if (cameraMode == 2) {
+                // "When I press S make it behave like W" -> Backpedal (Face Forward while
+                // moving Back)
+                // If moving Towards Camera (Diff < 45), Flip to Face Away.
+                if (Math.abs(diffFromLook) < 45) {
+                    targetYaw += 180;
+                }
+            } else if (cameraMode == 1) {
+                // "Make it also do that in mode 1" -> Backpedal
+                // In Mode 1 (Back View), S moves Opposite to Camera (Diff > 135).
+                // Flip to Face Forward (same direction as Camera).
+                if (Math.abs(diffFromLook) > 135) {
+                    targetYaw += 180;
+                }
             }
+
+            float bodyDiff = targetYaw - renderYawOffset;
+            while (bodyDiff >= 180)
+                bodyDiff -= 360;
+            while (bodyDiff < -180)
+                bodyDiff += 360;
+            renderYawOffset += bodyDiff * 0.15f;
         } else {
-            // Not moving - body slowly returns to face look direction
-            float bodyDiff = camera.getYaw() - renderYawOffset;
+            // Not moving - body slowly returns to face look direction (Idle)
+            // In Mode 2, Face Camera (Camera + 180)
+            float lookYaw = camera.getYaw();
+            if (cameraMode == 2) {
+                lookYaw += 180;
+            }
+            float bodyDiff = lookYaw - renderYawOffset;
             while (bodyDiff >= 180)
                 bodyDiff -= 360;
             while (bodyDiff < -180)
@@ -1422,17 +1550,21 @@ public class Player {
             renderYawOffset += bodyDiff * 0.05f;
         }
 
-        // Clamp head relative to body - head can turn 30 degrees before body follows
-        float headDiff = camera.getYaw() - renderYawOffset;
+        // Clamp head relative to body - account for Mode 2 offset
+        float targetLookYaw = camera.getYaw();
+        if (cameraMode == 2)
+            targetLookYaw += 180;
+
+        float headDiff = targetLookYaw - renderYawOffset;
         while (headDiff >= 180)
             headDiff -= 360;
         while (headDiff < -180)
             headDiff += 360;
 
         if (headDiff > 30)
-            renderYawOffset = camera.getYaw() - 30;
+            renderYawOffset = targetLookYaw - 30;
         if (headDiff < -30)
-            renderYawOffset = camera.getYaw() + 30;
+            renderYawOffset = targetLookYaw + 30;
     }
 
     public void swingArm() {
@@ -1454,5 +1586,141 @@ public class Player {
 
     public float getRenderYawOffset(float partialTick) {
         return prevRenderYawOffset + (renderYawOffset - prevRenderYawOffset) * partialTick;
+    }
+
+    private void updateUse(float deltaTime) {
+        // Update use cooldown
+        if (useCooldown > 0) {
+            useCooldown -= deltaTime;
+        }
+
+        if (isUsingItem) {
+            // Use animation is faster than swing (about 0.2s)
+            float useSpeed = 5.0f;
+
+            useProgress += deltaTime * useSpeed;
+            if (useProgress >= 1.0f) {
+                useProgress = 0.0f;
+                isUsingItem = false;
+            }
+        } else {
+            useProgress = 0.0f;
+        }
+    }
+
+    /**
+     * Start the "use" animation (for block placing).
+     */
+    public void startUseAnimation() {
+        // 150ms animation cooldown
+        if (useCooldown > 0) {
+            return;
+        }
+
+        isUsingItem = true;
+        useProgress = 0;
+        prevUseProgress = 0;
+        useCooldown = 0.15f;
+    }
+
+    /**
+     * Get the interpolated use progress for rendering.
+     */
+    public float getUseProgress(float partialTick) {
+        return prevUseProgress + (useProgress - prevUseProgress) * partialTick;
+    }
+
+    /**
+     * Check if the player is currently using an item (placing block).
+     */
+    public boolean isUsingItem() {
+        return isUsingItem;
+    }
+
+    // ============== Slot Switch Animation ==============
+
+    private int pendingSlot = -1;
+
+    /**
+     * Trigger the item change animation (retract current, appear new).
+     * Use this when the selected slot's contents change (pickup, inventory move).
+     */
+    public void triggerItemChangeAnimation() {
+        // Only animate if not already animating
+        if (slotSwitchProgress < 1.0f) {
+            return; // Already animating
+        }
+        // Stay on same slot, just play animation
+        pendingSlot = inventory.getSelectedSlot();
+        isRetracting = true;
+        slotSwitchProgress = 1.0f;
+        prevSlotSwitchProgress = 1.0f;
+    }
+
+    /**
+     * Trigger a slot switch animation. The hand retracts, slot changes, then
+     * reappears.
+     * Skip animation if switching between two empty slots (no visual change).
+     */
+    private void triggerSlotSwitch(int newSlot) {
+        // Check if both current and new slots are empty - skip animation if so
+        com.craftzero.inventory.ItemStack currentItem = inventory.getItemInHand();
+        com.craftzero.inventory.ItemStack[] hotbar = inventory.getHotbar();
+        com.craftzero.inventory.ItemStack newItem = (newSlot >= 0 && newSlot < hotbar.length) ? hotbar[newSlot] : null;
+
+        boolean currentEmpty = currentItem == null || currentItem.isEmpty();
+        boolean newEmpty = newItem == null || newItem.isEmpty();
+
+        if (currentEmpty && newEmpty) {
+            // Both empty - just switch immediately without animation
+            inventory.setSelectedSlot(newSlot);
+            return;
+        }
+
+        if (slotSwitchProgress < 1.0f) {
+            // Already animating - immediately switch and continue
+            inventory.setSelectedSlot(newSlot);
+            pendingSlot = -1;
+            return;
+        }
+        pendingSlot = newSlot;
+        isRetracting = true;
+        slotSwitchProgress = 1.0f;
+        prevSlotSwitchProgress = 1.0f;
+    }
+
+    private void updateSlotSwitch(float deltaTime) {
+        prevSlotSwitchProgress = slotSwitchProgress;
+
+        float speed = 8.0f; // Fast animation (~0.125s each way)
+
+        if (isRetracting) {
+            // Hand going down (1.0 -> 0.0)
+            slotSwitchProgress -= deltaTime * speed;
+            if (slotSwitchProgress <= 0.0f) {
+                slotSwitchProgress = 0.0f;
+                isRetracting = false;
+                // Switch the actual slot at the bottom
+                if (pendingSlot >= 0) {
+                    inventory.setSelectedSlot(pendingSlot);
+                    lastSelectedSlot = pendingSlot;
+                    pendingSlot = -1;
+                }
+            }
+        } else if (slotSwitchProgress < 1.0f) {
+            // Hand coming back up (0.0 -> 1.0)
+            slotSwitchProgress += deltaTime * speed;
+            if (slotSwitchProgress >= 1.0f) {
+                slotSwitchProgress = 1.0f;
+            }
+        }
+    }
+
+    /**
+     * Get the interpolated slot switch progress for rendering.
+     * 0.0 = fully retracted, 1.0 = fully visible
+     */
+    public float getSlotSwitchProgress(float partialTick) {
+        return prevSlotSwitchProgress + (slotSwitchProgress - prevSlotSwitchProgress) * partialTick;
     }
 }

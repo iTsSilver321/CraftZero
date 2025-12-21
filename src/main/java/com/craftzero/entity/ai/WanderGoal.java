@@ -6,7 +6,7 @@ import java.util.Random;
 
 /**
  * AI Goal: Wander randomly within a radius.
- * The mob picks a random position and walks toward it.
+ * Picks safe positions that won't lead off cliffs.
  */
 public class WanderGoal implements Goal {
 
@@ -19,10 +19,12 @@ public class WanderGoal implements Goal {
     private float targetX, targetZ;
     private int wanderCooldown;
     private boolean hasTarget;
-    private int stuckTime; // Track how long mob has been stuck at obstacle
+    private int stuckTime;
+    private float lastX, lastZ; // For stuck detection
 
     private static final int MIN_COOLDOWN = 100; // 5 seconds
     private static final int MAX_COOLDOWN = 200; // 10 seconds
+    private static final int MAX_TARGET_ATTEMPTS = 5; // How many times to try picking safe target
 
     public WanderGoal(LivingEntity mob, MobAI ai, float radius, float speed) {
         this.mob = mob;
@@ -42,7 +44,7 @@ public class WanderGoal implements Goal {
     @Override
     public boolean canUse() {
         // Don't wander if we have a target to chase
-        if (ai.hasTarget()) {
+        if (ai.hasMoveTarget()) {
             return false;
         }
 
@@ -54,8 +56,9 @@ public class WanderGoal implements Goal {
 
         // Random chance to start wandering
         if (random.nextFloat() < 0.02f) { // 2% chance per tick
-            pickNewTarget();
-            return true;
+            if (pickSafeTarget()) {
+                return true;
+            }
         }
 
         return false;
@@ -63,8 +66,8 @@ public class WanderGoal implements Goal {
 
     @Override
     public boolean canContinue() {
-        if (ai.hasTarget()) {
-            return false;
+        if (ai.hasMoveTarget()) {
+            return false; // Higher priority goal took over
         }
 
         if (!hasTarget) {
@@ -81,7 +84,9 @@ public class WanderGoal implements Goal {
 
     @Override
     public void start() {
-        // Already picked target in canUse
+        stuckTime = 0;
+        lastX = mob.getX();
+        lastZ = mob.getZ();
     }
 
     @Override
@@ -89,44 +94,59 @@ public class WanderGoal implements Goal {
         if (!hasTarget)
             return;
 
-        // If mob is trapped or escaping, DON'T interfere with its movement
-        if (mob.isTrapped() || mob.isEscaping()) {
-            return; // Let LivingEntity handle movement
+        // Calculate direction to target
+        float dx = targetX - mob.getX();
+        float dz = targetZ - mob.getZ();
+        float dist = (float) Math.sqrt(dx * dx + dz * dz);
+
+        if (dist <= 0.5f) {
+            mob.stopMoving();
+            return;
         }
 
-        // Check if mob hit a wall - but only turn if it's NOT a jumpable obstacle
-        // Let auto-jump handle 1-block high walls
-        if (mob.isStuck() || (mob.isCollidedHorizontally() && mob.isOnGround())) {
-            // Pick a completely new target direction immediately if stuck,
-            // or after 15 ticks if just colliding (might be a 1-block jump)
-            stuckTime++;
+        float targetYaw = (float) Math.toDegrees(Math.atan2(dx, -dz));
 
-            if (mob.isStuck() || stuckTime > 15) {
-                mob.clearTrapped(); // Clear trapped state for fresh start
-                pickNewTarget();
+        // Check for cliff ahead
+        if (LineOfSightUtil.isCliffAhead(mob.getWorld(),
+                mob.getX(), mob.getY(), mob.getZ(), targetYaw, 1.5f)) {
+            // Path leads to cliff - find safe direction or pick new target
+            float safeYaw = LineOfSightUtil.findSafeDirection(
+                    mob.getWorld(), mob.getX(), mob.getY(), mob.getZ(), targetYaw);
+
+            if (safeYaw == targetYaw) {
+                // No safe direction found - pick entirely new target
+                if (!pickSafeTarget()) {
+                    mob.stopMoving();
+                    hasTarget = false;
+                }
+                return;
+            }
+            targetYaw = safeYaw;
+        }
+
+        // Check if stuck (not moving)
+        float moveDist = (float) Math.sqrt(
+                (mob.getX() - lastX) * (mob.getX() - lastX) +
+                        (mob.getZ() - lastZ) * (mob.getZ() - lastZ));
+
+        if (moveDist < 0.03f) {
+            stuckTime++;
+            if (stuckTime > 30) { // Stuck for 1.5 seconds
+                // Pick new target
+                if (!pickSafeTarget()) {
+                    mob.stopMoving();
+                    hasTarget = false;
+                }
                 stuckTime = 0;
                 return;
             }
         } else {
             stuckTime = 0;
+            lastX = mob.getX();
+            lastZ = mob.getZ();
         }
 
-        // Move toward target using the NEW movement system
-        float dx = targetX - mob.getX();
-        float dz = targetZ - mob.getZ();
-        float dist = (float) Math.sqrt(dx * dx + dz * dz);
-
-        if (dist > 0.5f) {
-            // Calculate target yaw (direction to face)
-            float targetYaw = (float) Math.toDegrees(Math.atan2(dx, -dz));
-
-            // Set movement direction and speed - body will smoothly rotate
-            // Speed is 0-1 multiplier (1.0 = full speed)
-            mob.setMoveDirection(targetYaw, speed);
-        } else {
-            // Close to target - stop
-            mob.stopMoving();
-        }
+        mob.setMoveDirection(targetYaw, speed);
     }
 
     @Override
@@ -136,12 +156,35 @@ public class WanderGoal implements Goal {
         mob.stopMoving();
     }
 
-    private void pickNewTarget() {
-        float angle = random.nextFloat() * (float) Math.PI * 2;
-        float distance = random.nextFloat() * radius + 2.0f; // At least 2 blocks away
+    /**
+     * Pick a safe target position (not leading off a cliff).
+     */
+    private boolean pickSafeTarget() {
+        for (int attempt = 0; attempt < MAX_TARGET_ATTEMPTS; attempt++) {
+            float angle = random.nextFloat() * (float) Math.PI * 2;
+            float distance = random.nextFloat() * radius + 2.0f;
 
-        targetX = mob.getX() + (float) Math.cos(angle) * distance;
-        targetZ = mob.getZ() + (float) Math.sin(angle) * distance;
-        hasTarget = true;
+            float testX = mob.getX() + (float) Math.cos(angle) * distance;
+            float testZ = mob.getZ() + (float) Math.sin(angle) * distance;
+
+            // Check if destination is safe
+            if (mob.getWorld() != null &&
+                    LineOfSightUtil.isPositionSafe(mob.getWorld(), testX, mob.getY(), testZ, 3)) {
+
+                // Also check path doesn't immediately lead off cliff
+                float testYaw = (float) Math.toDegrees(Math.atan2(
+                        testX - mob.getX(), -(testZ - mob.getZ())));
+
+                if (!LineOfSightUtil.isCliffAhead(mob.getWorld(),
+                        mob.getX(), mob.getY(), mob.getZ(), testYaw, 2.0f)) {
+                    targetX = testX;
+                    targetZ = testZ;
+                    hasTarget = true;
+                    return true;
+                }
+            }
+        }
+
+        return false; // Couldn't find safe target
     }
 }

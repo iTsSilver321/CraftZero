@@ -132,8 +132,10 @@ public class CloudRenderer {
                 cloudShader.setUniform("projectionMatrix", camera.getProjectionMatrix());
                 cloudShader.setUniform("viewMatrix", camera.getViewMatrix());
 
-                // Light gray clouds (Minecraft style: RGB 191,191,191 = 0.75)
-                cloudShader.setUniform("cloudColor", new Vector3f(0.95f, 0.95f, 0.95f));
+                // Apply time-based lighting to clouds (darken at night)
+                float brightness = dayCycle.getSunBrightness();
+                float cloudBrightness = 0.95f * brightness;
+                cloudShader.setUniform("cloudColor", new Vector3f(cloudBrightness, cloudBrightness, cloudBrightness));
 
                 glBindVertexArray(vao);
 

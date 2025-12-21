@@ -54,8 +54,6 @@ public class SkyRenderer {
         shader.bind();
 
         Vector3f camPos = camera.getPosition();
-        float timePercent = dayCycle.getTime() / 24000.0f;
-        float angle = (timePercent - 0.25f) * 360.0f;
 
         // Setup for sky rendering
         glDepthMask(false);
@@ -70,22 +68,33 @@ public class SkyRenderer {
         shader.setUniform("ambientLight", 1.0f);
 
         // --- RENDER SUN ---
+        // Sun is always at fixed DISTANCE from camera, but the angle (direction)
+        // is based on time of day, not camera position. This ensures:
+        // 1. Sun is never reachable (fixed distance from camera)
+        // 2. Sun angle doesn't change when player flies up/down
+        Vector3f sunDir = dayCycle.getSunDirection();
         Matrix4f sunMat = new Matrix4f();
-        sunMat.translate(camPos);
-        sunMat.rotateZ((float) Math.toRadians(angle));
-        sunMat.translate(0, DISTANCE, 0);
-        sunMat.rotateX((float) Math.toRadians(90));
+        sunMat.translate(
+                camPos.x + sunDir.x * DISTANCE,
+                camPos.y + sunDir.y * DISTANCE,
+                camPos.z + sunDir.z * DISTANCE);
+        // Billboard facing - rotate to face camera
+        sunMat.rotateY((float) Math.atan2(sunDir.x, sunDir.z));
+        sunMat.rotateX((float) Math.asin(-sunDir.y));
 
         shader.setUniform("modelMatrix", sunMat);
         sunTexture.bind(0);
         sunMesh.render();
 
         // --- RENDER MOON ---
+        Vector3f moonDir = dayCycle.getMoonDirection();
         Matrix4f moonMat = new Matrix4f();
-        moonMat.translate(camPos);
-        moonMat.rotateZ((float) Math.toRadians(angle));
-        moonMat.translate(0, -DISTANCE, 0);
-        moonMat.rotateX((float) Math.toRadians(-90));
+        moonMat.translate(
+                camPos.x + moonDir.x * DISTANCE,
+                camPos.y + moonDir.y * DISTANCE,
+                camPos.z + moonDir.z * DISTANCE);
+        moonMat.rotateY((float) Math.atan2(moonDir.x, moonDir.z));
+        moonMat.rotateX((float) Math.asin(-moonDir.y));
         moonMat.rotateZ((float) Math.toRadians(180));
 
         shader.setUniform("modelMatrix", moonMat);

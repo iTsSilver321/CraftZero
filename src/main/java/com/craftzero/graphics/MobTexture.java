@@ -41,6 +41,7 @@ public class MobTexture {
                 "/textures/mob/pig.png",
                 "/textures/mob/cow.png",
                 "/textures/mob/sheep.png",
+                "/textures/mob/sheep_fur.png",
                 "/textures/mob/chicken.png"
         };
 

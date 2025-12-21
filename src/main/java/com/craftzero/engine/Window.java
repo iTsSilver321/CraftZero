@@ -25,6 +25,9 @@ public class Window {
     private String title;
     private boolean resized;
     private boolean vSync;
+    private boolean fullscreen;
+    private int windowedX, windowedY; // Position before fullscreen
+    private int windowedWidth, windowedHeight; // Size before fullscreen
 
     public Window(String title, int width, int height, boolean vSync) {
         this.title = title;
@@ -183,5 +186,43 @@ public class Window {
 
     public void releaseCursor() {
         glfwSetInputMode(handle, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    }
+
+    /**
+     * Toggle between windowed and fullscreen mode.
+     * Saves windowed position/size before going fullscreen.
+     */
+    public void toggleFullscreen() {
+        fullscreen = !fullscreen;
+
+        if (fullscreen) {
+            // Save windowed state before going fullscreen
+            try (MemoryStack stack = stackPush()) {
+                IntBuffer xPos = stack.mallocInt(1);
+                IntBuffer yPos = stack.mallocInt(1);
+                glfwGetWindowPos(handle, xPos, yPos);
+                windowedX = xPos.get(0);
+                windowedY = yPos.get(0);
+            }
+            windowedWidth = width;
+            windowedHeight = height;
+
+            // Switch to fullscreen on primary monitor
+            long monitor = glfwGetPrimaryMonitor();
+            GLFWVidMode mode = glfwGetVideoMode(monitor);
+            if (mode != null) {
+                glfwSetWindowMonitor(handle, monitor, 0, 0, mode.width(), mode.height(), mode.refreshRate());
+            }
+        } else {
+            // Restore windowed mode
+            glfwSetWindowMonitor(handle, NULL, windowedX, windowedY, windowedWidth, windowedHeight, 0);
+        }
+
+        // Trigger resize handling to update GUI/camera
+        resized = true;
+    }
+
+    public boolean isFullscreen() {
+        return fullscreen;
     }
 }

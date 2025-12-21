@@ -5,6 +5,7 @@ import com.craftzero.main.Player;
 
 /**
  * AI Goal: Move toward and attack the current target.
+ * Includes cliff-aware pathfinding to avoid walking off edges.
  */
 public class MeleeAttackGoal implements Goal {
 
@@ -15,7 +16,10 @@ public class MeleeAttackGoal implements Goal {
     private final float chaseSpeed;
 
     private int pathRecalcCooldown;
+    private int stuckTicks; // Track if mob is stuck
+    private float lastX, lastZ; // Last position to detect stuck
     private static final int PATH_RECALC_INTERVAL = 20; // 1 second
+    private static final int STUCK_THRESHOLD = 40; // 2 seconds without progress
 
     public MeleeAttackGoal(LivingEntity mob, MobAI ai, float damage, float attackRange, float chaseSpeed) {
         this.mob = mob;
@@ -24,6 +28,7 @@ public class MeleeAttackGoal implements Goal {
         this.attackRange = attackRange;
         this.chaseSpeed = chaseSpeed;
         this.pathRecalcCooldown = 0;
+        this.stuckTicks = 0;
     }
 
     public MeleeAttackGoal(LivingEntity mob, MobAI ai, float damage) {
@@ -48,6 +53,9 @@ public class MeleeAttackGoal implements Goal {
     @Override
     public void start() {
         pathRecalcCooldown = 0;
+        stuckTicks = 0;
+        lastX = mob.getX();
+        lastZ = mob.getZ();
     }
 
     @Override
@@ -79,12 +87,27 @@ public class MeleeAttackGoal implements Goal {
             pathRecalcCooldown = PATH_RECALC_INTERVAL;
         }
 
+        // Check if stuck
+        float moveDist = (float) Math.sqrt(
+                (mob.getX() - lastX) * (mob.getX() - lastX) +
+                        (mob.getZ() - lastZ) * (mob.getZ() - lastZ));
+        if (moveDist < 0.05f) {
+            stuckTicks++;
+        } else {
+            stuckTicks = 0;
+            lastX = mob.getX();
+            lastZ = mob.getZ();
+        }
+
         // Attack if in range
         if (dist <= attackRange && mob.canAttack()) {
             performAttack(player);
-        } else {
-            // Move toward player
+        } else if (stuckTicks < STUCK_THRESHOLD) {
+            // Move toward player (with cliff awareness)
             moveTowardTarget();
+        } else {
+            // Stuck - try to find alternate path
+            tryAlternatePath();
         }
     }
 
@@ -97,12 +120,50 @@ public class MeleeAttackGoal implements Goal {
         float dist = (float) Math.sqrt(dx * dx + dz * dz);
 
         if (dist > 0.5f) {
-            // Calculate target yaw and use new movement system
+            // Calculate target yaw
             float targetYaw = (float) Math.toDegrees(Math.atan2(dx, -dz));
+
+            // Check if direct path leads to cliff
+            if (LineOfSightUtil.isCliffAhead(mob.getWorld(),
+                    mob.getX(), mob.getY(), mob.getZ(), targetYaw, 1.5f)) {
+                // Find safe direction
+                float safeYaw = LineOfSightUtil.findSafeDirection(
+                        mob.getWorld(), mob.getX(), mob.getY(), mob.getZ(), targetYaw);
+
+                if (safeYaw != targetYaw) {
+                    // Use safe direction instead
+                    mob.setMoveDirection(safeYaw, chaseSpeed * 0.7f); // Slower when avoiding
+                    return;
+                } else {
+                    // No safe direction - stop to avoid falling
+                    mob.stopMoving();
+                    return;
+                }
+            }
+
             mob.setMoveDirection(targetYaw, chaseSpeed);
         } else {
             mob.stopMoving();
         }
+    }
+
+    private void tryAlternatePath() {
+        // When stuck, try moving in a random valid direction
+        float currentYaw = mob.getBodyYaw();
+        float[] testAngles = { 90, -90, 45, -45, 135, -135, 180 };
+
+        for (float offset : testAngles) {
+            float testYaw = currentYaw + offset;
+            if (!LineOfSightUtil.isCliffAhead(mob.getWorld(),
+                    mob.getX(), mob.getY(), mob.getZ(), testYaw, 2.0f)) {
+                mob.setMoveDirection(testYaw, chaseSpeed * 0.5f);
+                stuckTicks = 0; // Reset stuck counter
+                return;
+            }
+        }
+
+        // Completely stuck (surrounded by cliffs) - just stop
+        mob.stopMoving();
     }
 
     private void performAttack(Player player) {
@@ -127,5 +188,6 @@ public class MeleeAttackGoal implements Goal {
     @Override
     public void stop() {
         mob.stopMoving();
+        stuckTicks = 0;
     }
 }

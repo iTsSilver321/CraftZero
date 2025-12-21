@@ -133,69 +133,20 @@ public abstract class LivingEntity extends Entity {
         // ==========================================
         boolean wantsToMove = Math.abs(forwardSpeed) > 0.01f;
 
-        // === ESCAPING STATE: Navigate toward escape block center ===
+        // === ESCAPING STATE: Let AI handle complex escaping ===
+        // LivingEntity only handles immediate cliff/obstacle avoidance
         if (escapingTicks > 0) {
             escapingTicks--;
-
-            // Calculate direction to escape target
-            float dx = escapeTargetX - x;
-            float dz = escapeTargetZ - z;
-            float distToTarget = (float) Math.sqrt(dx * dx + dz * dz);
-
-            if (distToTarget < 0.3f) {
-                // Close enough to target - escape complete
-                escapingTicks = 0;
-            } else {
-                // Navigate toward target center
-                targetYaw = (float) Math.toDegrees(Math.atan2(dx, -dz));
-                float yawDiff = wrapDegrees(targetYaw - bodyYaw);
-                bodyYaw += yawDiff * 0.3f;
-                forwardSpeed = 1.0f;
-            }
+            // AI is handling movement during escape
         }
-        // === TRAPPED STATE: Complete freeze + periodic escape scan ===
+        // === TRAPPED STATE: Clear after timeout, let AI handle ===
         else if (isTrapped) {
-            // Force stop all movement while trapped
-            forwardSpeed = 0;
-
-            // Periodic 360° escape scan (VERY FAST - every 5 ticks)
+            // AI's EscapeGoal will handle finding escape routes
+            // Just reset trapped state after a timeout to avoid permanent freeze
             escapeScanTimer--;
             if (escapeScanTimer <= 0) {
-                escapeScanTimer = 5; // Scan every 5 ticks (1/4 second)
-
-                // Fine 360° scan with 15° increments and multi-distance
-                float bestYaw = Float.MAX_VALUE;
-                int bestScore = -1;
-                float bestDist = 0;
-
-                for (float offset = 0; offset < 360; offset += 15) {
-                    float testYaw = wrapDegrees(bodyYaw + offset);
-                    for (float testDist : new float[] { 0.5f, 1.0f, 1.5f }) {
-                        int score = evaluatePath(testYaw, testDist);
-                        if (score > bestScore && score >= 2) {
-                            bestScore = score;
-                            bestYaw = testYaw;
-                            bestDist = testDist;
-                        }
-                    }
-                }
-
-                if (bestYaw != Float.MAX_VALUE) {
-                    // FOUND AN ESCAPE! Calculate block center
-                    float rad = (float) Math.toRadians(bestYaw);
-                    float targetBlockX = x + (float) Math.sin(rad) * bestDist;
-                    float targetBlockZ = z - (float) Math.cos(rad) * bestDist;
-
-                    // Snap to block center
-                    escapeTargetX = (float) Math.floor(targetBlockX) + 0.5f;
-                    escapeTargetZ = (float) Math.floor(targetBlockZ) + 0.5f;
-
-                    targetYaw = bestYaw;
-                    bodyYaw = bestYaw;
-                    isTrapped = false;
-                    continuousStuckTicks = 0;
-                    escapingTicks = 40; // COMMIT for 2 seconds
-                }
+                isTrapped = false; // Allow AI to take control
+                continuousStuckTicks = 0;
             }
         }
         // === NORMAL MOVEMENT: Jump, Veer, or Trap ===
@@ -211,13 +162,17 @@ public abstract class LivingEntity extends Entity {
             boolean isLedgeAhead = !isSolidAt(lx, y - 1.0f, lz); // No ground 1 block below
 
             if (isLedgeAhead) {
-                // Stop before falling! Find a different path.
+                // Stop before falling! Find a different path that doesn't lead off a cliff.
                 float escapeYaw = findEscapeRoute();
-                if (escapeYaw != Float.MAX_VALUE) {
+                // Validate escape route doesn't lead to another cliff
+                if (escapeYaw != Float.MAX_VALUE && !isLedgeInDirection(escapeYaw)) {
                     targetYaw = escapeYaw;
                     bodyYaw += wrapDegrees(targetYaw - bodyYaw) * 0.5f;
                 } else {
-                    forwardSpeed = 0; // Just stop
+                    // No safe route - stop cleanly and wait for AI to pick new target
+                    forwardSpeed = 0;
+                    continuousStuckTicks = 0;
+                    // Don't set trapped state - just a cliff, not stuck
                 }
                 avoidanceCooldown = 20;
             }
@@ -404,6 +359,19 @@ public abstract class LivingEntity extends Entity {
         com.craftzero.world.BlockType bt = world.getBlock((int) Math.floor(bx), (int) Math.floor(by),
                 (int) Math.floor(bz));
         return bt != null && bt.isSolid();
+    }
+
+    /**
+     * Check if moving in a direction would lead off a cliff.
+     */
+    private boolean isLedgeInDirection(float testYaw) {
+        float rad = (float) Math.toRadians(testYaw);
+        float dx = (float) Math.sin(rad);
+        float dz = -(float) Math.cos(rad);
+        float ledgeDist = 0.8f;
+        float lx = x + dx * ledgeDist;
+        float lz = z + dz * ledgeDist;
+        return !isSolidAt(lx, y - 1.0f, lz);
     }
 
     /**

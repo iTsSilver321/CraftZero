@@ -1,6 +1,9 @@
 package com.craftzero.entity.ai;
 
 import com.craftzero.entity.LivingEntity;
+import com.craftzero.entity.ai.pathfinding.MoveControl;
+import com.craftzero.entity.ai.pathfinding.Navigator;
+import com.craftzero.entity.ai.pathfinding.PathNode;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -8,7 +11,12 @@ import java.util.List;
 
 /**
  * AI controller for mobs.
- * Manages a list of goals and executes them based on priority.
+ * Manages goals, navigation, and movement control.
+ * 
+ * Architecture (Minecraft-style):
+ * - GoalSelector: Decides what to do (attack, wander, flee)
+ * - Navigator: Calculates path to destination (A* pathfinding)
+ * - MoveControl: Handles physics of following path
  */
 public class MobAI {
 
@@ -16,17 +24,30 @@ public class MobAI {
     private final List<Goal> goals;
     private final List<Goal> activeGoals;
 
+    // Navigation and movement
+    private final Navigator navigator;
+    private final MoveControl moveControl;
+
     // Target tracking
     private LivingEntity target;
-
-    // Movement target
-    private float targetX, targetZ;
-    private boolean hasMovementTarget;
+    private float targetX, targetY, targetZ;
+    private boolean hasTarget;
 
     public MobAI(LivingEntity mob) {
         this.mob = mob;
         this.goals = new ArrayList<>();
         this.activeGoals = new ArrayList<>();
+
+        // Initialize navigation (will be null if world not set yet)
+        if (mob.getWorld() != null) {
+            this.navigator = new Navigator(mob, mob.getWorld());
+            this.moveControl = new MoveControl(mob);
+        } else {
+            this.navigator = null;
+            this.moveControl = null;
+        }
+
+        this.hasTarget = false;
     }
 
     /**
@@ -77,7 +98,80 @@ public class MobAI {
         for (Goal goal : activeGoals) {
             goal.tick();
         }
+
+        // Update navigation and movement
+        if (navigator != null && moveControl != null) {
+            PathNode nextNode = navigator.tick();
+            if (nextNode != null) {
+                // Move toward next path node
+                moveControl.moveTo(
+                        nextNode.getCenterX(),
+                        nextNode.getCenterY(),
+                        nextNode.getCenterZ(),
+                        getMovementSpeed());
+            }
+            moveControl.tick();
+        }
     }
+
+    // ==================== Navigation ====================
+
+    /**
+     * Navigate to a position using A* pathfinding.
+     */
+    public void navigateTo(float x, float y, float z) {
+        this.targetX = x;
+        this.targetY = y;
+        this.targetZ = z;
+        this.hasTarget = true;
+
+        if (navigator != null) {
+            navigator.moveTo(x, y, z);
+        }
+    }
+
+    /**
+     * Stop navigation.
+     */
+    public void stopNavigation() {
+        this.hasTarget = false;
+        if (navigator != null) {
+            navigator.stop();
+        }
+        if (moveControl != null) {
+            moveControl.stop();
+        }
+    }
+
+    /**
+     * Check if navigator has reached target.
+     */
+    public boolean hasReachedTarget() {
+        return navigator != null && navigator.hasReachedTarget();
+    }
+
+    /**
+     * Check if actively navigating.
+     */
+    public boolean isNavigating() {
+        return navigator != null && navigator.isNavigating();
+    }
+
+    /**
+     * Get navigator for direct control.
+     */
+    public Navigator getNavigator() {
+        return navigator;
+    }
+
+    /**
+     * Get move control for direct control.
+     */
+    public MoveControl getMoveControl() {
+        return moveControl;
+    }
+
+    // ==================== Target Management ====================
 
     /**
      * Set the current attack target.
@@ -107,27 +201,36 @@ public class MobAI {
         this.target = null;
     }
 
+    // ==================== Legacy Movement Target ====================
+    // Kept for backward compatibility with existing goals
+
     /**
-     * Set movement target position.
+     * Set movement target position (legacy - use navigateTo instead).
      */
     public void setMoveTarget(float x, float z) {
         this.targetX = x;
         this.targetZ = z;
-        this.hasMovementTarget = true;
+        this.hasTarget = true;
+
+        // Also trigger navigation
+        if (navigator != null) {
+            navigator.moveTo(x, mob.getY(), z);
+        }
     }
 
     /**
      * Clear movement target.
      */
     public void clearMoveTarget() {
-        this.hasMovementTarget = false;
+        this.hasTarget = false;
+        stopNavigation();
     }
 
     /**
      * Check if there's a movement target.
      */
     public boolean hasMoveTarget() {
-        return hasMovementTarget;
+        return hasTarget;
     }
 
     public float getTargetX() {
@@ -140,6 +243,14 @@ public class MobAI {
 
     public LivingEntity getMob() {
         return mob;
+    }
+
+    /**
+     * Get movement speed based on mob state.
+     */
+    private float getMovementSpeed() {
+        // Base speed, can be modified by goals
+        return 0.7f;
     }
 
     /**

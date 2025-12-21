@@ -20,6 +20,10 @@ uniform vec3 lightColor;
 // Day/Night: multiplies sky light (0.0 at midnight, 1.0 at noon)
 uniform float sunBrightness = 1.0;
 
+// Entity brightness: overrides vertex color lighting for entities/player
+// When > 0, uses this instead of vertexColor for brightness
+uniform float entityBrightness = 0.0;
+
 void main() {
     // Sample texture
     vec4 textureColor = texture(textureSampler, texCoord);
@@ -29,11 +33,17 @@ void main() {
         discard;
     }
     
-    // vertexColor contains: biomeColor * faceShade * skyLight
-    // Apply sunBrightness (day/night cycle) to the sky light component
-    vec3 dynamicVertexColor = vertexColor * sunBrightness;
+    // Determine lighting source
+    vec3 dynamicVertexColor;
+    if (entityBrightness > 0.0) {
+        // Entity rendering: use uniform brightness instead of vertex color
+        dynamicVertexColor = vec3(entityBrightness * sunBrightness);
+    } else {
+        // Block rendering: vertexColor contains biomeColor * faceShade * skyLight
+        dynamicVertexColor = vertexColor * sunBrightness;
+    }
     
-    // Minimum floor for deep caves (uses ambientLight to keep uniform alive)
+    // Minimum floor for deep caves
     dynamicVertexColor = max(dynamicVertexColor, vec3(ambientLight * 0.15));
     
     // Apply to texture

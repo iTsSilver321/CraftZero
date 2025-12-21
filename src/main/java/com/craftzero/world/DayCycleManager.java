@@ -116,8 +116,9 @@ public class DayCycleManager {
             // NIGHT - sun well below horizon
             skyColor.set(NIGHT_SKY);
             fogColor.set(0.02f, 0.02f, 0.05f);
-            lightColor.set(0.0f, 0.0f, 0.0f);
-            ambientIntensity = 0.15f;
+            // Moonlight - subtle blue-white directional light
+            lightColor.set(0.15f, 0.17f, 0.25f);
+            ambientIntensity = 0.25f; // Brighter ambient for moonlight
         }
     }
 
@@ -181,7 +182,7 @@ public class DayCycleManager {
             return 0.15f + 0.85f * smoothstep(t);
         } else {
             // Night: minimum brightness (moonlight)
-            return 0.15f;
+            return 0.30f;
         }
     }
 }

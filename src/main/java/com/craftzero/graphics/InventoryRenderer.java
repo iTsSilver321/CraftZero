@@ -376,6 +376,7 @@ public class InventoryRenderer {
             if (type.isItem()) {
                 drawItemSprite(x, y, size, type);
             } else {
+                // Same as hotbar - use full size
                 drawIsometricBlockIcon(x, y, size, type);
             }
         }
@@ -861,17 +862,20 @@ public class InventoryRenderer {
 
     /**
      * Draw an isometric 3D block icon using textures from the atlas.
+     * Orientation: top corner pointing straight up at 45 degrees.
      */
     private void drawIsometricBlockIcon(int x, int y, int size, BlockType type) {
         float[] topUV = type.getTextureCoords(0);
         float[] sideUV = type.getTextureCoords(2);
 
-        // Standard isometric cube proportions
-        float halfW = size * 0.5f;
-        float topHeight = size * 0.25f; // Top diamond
-        float sideHeight = size * 0.62f; // Taller side faces
-        float cx = x + halfW;
-        float topY = y + topHeight * 0.5f;
+        // Minecraft-style isometric proportions - slightly compact for inventory
+        float halfW = size * 0.46f; // Tiny bit narrower to prevent clipping
+        float quarterH = size * 0.23f; // Height of top diamond
+        float sideH = size * 0.52f; // Slightly taller side faces
+
+        // Center point of the icon - centered in slot
+        float cx = x + size * 0.5f - 1; // Shift left by 1px to center
+        float cy = y + size * 0.22f; // Shift up to prevent bottom clipping
 
         shader.unbind();
         atlas.bind(0);
@@ -880,22 +884,31 @@ public class InventoryRenderer {
         texturedShader.setUniform("projection", ortho);
         texturedShader.setUniform("textureSampler", 0);
 
-        // Top face (brightest)
+        // Draw TOP face (diamond shape, brightest) - top corner pointing UP
         texturedShader.setUniform("brightness", 1.0f);
-        float topCenter = topY + topHeight * 0.5f;
-        drawTexturedQuad(cx, topY, cx + halfW, topCenter, cx, topY + topHeight, cx - halfW, topCenter,
+        drawTexturedQuad(
+                cx, cy - quarterH, // Top corner (pointing up)
+                cx + halfW, cy, // Right corner
+                cx, cy + quarterH, // Bottom corner
+                cx - halfW, cy, // Left corner
                 topUV[0], topUV[1], topUV[2], topUV[3]);
 
-        // Left face (medium)
-        texturedShader.setUniform("brightness", 0.65f);
-        float sideTop = topY + topHeight;
-        float sideBottom = sideTop + sideHeight;
-        drawTexturedQuad(cx - halfW, topCenter, cx, sideTop, cx, sideBottom, cx - halfW, sideBottom - topHeight * 0.5f,
+        // Draw LEFT face (parallelogram, medium brightness)
+        texturedShader.setUniform("brightness", 0.6f);
+        drawTexturedQuad(
+                cx - halfW, cy, // Top-left
+                cx, cy + quarterH, // Top-right
+                cx, cy + quarterH + sideH, // Bottom-right
+                cx - halfW, cy + sideH, // Bottom-left
                 sideUV[0], sideUV[1], sideUV[2], sideUV[3]);
 
-        // Right face (darkest)
-        texturedShader.setUniform("brightness", 0.5f);
-        drawTexturedQuad(cx, sideTop, cx + halfW, topCenter, cx + halfW, sideBottom - topHeight * 0.5f, cx, sideBottom,
+        // Draw RIGHT face (parallelogram, darkest)
+        texturedShader.setUniform("brightness", 0.45f);
+        drawTexturedQuad(
+                cx, cy + quarterH, // Top-left
+                cx + halfW, cy, // Top-right
+                cx + halfW, cy + sideH, // Bottom-right
+                cx, cy + quarterH + sideH, // Bottom-left
                 sideUV[0], sideUV[1], sideUV[2], sideUV[3]);
 
         texturedShader.unbind();

@@ -1,24 +1,26 @@
 package com.craftzero.entity.ai;
 
-import com.craftzero.entity.Entity;
 import com.craftzero.entity.LivingEntity;
 import com.craftzero.main.Player;
 
 /**
  * AI Goal: Target the nearest player within range.
+ * Requires line-of-sight if configured.
  */
 public class TargetNearestGoal implements Goal {
 
     private final LivingEntity mob;
     private final MobAI ai;
     private final float range;
-    private final boolean requireSight; // TODO: implement line of sight check
+    private final boolean requireSight;
 
     private int checkCooldown;
+    private int sightLostTicks; // How long we've been without sight
     private static final int CHECK_INTERVAL = 10; // Check every 0.5 seconds
+    private static final int SIGHT_MEMORY = 60; // Remember target for 3 seconds without sight
 
     public TargetNearestGoal(LivingEntity mob, MobAI ai, float range) {
-        this(mob, ai, range, false);
+        this(mob, ai, range, true); // Default: require sight
     }
 
     public TargetNearestGoal(LivingEntity mob, MobAI ai, float range, boolean requireSight) {
@@ -27,6 +29,7 @@ public class TargetNearestGoal implements Goal {
         this.range = range;
         this.requireSight = requireSight;
         this.checkCooldown = 0;
+        this.sightLostTicks = 0;
     }
 
     @Override
@@ -38,7 +41,7 @@ public class TargetNearestGoal implements Goal {
     public boolean canUse() {
         if (checkCooldown > 0) {
             checkCooldown--;
-            return ai.hasTarget(); // Keep current target if we have one
+            return ai.hasMoveTarget(); // Keep current target if we have one
         }
 
         checkCooldown = CHECK_INTERVAL;
@@ -47,34 +50,56 @@ public class TargetNearestGoal implements Goal {
 
     @Override
     public boolean canContinue() {
-        LivingEntity target = ai.getTarget();
-
-        if (target == null || target.isDead() || target.isRemoved()) {
+        if (!ai.hasMoveTarget()) {
             return false;
         }
 
-        // Check if target is still in range (with some buffer)
-        float dist = mob.distanceTo(target);
-        return dist <= range * 1.5f;
+        Player player = mob.getWorld() != null ? mob.getWorld().getPlayer() : null;
+        if (player == null || player.getStats().getHealth() <= 0) {
+            return false;
+        }
+
+        // Check distance
+        float dist = distanceToPlayer(player);
+        if (dist > range * 1.5f) {
+            return false; // Too far
+        }
+
+        // Check line of sight
+        if (requireSight) {
+            if (hasLineOfSight(player)) {
+                sightLostTicks = 0; // Reset sight timer
+            } else {
+                sightLostTicks++;
+                if (sightLostTicks > SIGHT_MEMORY) {
+                    return false; // Lost sight for too long
+                }
+            }
+        }
+
+        // Update target position
+        ai.setMoveTarget(player.getPosition().x, player.getPosition().z);
+        return true;
     }
 
     @Override
     public void start() {
-        // Target already set in canUse
+        sightLostTicks = 0;
     }
 
     @Override
     public void tick() {
-        LivingEntity target = ai.getTarget();
-        if (target != null) {
-            // Look at target
-            mob.lookAt(target.getX(), target.getY() + target.getHeight() * 0.85f, target.getZ());
+        Player player = mob.getWorld() != null ? mob.getWorld().getPlayer() : null;
+        if (player != null) {
+            // Look at player
+            mob.lookAt(player.getPosition().x, player.getPosition().y + 1.6f, player.getPosition().z);
         }
     }
 
     @Override
     public void stop() {
-        ai.clearTarget();
+        ai.clearMoveTarget();
+        sightLostTicks = 0;
     }
 
     /**
@@ -84,8 +109,6 @@ public class TargetNearestGoal implements Goal {
         if (mob.getWorld() == null)
             return false;
 
-        // For now, we'll need to get the player from the world
-        // This will be properly implemented when we add entity lists to World
         Player player = mob.getWorld().getPlayer();
         if (player == null)
             return false;
@@ -99,12 +122,33 @@ public class TargetNearestGoal implements Goal {
         if (player.getStats().getHealth() <= 0)
             return false;
 
-        // Set as target (we need to handle Player differently since it's not a
-        // LivingEntity yet)
-        // For now, we'll store the target position
-        ai.setMoveTarget(player.getPosition().x, player.getPosition().z);
+        // Check line of sight if required
+        if (requireSight && !hasLineOfSight(player)) {
+            return false;
+        }
 
+        // Set as target
+        ai.setMoveTarget(player.getPosition().x, player.getPosition().z);
         return true;
+    }
+
+    /**
+     * Check if we can see the player (no solid blocks in the way).
+     */
+    private boolean hasLineOfSight(Player player) {
+        if (mob.getWorld() == null)
+            return false;
+
+        // Eye position of mob
+        float eyeY = mob.getY() + mob.getHeight() * 0.85f;
+
+        // Target position (player eye level)
+        float targetY = player.getPosition().y + 1.6f;
+
+        return LineOfSightUtil.hasLineOfSight(
+                mob.getWorld(),
+                mob.getX(), eyeY, mob.getZ(),
+                player.getPosition().x, targetY, player.getPosition().z);
     }
 
     private float distanceToPlayer(Player player) {

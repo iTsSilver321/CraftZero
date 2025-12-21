@@ -8,8 +8,22 @@ import java.util.List;
 /**
  * Chunk class representing a 16x256x16 section of the world.
  * Uses face culling to optimize mesh generation.
+ * Uses staged loading: EMPTY → GENERATED → LIGHTED → READY
  */
 public class Chunk {
+
+    /**
+     * Chunk loading states for staged processing.
+     */
+    public enum ChunkState {
+        EMPTY, // Just created, no terrain
+        GENERATING, // Terrain being generated async
+        GENERATED, // Terrain done, needs lighting
+        LIGHTING, // Lighting being calculated
+        LIGHTED, // Lighting done, ready for mesh
+        MESHING, // Mesh being built async
+        READY // Fully loaded and rendered
+    }
 
     public static final int WIDTH = 16;
     public static final int HEIGHT = 256;
@@ -23,6 +37,9 @@ public class Chunk {
     private Mesh transparentMesh; // Transparent (glass, water, leaves)
     private boolean dirty;
     private boolean empty;
+
+    // Chunk state for staged loading
+    private volatile ChunkState state = ChunkState.EMPTY;
 
     // Sky light system (0-15 per block, stored as nibbles)
     private byte[] skyLight; // Nibble storage: 2 values per byte
@@ -44,6 +61,7 @@ public class Chunk {
         this.dirty = true;
         this.lightDirty = true;
         this.empty = true;
+        this.state = ChunkState.EMPTY;
     }
 
     /**
@@ -549,6 +567,34 @@ public class Chunk {
         }
     }
 
+    // ============ CHUNK STATE MANAGEMENT ============
+
+    public ChunkState getState() {
+        return state;
+    }
+
+    public void setState(ChunkState state) {
+        this.state = state;
+    }
+
+    /**
+     * Check if all 4 neighbors exist and are at least at the given state.
+     */
+    public boolean hasAllNeighborsAtLeast(ChunkState minState) {
+        return northNeighbor != null && northNeighbor.getState().ordinal() >= minState.ordinal()
+                && southNeighbor != null && southNeighbor.getState().ordinal() >= minState.ordinal()
+                && eastNeighbor != null && eastNeighbor.getState().ordinal() >= minState.ordinal()
+                && westNeighbor != null && westNeighbor.getState().ordinal() >= minState.ordinal();
+    }
+
+    /**
+     * Check if all 4 neighbors exist (regardless of state).
+     */
+    public boolean hasAllNeighbors() {
+        return northNeighbor != null && southNeighbor != null
+                && eastNeighbor != null && westNeighbor != null;
+    }
+
     // ============ SKY LIGHT SYSTEM ============
 
     /**
@@ -639,6 +685,10 @@ public class Chunk {
             }
         }
 
+        // Step 1.5: Seed light from neighbor chunks at borders
+        // This allows light to propagate from lit areas in neighbors into this chunk
+        seedLightFromNeighbors(lightQueue);
+
         // Step 2: BFS Flood Fill - spread light in all 6 directions
         int[][] directions = {
                 { 1, 0, 0 }, { -1, 0, 0 }, // East, West
@@ -698,6 +748,90 @@ public class Chunk {
     }
 
     /**
+     * Seed light from neighbor chunks at chunk borders.
+     * This allows light to propagate from lit neighbor areas into this chunk.
+     */
+    private void seedLightFromNeighbors(java.util.Queue<int[]> lightQueue) {
+        // Check each border and pull light from neighbors
+
+        // North border (z = 0, check neighbor at z-1)
+        if (northNeighbor != null) {
+            for (int x = 0; x < WIDTH; x++) {
+                for (int y = 0; y < HEIGHT; y++) {
+                    int neighborLight = northNeighbor.getSkyLight(x, y, DEPTH - 1);
+                    if (neighborLight > 1) {
+                        BlockType block = getBlock(x, y, 0);
+                        if (block.isAir() || block.isTransparent()) {
+                            int newLight = neighborLight - 1;
+                            if (newLight > getSkyLight(x, y, 0)) {
+                                setSkyLight(x, y, 0, newLight);
+                                lightQueue.add(new int[] { x, y, 0, newLight });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // South border (z = DEPTH-1, check neighbor at z+1)
+        if (southNeighbor != null) {
+            for (int x = 0; x < WIDTH; x++) {
+                for (int y = 0; y < HEIGHT; y++) {
+                    int neighborLight = southNeighbor.getSkyLight(x, y, 0);
+                    if (neighborLight > 1) {
+                        BlockType block = getBlock(x, y, DEPTH - 1);
+                        if (block.isAir() || block.isTransparent()) {
+                            int newLight = neighborLight - 1;
+                            if (newLight > getSkyLight(x, y, DEPTH - 1)) {
+                                setSkyLight(x, y, DEPTH - 1, newLight);
+                                lightQueue.add(new int[] { x, y, DEPTH - 1, newLight });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // East border (x = WIDTH-1, check neighbor at x+1)
+        if (eastNeighbor != null) {
+            for (int z = 0; z < DEPTH; z++) {
+                for (int y = 0; y < HEIGHT; y++) {
+                    int neighborLight = eastNeighbor.getSkyLight(0, y, z);
+                    if (neighborLight > 1) {
+                        BlockType block = getBlock(WIDTH - 1, y, z);
+                        if (block.isAir() || block.isTransparent()) {
+                            int newLight = neighborLight - 1;
+                            if (newLight > getSkyLight(WIDTH - 1, y, z)) {
+                                setSkyLight(WIDTH - 1, y, z, newLight);
+                                lightQueue.add(new int[] { WIDTH - 1, y, z, newLight });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // West border (x = 0, check neighbor at x-1)
+        if (westNeighbor != null) {
+            for (int z = 0; z < DEPTH; z++) {
+                for (int y = 0; y < HEIGHT; y++) {
+                    int neighborLight = westNeighbor.getSkyLight(WIDTH - 1, y, z);
+                    if (neighborLight > 1) {
+                        BlockType block = getBlock(0, y, z);
+                        if (block.isAir() || block.isTransparent()) {
+                            int newLight = neighborLight - 1;
+                            if (newLight > getSkyLight(0, y, z)) {
+                                setSkyLight(0, y, z, newLight);
+                                lightQueue.add(new int[] { 0, y, z, newLight });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Mark light as needing recalculation.
      */
     public void markLightDirty() {
@@ -713,5 +847,92 @@ public class Chunk {
             transparentMesh.cleanup();
             transparentMesh = null;
         }
+    }
+
+    // ============ ASYNC MESH BUILDING SUPPORT ============
+
+    /**
+     * Get block at coordinates, looking up from neighbors if out of bounds.
+     * Used by ChunkMeshBuilder for thread-safe cross-chunk lookups.
+     */
+    public BlockType getBlockWithNeighbors(int x, int y, int z) {
+        if (y < 0 || y >= HEIGHT) {
+            return BlockType.AIR;
+        }
+
+        if (x < 0) {
+            return westNeighbor != null ? westNeighbor.getBlock(WIDTH + x, y, z) : BlockType.AIR;
+        } else if (x >= WIDTH) {
+            return eastNeighbor != null ? eastNeighbor.getBlock(x - WIDTH, y, z) : BlockType.AIR;
+        } else if (z < 0) {
+            return northNeighbor != null ? northNeighbor.getBlock(x, y, DEPTH + z) : BlockType.AIR;
+        } else if (z >= DEPTH) {
+            return southNeighbor != null ? southNeighbor.getBlock(x, y, z - DEPTH) : BlockType.AIR;
+        }
+
+        return getBlock(x, y, z);
+    }
+
+    /**
+     * Get sky light at coordinates, looking up from neighbors if out of bounds.
+     * Used by ChunkMeshBuilder for thread-safe cross-chunk lookups.
+     */
+    public int getSkyLightWithNeighbors(int x, int y, int z) {
+        if (y < 0 || y >= HEIGHT) {
+            return y >= HEIGHT ? 15 : 0;
+        }
+
+        if (x < 0) {
+            return westNeighbor != null ? westNeighbor.getSkyLight(WIDTH + x, y, z) : 15;
+        } else if (x >= WIDTH) {
+            return eastNeighbor != null ? eastNeighbor.getSkyLight(x - WIDTH, y, z) : 15;
+        } else if (z < 0) {
+            return northNeighbor != null ? northNeighbor.getSkyLight(x, y, DEPTH + z) : 15;
+        } else if (z >= DEPTH) {
+            return southNeighbor != null ? southNeighbor.getSkyLight(x, y, z - DEPTH) : 15;
+        }
+
+        return getSkyLight(x, y, z);
+    }
+
+    /**
+     * Apply pre-built mesh data to this chunk.
+     * MUST be called on the main thread (OpenGL context).
+     *
+     * @param data The mesh data built by ChunkMeshBuilder
+     */
+    public void applyMeshData(ChunkMeshData data) {
+        // Clean up old meshes
+        if (mesh != null) {
+            mesh.cleanup();
+            mesh = null;
+        }
+        if (transparentMesh != null) {
+            transparentMesh.cleanup();
+            transparentMesh = null;
+        }
+
+        // Create opaque mesh
+        if (data.hasOpaqueMesh()) {
+            mesh = new com.craftzero.graphics.Mesh(
+                    data.opaquePositions,
+                    data.opaqueTexCoords,
+                    data.opaqueNormals,
+                    data.opaqueColors,
+                    data.opaqueIndices);
+        }
+
+        // Create transparent mesh
+        if (data.hasTransparentMesh()) {
+            transparentMesh = new com.craftzero.graphics.Mesh(
+                    data.transPositions,
+                    data.transTexCoords,
+                    data.transNormals,
+                    data.transColors,
+                    data.transIndices);
+        }
+
+        empty = data.empty;
+        dirty = false;
     }
 }

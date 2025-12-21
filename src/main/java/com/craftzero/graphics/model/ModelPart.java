@@ -400,7 +400,10 @@ public class ModelPart {
             localTransform.rotateY(rotationY);
             localTransform.rotateX(rotationX);
 
-            // 4. Translate back from pivot (legacy behavior)
+            // 4. Apply scale (needed for fur layer rendering)
+            localTransform.scale(scaleX, scaleY, scaleZ);
+
+            // 5. Translate back from pivot (legacy behavior)
             localTransform.translate(-pivotX, -pivotY, -pivotZ);
         }
 

@@ -31,29 +31,25 @@ public class BlockHighlightRenderer {
     public void init() throws Exception {
         // Create simple line shader
         shader = new ShaderProgram();
-        shader.createVertexShader(
-                "#version 330 core\n" +
-                        "layout (location = 0) in vec3 aPos;\n" +
-                        "uniform mat4 mvp;\n" +
-                        "void main() {\n" +
-                        "    gl_Position = mvp * vec4(aPos, 1.0);\n" +
-                        "}");
-        shader.createFragmentShader(
-                "#version 330 core\n" +
-                        "out vec4 fragColor;\n" +
-                        "void main() {\n" +
-                        "    fragColor = vec4(0.0, 0.0, 0.0, 0.6);\n" +
-                        "}");
+        shader.createVertexShader("#version 330 core\n" + "layout (location = 0) in vec3 aPos;\n"
+                + "uniform mat4 mvp;\n" + "void main() {\n" + "    gl_Position = mvp * vec4(aPos, 1.0);\n" + "}");
+        shader.createFragmentShader("#version 330 core\n" + "out vec4 fragColor;\n" + "void main() {\n"
+                + "    fragColor = vec4(0.0, 0.0, 0.0, 0.6);\n" + "}");
         shader.link();
         shader.createUniform("mvp");
 
-        // Create dynamic VBO for face edges (4 edges = 8 vertices = 24 floats)
-        vao = glGenVertexArrays();
-        vbo = glGenBuffers();
+        // Create VBO for all 6 faces (6 faces * 4 edges * 2 vertices = 48 vertices =
+        // 144 floats)
+        vao =
+
+                glGenVertexArrays();
+        vbo =
+
+                glGenBuffers();
 
         glBindVertexArray(vao);
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, 24 * Float.BYTES, GL_DYNAMIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, 144 * Float.BYTES, GL_DYNAMIC_DRAW);
 
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 3, GL_FLOAT, false, 0, 0);
@@ -61,7 +57,7 @@ public class BlockHighlightRenderer {
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
 
-        vertexBuffer = MemoryUtil.memAllocFloat(24);
+        vertexBuffer = MemoryUtil.memAllocFloat(144);
         modelMatrix = new Matrix4f();
     }
 
@@ -232,23 +228,65 @@ public class BlockHighlightRenderer {
                 vertices[22] = O;
                 vertices[23] = O;
                 break;
+
         }
     }
 
-    public void render(Camera camera, Raycast.RaycastResult target) {
+    public void render(Camera camera, Raycast.RaycastResult target, com.craftzero.world.World world) {
         if (target == null || !target.hit || target.face < 0) {
             return;
         }
 
         Vector3i pos = target.blockPos;
 
-        // Get vertices for the targeted face
-        float[] vertices = new float[24];
-        getFaceVertices(target.face, vertices);
+        // Calculate which faces are visible to the player
+        // A face is visible if:
+        // 1. The camera is on the same side as the face normal (facing camera)
+        // 2. The neighbor block on that face does not occlude it (exposed)
+        float camX = camera.getPosition().x;
+        float camY = camera.getPosition().y;
+        float camZ = camera.getPosition().z;
 
-        // Update VBO with face vertices
+        boolean[] visibleFaces = new boolean[6];
+
+        // Check visibility against block face planes (Back-Face Culling for Wireframe)
+        // A face is visible if the camera is strictly "in front" of the face plane.
+
+        // Face 0: Top (+Y) -> Plane at Y+1. Camera must be > Y+1.
+        visibleFaces[0] = (camY > pos.y + 1.0f) && !world.getBlock(pos.x, pos.y + 1, pos.z).occludesFace();
+
+        // Face 1: Bottom (-Y) -> Plane at Y. Camera must be < Y.
+        visibleFaces[1] = (camY < pos.y) && !world.getBlock(pos.x, pos.y - 1, pos.z).occludesFace();
+
+        // Face 2: North (-Z) -> Plane at Z. Camera must be < Z.
+        visibleFaces[2] = (camZ < pos.z) && !world.getBlock(pos.x, pos.y, pos.z - 1).occludesFace();
+
+        // Face 3: South (+Z) -> Plane at Z+1. Camera must be > Z+1.
+        visibleFaces[3] = (camZ > pos.z + 1.0f) && !world.getBlock(pos.x, pos.y, pos.z + 1).occludesFace();
+
+        // Face 4: East (+X) -> Plane at X+1. Camera must be > X+1.
+        visibleFaces[4] = (camX > pos.x + 1.0f) && !world.getBlock(pos.x + 1, pos.y, pos.z).occludesFace();
+
+        // Face 5: West (-X) -> Plane at X. Camera must be < X.
+        visibleFaces[5] = (camX < pos.x) && !world.getBlock(pos.x - 1, pos.y, pos.z).occludesFace();
+
+        // Build vertices for visible faces only
+        float[] faceVerts = new float[24];
+        int vertexCount = 0;
         vertexBuffer.clear();
-        vertexBuffer.put(vertices).flip();
+        for (int face = 0; face < 6; face++) {
+            if (visibleFaces[face]) {
+                getFaceVertices(face, faceVerts);
+                vertexBuffer.put(faceVerts);
+                vertexCount += 8; // 8 vertices per face
+            }
+        }
+        vertexBuffer.flip();
+
+        if (vertexCount == 0)
+            return; // No visible faces
+
+        // Update VBO with visible face vertices
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
         glBufferSubData(GL_ARRAY_BUFFER, 0, vertexBuffer);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -256,6 +294,10 @@ public class BlockHighlightRenderer {
         // Enable blending for semi-transparent lines
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        // Enable depth testing so highlight is hidden behind blocks
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
 
         // Thicker lines
         glLineWidth(2.0f);
@@ -271,7 +313,7 @@ public class BlockHighlightRenderer {
         shader.setUniform("mvp", mvp);
 
         glBindVertexArray(vao);
-        glDrawArrays(GL_LINES, 0, 8); // 4 edges = 8 vertices
+        glDrawArrays(GL_LINES, 0, vertexCount); // Use computed vertex count
         glBindVertexArray(0);
 
         shader.unbind();
@@ -290,4 +332,5 @@ public class BlockHighlightRenderer {
         glDeleteBuffers(vbo);
         glDeleteVertexArrays(vao);
     }
+
 }

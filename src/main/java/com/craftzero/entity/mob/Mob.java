@@ -1,7 +1,10 @@
 package com.craftzero.entity.mob;
 
 import com.craftzero.entity.LivingEntity;
+import com.craftzero.entity.ai.EscapeGoal;
+import com.craftzero.entity.ai.LookAtPlayerGoal;
 import com.craftzero.entity.ai.MobAI;
+import com.craftzero.entity.ai.SwimGoal;
 import com.craftzero.world.BlockType;
 
 import java.util.Random;
@@ -35,6 +38,11 @@ public abstract class Mob extends LivingEntity {
         this.burnsInSunlight = false;
         this.experienceValue = 5;
         this.despawnTimer = 0;
+
+        // Add base goals to all mobs
+        ai.addGoal(0, new SwimGoal(this)); // Highest priority - don't drown
+        ai.addGoal(1, new EscapeGoal(this, ai, 0.6f)); // Escape traps
+        ai.addGoal(8, new LookAtPlayerGoal(this, 8.0f)); // Look at nearby players when idle
     }
 
     @Override

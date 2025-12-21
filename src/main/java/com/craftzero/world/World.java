@@ -1,6 +1,7 @@
 package com.craftzero.world;
 
 import com.craftzero.graphics.Camera;
+import com.craftzero.graphics.Frustum;
 import com.craftzero.graphics.Renderer;
 import com.craftzero.graphics.Texture;
 import com.craftzero.entity.DroppedItem;
@@ -8,11 +9,15 @@ import com.craftzero.entity.Entity;
 import com.craftzero.math.Noise;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * World manager that handles chunk loading, generation, and rendering.
@@ -20,11 +25,16 @@ import java.util.Random;
  */
 public class World {
 
-    private static final int RENDER_DISTANCE = 8; // Chunks in each direction
+    private static final int RENDER_DISTANCE = 12; // Chunks in each direction
+    private static final int UNLOAD_DISTANCE = RENDER_DISTANCE + 2; // Chunks beyond this are unloaded
+    private static final int MAX_MESH_UPLOADS_PER_FRAME = 3; // Limit GPU uploads per frame
+    private static final int MAX_GENERATES_PER_FRAME = 2; // Limit async terrain generation submits
+    private static final int MAX_LIGHTINGS_PER_FRAME = 2; // Limit async lighting submits
+    private static final int MAX_MESHES_PER_FRAME = 2; // Limit async mesh building submits
     private static final int SEA_LEVEL = 62;
     private static final int BASE_HEIGHT = 64;
 
-    private final Map<Long, Chunk> chunks;
+    private final ConcurrentHashMap<Long, Chunk> chunks;
     private final Noise terrainNoise;
     private final Noise biomeNoise;
     private final Noise caveNoise;
@@ -51,9 +61,45 @@ public class World {
     // Day/night cycle manager reference
     private DayCycleManager dayCycleManager;
 
+    // Async mesh building infrastructure
+    private final ExecutorService meshBuildPool;
+    private final Set<Long> chunksBeingBuilt; // Chunks currently being processed
+    private final ConcurrentLinkedQueue<ChunkMeshTask> completedMeshTasks;
+
+    // Frustum culling
+    private final Frustum frustum;
+    private final org.joml.Matrix4f viewProjection;
+
+    // Pre-calculated spiral loading order (center-out, sorted by distance)
+    private static final int[][] SPIRAL_OFFSETS;
+    static {
+        // Generate offsets for render distance
+        int maxDist = 14; // Slightly more than RENDER_DISTANCE
+        java.util.List<int[]> offsets = new java.util.ArrayList<>();
+        for (int dx = -maxDist; dx <= maxDist; dx++) {
+            for (int dz = -maxDist; dz <= maxDist; dz++) {
+                offsets.add(new int[] { dx, dz, dx * dx + dz * dz }); // Store distance squared
+            }
+        }
+        // Sort by distance (closest first)
+        offsets.sort((a, b) -> Integer.compare(a[2], b[2]));
+        SPIRAL_OFFSETS = offsets.toArray(new int[0][]);
+    }
+
+    // Task class to hold chunk and its built mesh data
+    private static class ChunkMeshTask {
+        final Chunk chunk;
+        final ChunkMeshData meshData;
+
+        ChunkMeshTask(Chunk chunk, ChunkMeshData meshData) {
+            this.chunk = chunk;
+            this.meshData = meshData;
+        }
+    }
+
     public World(long seed) {
         this.seed = seed;
-        this.chunks = new HashMap<>();
+        this.chunks = new ConcurrentHashMap<>();
         this.terrainNoise = new Noise(seed);
         this.biomeNoise = new Noise(seed + 1);
         this.caveNoise = new Noise(seed + 2);
@@ -66,6 +112,19 @@ public class World {
         this.entities = new ArrayList<>();
         this.entitiesToAdd = new ArrayList<>();
         this.entitiesToRemove = new ArrayList<>();
+
+        // Async mesh building with 4 worker threads
+        this.meshBuildPool = Executors.newFixedThreadPool(4, r -> {
+            Thread t = new Thread(r, "ChunkMeshBuilder");
+            t.setDaemon(true);
+            return t;
+        });
+        this.chunksBeingBuilt = ConcurrentHashMap.newKeySet();
+        this.completedMeshTasks = new ConcurrentLinkedQueue<>();
+
+        // Frustum culling
+        this.frustum = new Frustum();
+        this.viewProjection = new org.joml.Matrix4f();
     }
 
     public void init() throws Exception {
@@ -81,17 +140,39 @@ public class World {
     }
 
     /**
-     * Get or generate a chunk at the specified coordinates.
+     * Get chunk at the specified coordinates, creating if needed.
+     * Does NOT generate terrain immediately - that happens async in update().
      */
     public Chunk getChunk(int chunkX, int chunkZ) {
         long key = chunkKey(chunkX, chunkZ);
         Chunk chunk = chunks.get(key);
 
         if (chunk == null) {
-            // Create and register chunk BEFORE generation to support cross-chunk decoration
             chunk = new Chunk(chunkX, chunkZ);
             chunks.put(key, chunk);
+        }
+
+        return chunk;
+    }
+
+    /**
+     * Get chunk with immediate terrain generation.
+     * Used for block queries/edits that need data NOW.
+     */
+    public Chunk getChunkNow(int chunkX, int chunkZ) {
+        long key = chunkKey(chunkX, chunkZ);
+        Chunk chunk = chunks.get(key);
+
+        if (chunk == null) {
+            chunk = new Chunk(chunkX, chunkZ);
+            chunks.put(key, chunk);
+        }
+
+        // Force synchronous generation if needed
+        if (chunk.getState() == Chunk.ChunkState.EMPTY) {
+            chunk.setState(Chunk.ChunkState.GENERATING);
             generateChunkTerrain(chunk, chunkX, chunkZ);
+            chunk.setState(Chunk.ChunkState.GENERATED);
         }
 
         return chunk;
@@ -132,33 +213,61 @@ public class World {
         // Pass 1.7: Ores (Replace stone with ore clusters)
         oreGenerator.generate(chunk, seed);
 
-        // Pass 2: Trees (Can overwrite neighbors safely if neighbors are generated)
+        // Pass 2: Trees within this chunk
         for (int x = 0; x < Chunk.WIDTH; x++) {
             for (int z = 0; z < Chunk.DEPTH; z++) {
                 int globalX = worldX + x;
                 int globalZ = worldZ + z;
-
-                double biomeValue = biomeNoise.octaveNoise2D(globalX * 0.005, globalZ * 0.005, 4, 0.5);
-                int height = calculateHeight(globalX, globalZ, biomeValue);
-                BiomeType biome = getBiome(biomeValue);
-
-                // Generate trees for forest biome
-                if (biome == BiomeType.FOREST && height > SEA_LEVEL) {
-                    double treeValue = treeNoise.noise2D(globalX * 0.5, globalZ * 0.5);
-                    // Reduced density: threshold 0.7
-                    if (treeValue > 0.7) {
-                        // Spacing Check: Local Maximum (Radius 8 = ~16 blocks spacing)
-                        // Significantly increased to prevent clumping
-                        if (isLocalMaximum(globalX, globalZ, 8)) {
-                            // Valid placement check (Must be on grass)
-                            if (getBlock(globalX, height, globalZ) == BlockType.GRASS) {
-                                generateTree(chunk, globalX, height + 1, globalZ);
-                            }
-                        }
-                    }
-                }
+                generateTreeIfPresent(chunk, globalX, globalZ);
             }
         }
+
+        // Pass 3: Check for trees in neighboring chunks (within 2 blocks of border)
+        // that would have leaves extending into this chunk
+        int leafRadius = 2; // Max leaf radius
+        for (int x = -leafRadius; x < Chunk.WIDTH + leafRadius; x++) {
+            for (int z = -leafRadius; z < Chunk.DEPTH + leafRadius; z++) {
+                // Skip positions inside this chunk (already handled)
+                if (x >= 0 && x < Chunk.WIDTH && z >= 0 && z < Chunk.DEPTH)
+                    continue;
+
+                int globalX = worldX + x;
+                int globalZ = worldZ + z;
+                generateTreeIfPresent(chunk, globalX, globalZ);
+            }
+        }
+    }
+
+    /**
+     * Check if a tree exists at this global position and generate its parts in the
+     * given chunk.
+     */
+    private void generateTreeIfPresent(Chunk chunk, int globalX, int globalZ) {
+        double biomeValue = biomeNoise.octaveNoise2D(globalX * 0.005, globalZ * 0.005, 4, 0.5);
+        int height = calculateHeight(globalX, globalZ, biomeValue);
+        BiomeType biome = getBiome(biomeValue);
+
+        // Trees only spawn in forest biome, above sea level, and on grass (not beach
+        // sand)
+        // Beach is height <= SEA_LEVEL + 2, so we need height > SEA_LEVEL + 2 for grass
+        if (biome == BiomeType.FOREST && height > SEA_LEVEL + 2) {
+            double treeValue = treeNoise.noise2D(globalX * 0.5, globalZ * 0.5);
+            if (treeValue > 0.7 && isLocalMaximum(globalX, globalZ, 8)) {
+                // Deterministic height based on position
+                int trunkHeight = 5 + getPositionHash(globalX, globalZ) % 3;
+                generateTreeAtPosition(chunk, globalX, height + 1, globalZ, trunkHeight);
+            }
+        }
+    }
+
+    /**
+     * Generate a deterministic hash for a position (for random-like but
+     * reproducible values).
+     */
+    private int getPositionHash(int x, int z) {
+        long hash = seed ^ (x * 73856093L) ^ (z * 19349663L);
+        hash = hash ^ (hash >>> 16);
+        return Math.abs((int) hash);
     }
 
     /**
@@ -179,21 +288,21 @@ public class World {
         return true;
     }
 
-    private void generateTree(Chunk chunk, int x, int y, int z) {
+    /**
+     * Generate tree parts at position (only places blocks within the target chunk).
+     */
+    private void generateTreeAtPosition(Chunk chunk, int x, int y, int z, int trunkHeight) {
         // x, z are GLOBAL coordinates
-        // Taller trees: 5 to 7 blocks tall
-        int trunkHeight = 5 + random.nextInt(3);
 
-        // Trunk
+        // Trunk - only in this chunk's bounds
         for (int i = 0; i < trunkHeight; i++) {
-            setBlock(x, y + i, z, BlockType.OAK_LOG);
+            setBlockInChunk(chunk, x, y + i, z, BlockType.OAK_LOG);
         }
 
-        // Leaves - Fuller & Rounded pattern
+        // Leaves - Fuller & Rounded pattern (only within chunk bounds)
         int h = trunkHeight;
 
         // Loop: Bottom (h-2), Middle (h-1), Top (h), Peak (h+1)
-        // Raised canopy - starts at h-2 instead of h-3
         for (int ly = y + h - 2; ly <= y + h + 1; ly++) {
             int dy = ly - (y + h);
             int radius;
@@ -208,7 +317,6 @@ public class World {
 
             for (int lx = x - radius; lx <= x + radius; lx++) {
                 for (int lz = z - radius; lz <= z + radius; lz++) {
-                    // MC Oak logic: Cross for peak, 3x3 for top, 5x5-corners for bottom
                     int dx = Math.abs(lx - x);
                     int dz = Math.abs(lz - z);
                     boolean place = false;
@@ -227,9 +335,16 @@ public class World {
                     if (!place)
                         continue;
 
-                    // Force full square generation minus corners
-                    if (getBlock(lx, ly, lz) != BlockType.OAK_LOG) {
-                        setBlock(lx, ly, lz, BlockType.LEAVES);
+                    // Only place if within chunk AND not overwriting trunk
+                    int chunkWorldX = chunk.getChunkX() * Chunk.WIDTH;
+                    int chunkWorldZ = chunk.getChunkZ() * Chunk.DEPTH;
+                    int localLx = lx - chunkWorldX;
+                    int localLz = lz - chunkWorldZ;
+
+                    if (localLx >= 0 && localLx < Chunk.WIDTH && localLz >= 0 && localLz < Chunk.DEPTH) {
+                        if (chunk.getBlock(localLx, ly, localLz) != BlockType.OAK_LOG) {
+                            chunk.setBlock(localLx, ly, localLz, BlockType.LEAVES);
+                        }
                     }
                 }
             }
@@ -368,53 +483,230 @@ public class World {
     }
 
     /**
-     * Generate a tree at the specified position.
-     */
-
-    /**
      * Update chunks around the player.
+     * Uses staged loading: EMPTY → GENERATED → LIGHTED → READY
+     * Chunks only mesh when all neighbors are LIGHTED to prevent border artifacts.
      */
     public void update(Camera camera) {
         int playerChunkX = (int) Math.floor(camera.getPosition().x / Chunk.WIDTH);
         int playerChunkZ = (int) Math.floor(camera.getPosition().z / Chunk.DEPTH);
 
-        // Load/generate chunks around player
-        for (int dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
-            for (int dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++) {
+        // Step 1: Process completed mesh build tasks (rate limited)
+        int uploadsThisFrame = 0;
+        while (uploadsThisFrame < MAX_MESH_UPLOADS_PER_FRAME) {
+            ChunkMeshTask task = completedMeshTasks.poll();
+            if (task == null)
+                break;
+
+            // Apply mesh data on main thread (GPU upload)
+            task.chunk.applyMeshData(task.meshData);
+            task.chunk.setState(Chunk.ChunkState.READY);
+            chunksBeingBuilt.remove(chunkKey(task.chunk.getChunkX(), task.chunk.getChunkZ()));
+            uploadsThisFrame++;
+        }
+
+        // Step 2: Ensure all chunks in range exist and set up neighbors
+        for (int dx = -RENDER_DISTANCE - 1; dx <= RENDER_DISTANCE + 1; dx++) {
+            for (int dz = -RENDER_DISTANCE - 1; dz <= RENDER_DISTANCE + 1; dz++) {
                 int chunkX = playerChunkX + dx;
                 int chunkZ = playerChunkZ + dz;
+                long key = chunkKey(chunkX, chunkZ);
 
-                Chunk chunk = getChunk(chunkX, chunkZ);
+                // Get or create chunk (does NOT generate terrain anymore)
+                Chunk chunk = chunks.get(key);
+                if (chunk == null) {
+                    chunk = new Chunk(chunkX, chunkZ);
+                    chunks.put(key, chunk);
+                }
 
-                // Set up neighbor references for seamless rendering
+                // Set up neighbor references
                 chunk.setNeighbors(
                         chunks.get(chunkKey(chunkX, chunkZ - 1)),
                         chunks.get(chunkKey(chunkX, chunkZ + 1)),
                         chunks.get(chunkKey(chunkX + 1, chunkZ)),
                         chunks.get(chunkKey(chunkX - 1, chunkZ)));
+            }
+        }
 
-                // Build mesh if dirty
-                if (chunk.isDirty()) {
-                    chunk.buildMesh();
+        // Step 3: Progress chunks through states (with per-frame rate limiting)
+        // Uses spiral order: closest chunks to player are processed first
+        int generationsThisFrame = 0;
+        int lightingsThisFrame = 0;
+        int meshesThisFrame = 0;
+
+        for (int[] offset : SPIRAL_OFFSETS) {
+            int dx = offset[0];
+            int dz = offset[1];
+
+            // Skip if outside render distance
+            if (Math.abs(dx) > RENDER_DISTANCE || Math.abs(dz) > RENDER_DISTANCE)
+                continue;
+
+            int chunkX = playerChunkX + dx;
+            int chunkZ = playerChunkZ + dz;
+            long key = chunkKey(chunkX, chunkZ);
+            Chunk chunk = chunks.get(key);
+
+            if (chunk == null)
+                continue;
+
+            Chunk.ChunkState state = chunk.getState();
+
+            // EMPTY → Submit for terrain generation (rate limited)
+            if (state == Chunk.ChunkState.EMPTY && !chunksBeingBuilt.contains(key)) {
+                if (generationsThisFrame >= MAX_GENERATES_PER_FRAME)
+                    continue;
+                generationsThisFrame++;
+
+                chunk.setState(Chunk.ChunkState.GENERATING);
+                chunksBeingBuilt.add(key);
+                final Chunk chunkRef = chunk;
+                final int cx = chunkX, cz = chunkZ;
+                meshBuildPool.submit(() -> {
+                    try {
+                        generateChunkTerrain(chunkRef, cx, cz);
+                        chunkRef.setState(Chunk.ChunkState.GENERATED);
+                    } catch (Exception e) {
+                        System.err.println("Error generating chunk: " + e.getMessage());
+                    } finally {
+                        chunksBeingBuilt.remove(chunkKey(cx, cz));
+                    }
+                });
+            }
+
+            // GENERATED → Submit for lighting (rate limited, ASYNC!)
+            else if (state == Chunk.ChunkState.GENERATED && !chunksBeingBuilt.contains(key)) {
+                if (chunk.hasAllNeighborsAtLeast(Chunk.ChunkState.GENERATED)) {
+                    if (lightingsThisFrame >= MAX_LIGHTINGS_PER_FRAME)
+                        continue;
+                    lightingsThisFrame++;
+
+                    chunk.setState(Chunk.ChunkState.LIGHTING);
+                    chunksBeingBuilt.add(key);
+                    final Chunk chunkRef = chunk;
+                    final long chunkKey = key;
+                    meshBuildPool.submit(() -> {
+                        try {
+                            chunkRef.calculateSkyLight();
+                            chunkRef.setState(Chunk.ChunkState.LIGHTED);
+                        } catch (Exception e) {
+                            System.err.println("Error lighting chunk: " + e.getMessage());
+                            chunkRef.setState(Chunk.ChunkState.GENERATED);
+                        } finally {
+                            chunksBeingBuilt.remove(chunkKey);
+                        }
+                    });
                 }
             }
+
+            // LIGHTED → Submit for mesh building (rate limited)
+            else if (state == Chunk.ChunkState.LIGHTED && !chunksBeingBuilt.contains(key)) {
+                if (chunk.hasAllNeighborsAtLeast(Chunk.ChunkState.LIGHTED)) {
+                    if (meshesThisFrame >= MAX_MESHES_PER_FRAME)
+                        continue;
+                    meshesThisFrame++;
+
+                    chunk.setState(Chunk.ChunkState.MESHING);
+                    chunksBeingBuilt.add(key);
+                    final Chunk chunkRef = chunk;
+                    meshBuildPool.submit(() -> {
+                        try {
+                            ChunkMeshData meshData = ChunkMeshBuilder.buildMeshData(chunkRef);
+                            completedMeshTasks.offer(new ChunkMeshTask(chunkRef, meshData));
+                        } catch (Exception e) {
+                            System.err.println("Error building chunk mesh: " + e.getMessage());
+                            chunkRef.setState(Chunk.ChunkState.LIGHTED);
+                            chunksBeingBuilt.remove(chunkKey(chunkRef.getChunkX(), chunkRef.getChunkZ()));
+                        }
+                    });
+                }
+            }
+
+            // READY but dirty (block placed/removed) → Rebuild mesh
+            else if (state == Chunk.ChunkState.READY && chunk.isDirty() && !chunksBeingBuilt.contains(key)) {
+                if (chunk.hasAllNeighborsAtLeast(Chunk.ChunkState.LIGHTED)) {
+                    if (meshesThisFrame >= MAX_MESHES_PER_FRAME)
+                        continue;
+                    meshesThisFrame++;
+
+                    chunk.setState(Chunk.ChunkState.MESHING);
+                    chunksBeingBuilt.add(key);
+                    final Chunk chunkRef = chunk;
+                    meshBuildPool.submit(() -> {
+                        try {
+                            chunkRef.calculateSkyLight();
+                            ChunkMeshData meshData = ChunkMeshBuilder.buildMeshData(chunkRef);
+                            completedMeshTasks.offer(new ChunkMeshTask(chunkRef, meshData));
+                        } catch (Exception e) {
+                            System.err.println("Error rebuilding chunk mesh: " + e.getMessage());
+                            chunkRef.setState(Chunk.ChunkState.READY);
+                            chunksBeingBuilt.remove(chunkKey(chunkRef.getChunkX(), chunkRef.getChunkZ()));
+                        }
+                    });
+                }
+            }
+        }
+
+        // Step 4: Unload distant chunks
+        List<Long> toUnload = new ArrayList<>();
+        for (Map.Entry<Long, Chunk> entry : chunks.entrySet()) {
+            Chunk chunk = entry.getValue();
+            int dx = chunk.getChunkX() - playerChunkX;
+            int dz = chunk.getChunkZ() - playerChunkZ;
+
+            if (Math.abs(dx) > UNLOAD_DISTANCE || Math.abs(dz) > UNLOAD_DISTANCE) {
+                toUnload.add(entry.getKey());
+            }
+        }
+
+        for (Long key : toUnload) {
+            Chunk chunk = chunks.remove(key);
+            if (chunk != null) {
+                chunk.cleanup();
+            }
+            chunksBeingBuilt.remove(key);
         }
     }
 
     /**
-     * Render all visible chunks.
+     * Render all visible chunks with frustum culling.
      */
-    public void render(Renderer renderer, Camera camera) {
+    /**
+     * Render world chunks.
+     * 
+     * @param midPassAction Optional action to run between Opaque and Transparent
+     *                      passes (e.g. Block Highlight).
+     */
+    public void render(Renderer renderer, Camera camera, Runnable midPassAction) {
         int playerChunkX = (int) Math.floor(camera.getPosition().x / Chunk.WIDTH);
         int playerChunkZ = (int) Math.floor(camera.getPosition().z / Chunk.DEPTH);
 
+        // Update frustum for culling
+        viewProjection.set(camera.getProjectionMatrix()).mul(camera.getViewMatrix());
+        frustum.update(viewProjection);
+
         atlas.bind(0);
+
+        // --- PASS 1: OPAQUE ---
         renderer.beginRender(camera);
+
+        // Explicitly ensure solid rendering state for opaque pass
+        org.lwjgl.opengl.GL11.glEnable(org.lwjgl.opengl.GL11.GL_DEPTH_TEST);
+        org.lwjgl.opengl.GL11.glDepthMask(true);
+        org.lwjgl.opengl.GL11.glDisable(org.lwjgl.opengl.GL11.GL_BLEND);
+        org.lwjgl.opengl.GL11.glEnable(org.lwjgl.opengl.GL11.GL_CULL_FACE);
 
         for (int dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
             for (int dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++) {
                 int chunkX = playerChunkX + dx;
                 int chunkZ = playerChunkZ + dz;
+
+                // Frustum cull
+                int worldX = chunkX * Chunk.WIDTH;
+                int worldZ = chunkZ * Chunk.DEPTH;
+                if (!frustum.isChunkVisible(worldX, worldZ)) {
+                    continue;
+                }
 
                 Chunk chunk = chunks.get(chunkKey(chunkX, chunkZ));
 
@@ -423,19 +715,39 @@ public class World {
                 }
             }
         }
+        renderer.endRender(); // End Opaque Pass
 
-        renderer.endRender();
+        // --- MID-PASS ACTION (Highlight) ---
+        if (midPassAction != null) {
+            midPassAction.run();
+        }
 
-        // Transparent pass (Water, Glass, Leaves)
+        // --- PASS 2: TRANSPARENT ---
+        // Re-bind atlas in case midPassAction unbound it (fixes black water bug)
+        atlas.bind(0);
+
         renderer.beginRender(camera);
+
+        // CRITICAL: Re-enable blending for water/glass (BlockHighlight might have
+        // disabled it)
+        org.lwjgl.opengl.GL11.glEnable(org.lwjgl.opengl.GL11.GL_BLEND);
+        org.lwjgl.opengl.GL11.glBlendFunc(org.lwjgl.opengl.GL11.GL_SRC_ALPHA,
+                org.lwjgl.opengl.GL11.GL_ONE_MINUS_SRC_ALPHA);
+
         renderer.setDepthMask(false); // Disable depth writing
-        org.lwjgl.opengl.GL11.glDisable(org.lwjgl.opengl.GL11.GL_CULL_FACE); // Render back faces (for water surface
-                                                                             // from below)
+        org.lwjgl.opengl.GL11.glDisable(org.lwjgl.opengl.GL11.GL_CULL_FACE);
 
         for (int dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
             for (int dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++) {
                 int chunkX = playerChunkX + dx;
                 int chunkZ = playerChunkZ + dz;
+
+                // Frustum cull
+                int worldX = chunkX * Chunk.WIDTH;
+                int worldZ = chunkZ * Chunk.DEPTH;
+                if (!frustum.isChunkVisible(worldX, worldZ)) {
+                    continue;
+                }
 
                 Chunk chunk = chunks.get(chunkKey(chunkX, chunkZ));
 
@@ -465,7 +777,7 @@ public class World {
         int chunkX = Math.floorDiv(x, Chunk.WIDTH);
         int chunkZ = Math.floorDiv(z, Chunk.DEPTH);
 
-        Chunk chunk = getChunk(chunkX, chunkZ);
+        Chunk chunk = getChunkNow(chunkX, chunkZ);
 
         int localX = Math.floorMod(x, Chunk.WIDTH);
         int localZ = Math.floorMod(z, Chunk.DEPTH);
@@ -475,10 +787,12 @@ public class World {
 
     /**
      * Get sky light level at world coordinates (0-15).
+     * Returns 15 (full light) if chunk not yet LIGHTED, preventing hostile mob
+     * spawning.
      */
     public int getSkyLight(int x, int y, int z) {
         if (y < 0 || y >= Chunk.HEIGHT) {
-            return y >= Chunk.HEIGHT ? 15 : 0; // Above world = full light, below = none
+            return y >= Chunk.HEIGHT ? 15 : 0;
         }
 
         int chunkX = Math.floorDiv(x, Chunk.WIDTH);
@@ -487,6 +801,12 @@ public class World {
         Chunk chunk = chunks.get(chunkKey(chunkX, chunkZ));
         if (chunk == null) {
             return 15; // Unloaded chunks default to full light
+        }
+
+        // Don't return lighting data until chunk has been properly lit
+        // This prevents hostile mobs from spawning before lighting is calculated
+        if (chunk.getState().ordinal() < Chunk.ChunkState.LIGHTED.ordinal()) {
+            return 15; // Not ready yet, return full light to prevent hostile spawns
         }
 
         int localX = Math.floorMod(x, Chunk.WIDTH);
@@ -506,7 +826,7 @@ public class World {
         int chunkX = Math.floorDiv(x, Chunk.WIDTH);
         int chunkZ = Math.floorDiv(z, Chunk.DEPTH);
 
-        Chunk chunk = getChunk(chunkX, chunkZ);
+        Chunk chunk = getChunkNow(chunkX, chunkZ);
 
         int localX = Math.floorMod(x, Chunk.WIDTH);
         int localZ = Math.floorMod(z, Chunk.DEPTH);
@@ -514,29 +834,66 @@ public class World {
         chunk.setBlock(localX, y, localZ, type);
 
         // Mark neighboring chunks as dirty if on border
+        // Also recalculate their light since block changes affect cross-chunk lighting
         if (localX == 0) {
             Chunk neighbor = chunks.get(chunkKey(chunkX - 1, chunkZ));
-            if (neighbor != null)
+            if (neighbor != null) {
                 neighbor.setDirty(true);
+                neighbor.markLightDirty();
+            }
         }
         if (localX == Chunk.WIDTH - 1) {
             Chunk neighbor = chunks.get(chunkKey(chunkX + 1, chunkZ));
-            if (neighbor != null)
+            if (neighbor != null) {
                 neighbor.setDirty(true);
+                neighbor.markLightDirty();
+            }
         }
         if (localZ == 0) {
             Chunk neighbor = chunks.get(chunkKey(chunkX, chunkZ - 1));
-            if (neighbor != null)
+            if (neighbor != null) {
                 neighbor.setDirty(true);
+                neighbor.markLightDirty();
+            }
         }
         if (localZ == Chunk.DEPTH - 1) {
             Chunk neighbor = chunks.get(chunkKey(chunkX, chunkZ + 1));
-            if (neighbor != null)
+            if (neighbor != null) {
                 neighbor.setDirty(true);
+                neighbor.markLightDirty();
+            }
         }
     }
 
+    /**
+     * Set block only in the given chunk's bounds (for decoration during
+     * generation).
+     * Used for trees to avoid placing leaves in chunks that aren't fully generated
+     * yet.
+     */
+    private void setBlockInChunk(Chunk chunk, int worldX, int y, int worldZ, BlockType type) {
+        if (y < 0 || y >= Chunk.HEIGHT)
+            return;
+
+        int chunkWorldX = chunk.getChunkX() * Chunk.WIDTH;
+        int chunkWorldZ = chunk.getChunkZ() * Chunk.DEPTH;
+
+        // Only place block if within this chunk's bounds
+        int localX = worldX - chunkWorldX;
+        int localZ = worldZ - chunkWorldZ;
+
+        if (localX >= 0 && localX < Chunk.WIDTH && localZ >= 0 && localZ < Chunk.DEPTH) {
+            chunk.setBlock(localX, y, localZ, type);
+        }
+        // Ignore blocks outside this chunk - they'll be generated when that chunk loads
+    }
+
     public void cleanup() {
+        // Shutdown async mesh building
+        meshBuildPool.shutdownNow();
+        chunksBeingBuilt.clear();
+        completedMeshTasks.clear();
+
         for (Chunk chunk : chunks.values()) {
             chunk.cleanup();
         }

@@ -50,6 +50,7 @@ public class Renderer {
         shaderProgram.createUniform("lightDirection");
         shaderProgram.createUniform("lightColor");
         shaderProgram.createUniform("sunBrightness"); // Day/night multiplier
+        shaderProgram.createUniform("entityBrightness"); // Entity lighting override
 
         // Sky Blue background
         glClearColor(0.529f, 0.808f, 0.922f, 1.0f);
@@ -135,6 +136,7 @@ public class Renderer {
         shaderProgram.setUniform("lightDirection", lightDirection);
         shaderProgram.setUniform("lightColor", lightColor);
         shaderProgram.setUniform("sunBrightness", sunBrightness);
+        shaderProgram.setUniform("entityBrightness", 0.0f); // Default: use vertex colors
     }
 
     /**
@@ -196,6 +198,15 @@ public class Renderer {
 
     public void setSunBrightness(float brightness) {
         this.sunBrightness = brightness;
+    }
+
+    /**
+     * Set entity brightness for rendering player/mobs.
+     * Value > 0 overrides vertex color lighting.
+     * Set to 0 after entity rendering to return to block rendering.
+     */
+    public void setEntityBrightness(float brightness) {
+        shaderProgram.setUniform("entityBrightness", brightness);
     }
 
     public void cleanup() {

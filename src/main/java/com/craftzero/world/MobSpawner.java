@@ -32,6 +32,25 @@ public class MobSpawner {
     }
 
     /**
+     * Get effective light level for mob spawning (considers time of day).
+     * Sky light is scaled by sun brightness - at night, exterior areas become dark
+     * enough for spawns.
+     */
+    private int getEffectiveLightForSpawning(int x, int y, int z) {
+        int skyLight = world.getSkyLight(x, y, z);
+
+        // Adjust sky light based on time of day
+        DayCycleManager cycle = world.getDayCycleManager();
+        if (cycle != null) {
+            float brightness = cycle.getSunBrightness();
+            // Scale sky light by sun brightness (1.0 = day, 0.3 = night)
+            skyLight = (int) (skyLight * brightness);
+        }
+
+        return skyLight;
+    }
+
+    /**
      * Attempt to spawn mobs. Called every tick.
      */
     public void tick() {
@@ -87,7 +106,8 @@ public class MobSpawner {
             return;
 
         // Check spawn conditions for hostile mobs
-        int light = world.getSkyLight((int) spawnX, spawnY + 1, (int) spawnZ);
+        // Use effective light (considers time of day - sky light is reduced at night)
+        int light = getEffectiveLightForSpawning((int) spawnX, spawnY + 1, (int) spawnZ);
         if (light > 7)
             return; // Too bright for hostile mobs
 

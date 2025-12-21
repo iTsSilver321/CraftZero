@@ -133,20 +133,53 @@ public abstract class Entity {
         if (world == null)
             return;
 
-        // Apply gravity if not on ground (per-tick, not per-second)
-        // Minecraft gravity: -0.08 blocks/tick, terminal velocity around -3.92
-        // blocks/tick
-        if (!onGround) {
-            motionY -= 0.08f; // Gravity per tick
-            if (motionY < -3.92f) {
-                motionY = -3.92f; // Terminal velocity
-            }
-        }
+        // Check water state first
+        updateInWater();
 
-        // Apply air resistance (same as Minecraft: 0.98 per tick)
-        motionX *= 0.98f;
-        motionZ *= 0.98f;
-        motionY *= 0.98f;
+        if (inWater) {
+            // === WATER PHYSICS ===
+            // Reduced gravity (sink slower)
+            if (!onGround) {
+                motionY -= 0.02f; // Much less than normal 0.08
+                if (motionY < -0.8f) {
+                    motionY = -0.8f; // Slower terminal velocity in water
+                }
+            }
+
+            // Water drag (slows movement significantly)
+            float waterDrag = 0.8f;
+            motionX *= waterDrag;
+            motionZ *= waterDrag;
+            motionY *= 0.9f; // Slightly less drag on Y for bobbing feel
+
+            // Bobbing effect - automatic buoyancy when in water
+            // This creates the natural up/down motion
+            float bobbing = (float) Math.sin(ticksExisted * 0.15f) * 0.02f;
+            motionY += bobbing;
+
+            // Swim up (try to reach surface)
+            BlockType blockAbove = world.getBlock((int) Math.floor(x), (int) Math.floor(y + height + 0.5f),
+                    (int) Math.floor(z));
+            if (blockAbove != BlockType.WATER && motionY < 0) {
+                // Near surface - float
+                motionY += 0.04f;
+            }
+
+        } else {
+            // === NORMAL PHYSICS ===
+            // Apply gravity if not on ground
+            if (!onGround) {
+                motionY -= 0.08f; // Gravity per tick
+                if (motionY < -3.92f) {
+                    motionY = -3.92f; // Terminal velocity
+                }
+            }
+
+            // Apply air resistance
+            motionX *= 0.98f;
+            motionZ *= 0.98f;
+            motionY *= 0.98f;
+        }
 
         // Move with collision (motion is already per-tick, no deltaTime needed)
         moveWithCollision(motionX, motionY, motionZ);
@@ -163,9 +196,6 @@ public abstract class Entity {
         float dz = z - prevZ;
         float horizontalDist = (float) Math.sqrt(dx * dx + dz * dz);
         distanceWalked += horizontalDist;
-
-        // Check if in water
-        updateInWater();
     }
 
     /**

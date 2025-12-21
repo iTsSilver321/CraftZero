@@ -161,21 +161,22 @@ public class PlayerModel {
                         visualLeftArmRotX -= 0.4f;
                 }
 
-                // Attack Swing Logic (Applied to Visual Right Arm)
+                // Attack Swing Logic (Authentic Minecraft-style PUNCH)
                 if (swingProgress > 0) {
                         float swing = swingProgress;
                         float sinSqrtSwing = (float) Math.sin(Math.sqrt(swing) * Math.PI);
 
-                        // Rotate body slightly
+                        // Rotate body slightly towards the swing
                         float currentBodyX = isSneaking ? -0.4f : 0.0f;
-                        body.setRotation(currentBodyX, sinSqrtSwing * 0.2f, 0);
+                        body.setRotation(currentBodyX, sinSqrtSwing * 0.3f, 0);
 
-                        // Rotate arm (Authentic Minecraft Beta 1.7.3 hitting) - Flipped signs for
-                        // forward swing
-                        visualRightArmRotX = (float) -(Math.sin(Math.sqrt(swing) * Math.PI * 2.0D) * 0.2D);
-                        visualRightArmRotX += (float) Math.toRadians(60.0f) * sinSqrtSwing; // High pitch arc forward
-                        visualRightArmRotY = -sinSqrtSwing * 0.5f; // Side arc inward
-                        visualRightArmRotZ = -sinSqrtSwing * 0.15f;
+                        // Snappy punch: pitch arm forward aggressively
+                        // Fixed: Positive X rotation is forward for this model
+                        visualRightArmRotX = (float) Math.toRadians(80.0f) * sinSqrtSwing;
+                        visualRightArmRotX += (float) Math.sin(swing * Math.PI) * 0.3f;
+
+                        visualRightArmRotY = sinSqrtSwing * 0.6f;
+                        visualRightArmRotZ = sinSqrtSwing * 0.2f;
                 }
 
                 // Apply

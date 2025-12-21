@@ -154,6 +154,7 @@ public class Main implements Runnable {
 
         // Link world and player for entity systems
         world.setPlayer(player);
+        player.setWorld(world); // For entity lighting lookups
         world.setDayCycleManager(dayCycleManager);
 
         // Initialize mob spawner
@@ -166,6 +167,9 @@ public class Main implements Runnable {
         // Initialize player renderer (for third-person view)
         playerRenderer = new com.craftzero.graphics.PlayerRenderer(renderer);
         playerRenderer.init();
+        // Set textures for held item rendering (atlas for blocks, items texture for
+        // tools)
+        playerRenderer.setTextures(world.getAtlas(), com.craftzero.graphics.GuiTexture.getItemsTexture());
 
         // Create inventory screen (connects to player's inventory)
         inventoryScreen = new InventoryScreen(player.getInventory());
@@ -223,9 +227,9 @@ public class Main implements Runnable {
                 accumulator -= FIXED_DELTA;
             }
 
-            // Render
-            // Render
-            render(deltaTime);
+            // Render with correct partial tick interpolation
+            float partialTick = accumulator / FIXED_DELTA;
+            render(deltaTime, partialTick);
 
             // FPS counter
             frameCount++;
@@ -255,6 +259,11 @@ public class Main implements Runnable {
         // Toggle camera mode with F5
         if (Input.isKeyPressed(GLFW_KEY_F5)) {
             player.cycleCameraMode();
+        }
+
+        // Toggle fullscreen with F11
+        if (Input.isKeyPressed(GLFW_KEY_F11)) {
+            window.toggleFullscreen();
         }
 
         // Toggle inventory with E (only when crafting table not open)
@@ -380,15 +389,16 @@ public class Main implements Runnable {
         if (!inventoryScreen.isOpen() && player.wantsToDropItem()) {
             com.craftzero.world.BlockType dropped = player.dropOneFromHand();
             if (dropped != null) {
-                // Throw item in front of player with forward velocity
+                // Throw item in front of player with forward velocity + player momentum
                 org.joml.Vector3f forward = player.getCamera().getForward();
-                float throwSpeed = 6.0f; // Horizontal throw speed
-                float throwX = player.getPosition().x + forward.x * 0.5f;
+                org.joml.Vector3f playerVel = player.getVelocity();
+                float throwSpeed = 8.0f; // Increased throw speed
+                float throwX = player.getPosition().x + forward.x * 1.0f;
                 float throwY = player.getPosition().y + 1.5f;
-                float throwZ = player.getPosition().z + forward.z * 0.5f;
-                // Velocity: forward * speed + slight upward arc
+                float throwZ = player.getPosition().z + forward.z * 1.0f;
+                // Velocity: forward * speed + player momentum + slight upward arc
                 world.spawnThrownItem(throwX, throwY, throwZ, dropped, 1,
-                        forward.x * throwSpeed, 3.0f, forward.z * throwSpeed);
+                        forward.x * throwSpeed + playerVel.x, 3.0f, forward.z * throwSpeed + playerVel.z);
             }
             player.clearDropFlag();
         }
@@ -409,7 +419,7 @@ public class Main implements Runnable {
         mobSpawner.tick();
     }
 
-    private void render(float deltaTime) {
+    private void render(float deltaTime, float partialTick) {
         // Handle window resize
         if (window.isResized()) {
             glViewport(0, 0, window.getWidth(), window.getHeight());
@@ -431,8 +441,7 @@ public class Main implements Runnable {
         // Clear the framebuffer (uses the color set above)
         renderer.clear();
 
-        // Calculate partial tick for smooth interpolation
-        float partialTick = timer.getAlpha(FIXED_DELTA);
+        // partialTick is now passed in from gameLoop for correct interpolation
 
         // Update camera position to interpolated location (fixes 3rd person jitter)
         player.setInterpolatedCameraPosition(partialTick);
@@ -440,8 +449,21 @@ public class Main implements Runnable {
         // Render sky (before world, behind everything)
         skyRenderer.render(renderer, dayCycleManager, player.getCamera());
 
-        // Render world
-        world.render(renderer, player.getCamera());
+        // Render world with sandwiched Highlight & Breaking Animation pass
+        world.render(renderer, player.getCamera(), () -> {
+            // 1. Block Highlight
+            blockHighlightRenderer.render(player.getCamera(), player.getTargetBlock(), world);
+
+            // 2. Block Breaking Overlay (Cracks)
+            // Rendered here so it's occluded by opaque blocks but visible behind water
+            if (player.isBreaking()) {
+                blockBreakingRenderer.render(
+                        player.getCamera(),
+                        player.getBreakingBlockPos(),
+                        player.getBreakProgress(),
+                        world);
+            }
+        });
 
         // Render clouds (after world, in front of terrain but behind UI)
         cloudRenderer.render(renderer, dayCycleManager, player.getCamera(), deltaTime);
@@ -457,17 +479,6 @@ public class Main implements Runnable {
         // Render player model (only in third-person)
         playerRenderer.render(player, player.getCamera(), partialTick, player.getCameraMode());
         renderer.endRender();
-
-        // Render block highlight
-        blockHighlightRenderer.render(player.getCamera(), player.getTargetBlock());
-
-        // Render block breaking crack overlay
-        if (player.isBreaking()) {
-            blockBreakingRenderer.render(
-                    player.getCamera(),
-                    player.getBreakingBlockPos(),
-                    player.getBreakProgress());
-        }
 
         // Render HUD (crosshair)
         hudRenderer.render(window);

@@ -119,6 +119,6 @@ public class Skeleton extends Mob {
 
     @Override
     public MobModelType getModelType() {
-        return MobModelType.HUMANOID;
+        return MobModelType.SKELETON;
     }
 }

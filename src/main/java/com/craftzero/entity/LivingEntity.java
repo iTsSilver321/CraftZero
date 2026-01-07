@@ -22,6 +22,7 @@ public abstract class LivingEntity extends Entity {
     protected int invulnerableTime; // Ticks of invulnerability after damage
     protected int maxInvulnerableTime = 20; // 1 second of invulnerability
     protected Entity lastDamageSource;
+    protected float lastDamageAmount; // Amount of last damage for invuln frame comparison
 
     // Death state
     protected int deathTime; // Ticks since death (for death animation)
@@ -43,6 +44,7 @@ public abstract class LivingEntity extends Entity {
     protected int avoidanceCooldown; // Cooldown to prevent avoidance spam
     protected int continuousStuckTicks; // Track how long we are blocked by something tall
     protected boolean isTrapped; // TRUE = mob is completely stuck and waiting for escape
+    protected boolean stuckOnLedge; // TRUE = mob is on a ledge and can't find safe path forward
     protected int escapeScanTimer; // Timer for periodic 360° escape scans
     protected int escapingTicks; // Commitment timer - mob actively escaping in a specific direction
     protected float escapeTargetX, escapeTargetZ; // Center of escape block
@@ -56,6 +58,29 @@ public abstract class LivingEntity extends Entity {
     // === HEAD LOOK BEHAVIOR ===
     // Head can look at targets or look around randomly
     protected float lookAtX, lookAtY, lookAtZ; // Target position to look at
+
+    // =============================================================
+    // PHYSICS OVERRIDES (Dynamic Physics)
+    // =============================================================
+
+    @Override
+    protected float getGravityPerTick() {
+        // If recently hit (invulnerable), use FLOA gravity for knockback arc
+        if (invulnerableTime > 0) {
+            return 0.03f; // Floaty "Moon Gravity" for knockback only
+        }
+        return super.getGravityPerTick(); // Standard 0.08f for normal movement/jumps
+    }
+
+    @Override
+    protected float getAirResistance() {
+        // If recently hit (invulnerable), use LOW drag for long glide
+        if (invulnerableTime > 0) {
+            return 0.96f; // Gliding friction for knockback only
+        }
+        return super.getAirResistance(); // Standard 0.98f for normal movement
+    }
+
     protected boolean hasLookTarget; // Whether there's a look target
     protected int lookTimer; // Timer for random head movements
     protected float targetHeadYaw; // Target head yaw (smooth interpolation)
@@ -155,26 +180,34 @@ public abstract class LivingEntity extends Entity {
             float dx = (float) Math.sin(yawRad);
             float dz = -(float) Math.cos(yawRad);
 
-            // LEDGE CHECK: Don't walk off 1+ block drops
+            // LEDGE CHECK: Don't walk off drops higher than 3 blocks
             float ledgeDist = 0.8f;
             float lx = x + dx * ledgeDist;
             float lz = z + dz * ledgeDist;
-            boolean isLedgeAhead = !isSolidAt(lx, y - 1.0f, lz); // No ground 1 block below
+            // Check if there's ground within 3 blocks (safe fall distance)
+            boolean isLedgeAhead = !hasGroundWithin(lx, y, lz, 3);
 
-            if (isLedgeAhead) {
+            // Only process ledge if we're not already committed to an escape direction
+            if (isLedgeAhead && avoidanceCooldown <= 0) {
                 // Stop before falling! Find a different path that doesn't lead off a cliff.
                 float escapeYaw = findEscapeRoute();
                 // Validate escape route doesn't lead to another cliff
                 if (escapeYaw != Float.MAX_VALUE && !isLedgeInDirection(escapeYaw)) {
+                    // COMMIT fully to escape direction (don't just partial rotate)
                     targetYaw = escapeYaw;
-                    bodyYaw += wrapDegrees(targetYaw - bodyYaw) * 0.5f;
+                    bodyYaw = escapeYaw; // Immediately turn to face escape
+                    stuckOnLedge = false;
+                    avoidanceCooldown = 15; // Commit for 15 ticks before re-evaluating
                 } else {
-                    // No safe route - stop cleanly and wait for AI to pick new target
+                    // No safe route - signal AI to pick a new target
                     forwardSpeed = 0;
                     continuousStuckTicks = 0;
-                    // Don't set trapped state - just a cliff, not stuck
+                    stuckOnLedge = true; // Signal to AI: pick a new destination!
+                    avoidanceCooldown = 20; // Don't spam escape checks
                 }
-                avoidanceCooldown = 20;
+            } else if (isLedgeAhead) {
+                // We're on cooldown - just keep moving in current direction
+                // Don't re-evaluate, trust the previous escape direction
             }
             // 1. IMMEDIATE JUMP CHECK (Don't Think, Just Jump)
             else {
@@ -362,7 +395,8 @@ public abstract class LivingEntity extends Entity {
     }
 
     /**
-     * Check if moving in a direction would lead off a cliff.
+     * Check if moving in a direction would lead off a dangerous cliff (more than 3
+     * blocks).
      */
     private boolean isLedgeInDirection(float testYaw) {
         float rad = (float) Math.toRadians(testYaw);
@@ -371,7 +405,29 @@ public abstract class LivingEntity extends Entity {
         float ledgeDist = 0.8f;
         float lx = x + dx * ledgeDist;
         float lz = z + dz * ledgeDist;
-        return !isSolidAt(lx, y - 1.0f, lz);
+        // Only treat as ledge if drop is more than 3 blocks
+        return !hasGroundWithin(lx, y, lz, 3);
+    }
+
+    /**
+     * Check if there's solid ground within maxFall blocks below the given position.
+     * Used for safe drop detection (mobs can drop up to 3 blocks safely).
+     * 
+     * Position is at feet level. For a 1-block drop, ground is at y-1.
+     * For a 3-block drop, ground is at y-3.
+     */
+    private boolean hasGroundWithin(float checkX, float checkY, float checkZ, int maxFall) {
+        if (world == null)
+            return false;
+
+        // Check from y-0.5 down to y-maxFall to find any solid ground
+        // Using 0.5 steps ensures we don't miss blocks at boundaries
+        for (float dy = 0.5f; dy <= maxFall + 0.5f; dy += 1.0f) {
+            if (isSolidAt(checkX, checkY - dy, checkZ)) {
+                return true; // Found ground within safe fall distance
+            }
+        }
+        return false; // No ground - dangerous cliff!
     }
 
     /**
@@ -467,8 +523,8 @@ public abstract class LivingEntity extends Entity {
             float dz = lookAtZ - z;
             float distXZ = (float) Math.sqrt(dx * dx + dz * dz);
 
-            // Target angles relative to body
-            float targetAngle = (float) Math.toDegrees(Math.atan2(dx, dz));
+            // Target angles relative to body (use -dz because -Z is forward)
+            float targetAngle = (float) Math.toDegrees(Math.atan2(dx, -dz));
             targetHeadYaw = wrapDegrees(targetAngle - bodyYaw);
             targetHeadPitch = (float) Math.toDegrees(-Math.atan2(dy, distXZ));
 
@@ -531,6 +587,9 @@ public abstract class LivingEntity extends Entity {
 
     /**
      * Deal damage to this entity.
+     * Implements Minecraft invulnerability frame logic:
+     * - During invulnerability, only apply damage if it's higher than last damage
+     * - Only the difference between new and old damage is applied
      * 
      * @param amount Damage amount
      * @param source Entity that caused the damage (can be null)
@@ -539,15 +598,29 @@ public abstract class LivingEntity extends Entity {
     public boolean damage(float amount, Entity source) {
         if (dead)
             return false;
-        if (invulnerableTime > 0)
-            return false;
+
+        // Invulnerability frame logic (Minecraft style)
+        if (invulnerableTime > 0) {
+            // During invulnerability, only deal damage if new damage is higher
+            if (amount <= lastDamageAmount) {
+                return false; // Reject weaker or equal damage
+            }
+            // Apply only the difference
+            amount = amount - lastDamageAmount;
+        }
+
+        // Track this damage for future comparisons
+        lastDamageAmount = amount;
 
         health -= amount;
         hurtTime = hurtDuration;
         invulnerableTime = maxInvulnerableTime;
         lastDamageSource = source;
 
-        // Apply knockback from source
+        // Note: Knockback is now applied externally by Player.attackEntity()
+        // The source-based knockback below is for mob attacks
+
+        // Apply knockback from source (for mob attacks on player)
         if (source != null) {
             float dx = x - source.getX();
             float dz = z - source.getZ();
@@ -641,6 +714,10 @@ public abstract class LivingEntity extends Entity {
         float dist = (float) Math.sqrt(dx * dx + dz * dz);
 
         if (dist > 0.1f) {
+            // FIX: Don't allow AI to change direction/speed in air (preserves knockback)
+            if (!onGround)
+                return;
+
             // Calculate target yaw using atan2(dx, -dz) to match -Z forward convention
             float targetYaw = (float) Math.toDegrees(Math.atan2(dx, -dz));
             setMoveDirection(targetYaw, speed);
@@ -654,6 +731,10 @@ public abstract class LivingEntity extends Entity {
      * Sets motion in blocks per second.
      */
     protected void moveForward(float speed) {
+        // FIX: Don't allow AI to change direction/speed in air (preserves knockback)
+        if (!onGround)
+            return;
+
         float rad = (float) Math.toRadians(yaw);
         float moveX = -(float) Math.sin(rad) * speed * moveSpeed;
         float moveZ = (float) Math.cos(rad) * speed * moveSpeed;
@@ -746,8 +827,17 @@ public abstract class LivingEntity extends Entity {
      */
     public void clearTrapped() {
         isTrapped = false;
+        stuckOnLedge = false;
         continuousStuckTicks = 0;
         avoidanceCooldown = 0;
+    }
+
+    /**
+     * Returns true if mob is stuck on a ledge with no safe forward path.
+     * AI goals should check this and immediately pick a new target.
+     */
+    public boolean isStuckOnLedge() {
+        return stuckOnLedge;
     }
 
     // Setters

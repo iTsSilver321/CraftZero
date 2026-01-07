@@ -2,6 +2,7 @@ package com.craftzero.main;
 
 import com.craftzero.engine.Input;
 import com.craftzero.entity.DroppedItem;
+import com.craftzero.entity.LivingEntity;
 import com.craftzero.graphics.Camera;
 import com.craftzero.physics.AABB;
 import com.craftzero.physics.Raycast;
@@ -44,7 +45,8 @@ public class Player {
     private static final float MOUSE_SENSITIVITY = 0.15f;
 
     // Block interaction
-    private static final float REACH_DISTANCE = 5.0f;
+    private static final float REACH_DISTANCE = 5.0f; // Block reach (mining/placing)
+    private static final float ENTITY_REACH = 3.0f; // Entity attack reach (Minecraft standard)
     private static final float BREAK_COOLDOWN = 0.25f;
     private static final float PLACE_COOLDOWN = 0.25f;
 
@@ -62,6 +64,7 @@ public class Player {
     // Double-tap W sprint detection
     private float lastWPressTime;
     private boolean wWasReleased;
+    private boolean sprintKnockbackUsed; // W-tap mechanic: true = bonus KB already used, need W release to reset
 
     private float breakCooldown;
     private float placeCooldown;
@@ -233,9 +236,10 @@ public class Player {
             wWasReleased = false;
         }
 
-        // Track W release for double-tap detection
+        // Track W release for double-tap detection AND sprint knockback reset
         if (Input.isKeyReleased(GLFW_KEY_W)) {
             wWasReleased = true;
+            sprintKnockbackUsed = false; // W-tap reset: releasing W allows sprint KB bonus again
         }
 
         // Ctrl also triggers sprint while moving forward
@@ -401,14 +405,25 @@ public class Player {
         // Update target block using REACH_DISTANCE from eyes
         targetBlock = Raycast.cast(world, rayOrigin, rayDirection, REACH_DISTANCE);
 
-        // Handle block interaction (left click)
+        // Check for entity hit (shorter reach: 3.0 blocks for combat)
+        Raycast.EntityRaycastResult entityHit = Raycast.castEntities(
+                world.getEntities(), rayOrigin, rayDirection, ENTITY_REACH, null);
+
+        // Handle left click - attack entities OR mine blocks
         if (Input.isButtonPressed(GLFW_MOUSE_BUTTON_LEFT)) {
             // Initial click always triggers a swing
             swingArm();
+
+            // Priority 1: Attack entity if in range
+            if (entityHit.hit && entityHit.entity != null) {
+                attackEntity(entityHit.entity);
+            }
         }
 
+        // Continuous left-click for mining (only if NOT attacking an entity)
         if (Input.isButtonDown(GLFW_MOUSE_BUTTON_LEFT)) {
-            if (targetBlock.hit && breakCooldown <= 0) {
+            // Only mine blocks if we didn't hit an entity
+            if (!entityHit.hit && targetBlock.hit && breakCooldown <= 0) {
                 // We are actively mining - keep the arm swinging
                 if (!isSwinging) {
                     swingArm();
@@ -495,8 +510,8 @@ public class Player {
                         breakCooldown = 0.1f;
                     }
                 }
-            } else {
-                // Not looking at a block - reset progress
+            } else if (!entityHit.hit) {
+                // Not looking at a block OR entity - reset progress
                 resetBreakingProgress();
             }
         } else {
@@ -570,6 +585,99 @@ public class Player {
         breakingBlockPos = null;
         breakProgress = 0f;
         currentBreakingBlock = null;
+    }
+
+    /**
+     * Attack a living entity with the held weapon.
+     * Implements Minecraft pre-1.9 combat with proper spam-click prevention.
+     * 
+     * CRITICAL: Knockback is ONLY applied if damage() returns true.
+     * This prevents spam-clicking from stacking knockback during immunity.
+     */
+    private void attackEntity(LivingEntity target) {
+        if (target == null || target.isDead())
+            return;
+
+        // 1. Calculate Damage
+        float damage = 1.0f; // Base fist damage
+        com.craftzero.inventory.ItemStack heldItem = inventory.getItemInHand();
+        com.craftzero.inventory.ToolType toolType = com.craftzero.inventory.ToolType.NONE;
+
+        if (heldItem != null && heldItem.isTool()) {
+            toolType = heldItem.getType().getToolType();
+            damage = toolType.getAttackDamage();
+        }
+
+        // 2. Critical Hit Check (Pre-1.9 Logic)
+        boolean isCritical = velocity.y < 0 && !onGround && !inWater && !flying;
+        if (isCritical) {
+            damage *= 1.5f;
+            // TODO: Spawn crit particles here
+        }
+
+        // 3. Attempt to deal damage FIRST - capture the result
+        // The mob returns 'false' if it is currently invulnerable
+        boolean successfulHit = target.damage(damage, null);
+
+        // 4. ONLY Apply Knockback and Effects if the hit was successful
+        if (successfulHit) {
+
+            // A. Calculate Knockback Strength
+            // A. Base Strength (Reduced for control)
+            // 0.25f gives a gentler push, preventing block clipping
+            float knockbackStrength = 0.25f;
+
+            // Sprint Knockback (W-Tap Mechanic)
+            // Only apply bonus if: 1) Currently sprinting, 2) Haven't used bonus since last
+            // W release
+            boolean applySprintBonus = sprinting && !sprintKnockbackUsed;
+            if (applySprintBonus) {
+                knockbackStrength += 0.25f; // Moderate sprint bonus
+                sprintKnockbackUsed = true; // Mark as used - requires W release to reset
+                sprinting = false; // Cancel sprint (Minecraft behavior)
+            }
+
+            // B. Calculate Vector (Direction from Player to Mob)
+            float dx = target.getX() - position.x;
+            float dz = target.getZ() - position.z;
+            float dist = (float) Math.sqrt(dx * dx + dz * dz);
+
+            // C. Apply the Physics
+            if (dist > 0.001f) { // Avoid divide by zero
+                // Normalize and Multiply
+                float kbX = (dx / dist) * knockbackStrength;
+                float kbZ = (dz / dist) * knockbackStrength;
+
+                // --- FIX START ---
+                // 1. Reset current horizontal motion to 0 before applying knockback.
+                // This prevents the mob's current "walking" velocity from cancelling out your
+                // hit.
+                // We keep 'motionY' so we don't stop them from falling if they are already in
+                // the air.
+                target.setMotion(0f, target.getMotionY(), 0f);
+                // --- FIX END ---
+
+                // THE ARC FIX:
+                // Lift: 0.32f (Lower pop-up, < 1 block height)
+                // This + Very Low Gravity = Low, long glide
+                float liftStrength = 0.32f;
+                target.addMotion(kbX, liftStrength, kbZ);
+
+                // If applied sprint bonus, slow down player slightly (impact feel)
+                if (applySprintBonus) {
+                    velocity.x *= 0.6f;
+                    velocity.z *= 0.6f;
+                }
+            }
+
+            // D. Durability is only consumed on valid hits
+            if (heldItem != null && heldItem.isTool()) {
+                boolean toolBroke = heldItem.useDurability();
+                if (toolBroke) {
+                    inventory.getHotbar()[inventory.getSelectedSlot()] = null;
+                }
+            }
+        }
     }
 
     /**

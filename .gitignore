@@ -6,3 +6,12 @@ target/
 tools/
 docs/
 src/test/
+.gradle/
+build/
+gradle/wrapper/*.zip
+
+# Eclipse
+bin/
+.settings/
+.classpath
+.project

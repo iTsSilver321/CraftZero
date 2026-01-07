@@ -24,9 +24,10 @@ public class MobAI {
     private final List<Goal> goals;
     private final List<Goal> activeGoals;
 
-    // Navigation and movement
-    private final Navigator navigator;
-    private final MoveControl moveControl;
+    // Navigation and movement (lazy initialized when world is available)
+    private Navigator navigator;
+    private MoveControl moveControl;
+    private boolean navigationInitialized = false;
 
     // Target tracking
     private LivingEntity target;
@@ -37,17 +38,22 @@ public class MobAI {
         this.mob = mob;
         this.goals = new ArrayList<>();
         this.activeGoals = new ArrayList<>();
+        // Navigator and MoveControl are lazy-initialized in
+        // ensureNavigationInitialized()
+        // because world is not yet set when Mob constructor runs
+        this.hasTarget = false;
+    }
 
-        // Initialize navigation (will be null if world not set yet)
-        if (mob.getWorld() != null) {
+    /**
+     * Lazy initialization of navigation components.
+     * Called when navigation is first needed and world is available.
+     */
+    private void ensureNavigationInitialized() {
+        if (!navigationInitialized && mob.getWorld() != null) {
             this.navigator = new Navigator(mob, mob.getWorld());
             this.moveControl = new MoveControl(mob);
-        } else {
-            this.navigator = null;
-            this.moveControl = null;
+            navigationInitialized = true;
         }
-
-        this.hasTarget = false;
     }
 
     /**
@@ -66,36 +72,41 @@ public class MobAI {
      * Update AI each tick.
      */
     public void tick() {
+        // Ensure navigation is initialized (lazy init when world becomes available)
+        ensureNavigationInitialized();
+
         // Evaluate which goals should be running
-        for (Goal goal : goals) {
-            if (activeGoals.contains(goal)) {
-                // Goal is running - check if it should stop
-                if (!goal.canContinue()) {
-                    goal.stop();
-                    activeGoals.remove(goal);
-                }
-            } else {
-                // Goal is not running - check if it should start
-                if (goal.canUse()) {
-                    // Check if this goal conflicts with active goals
-                    if (goal.isExclusive()) {
-                        // Stop lower priority goals
-                        activeGoals.removeIf(active -> {
-                            if (active.getPriority() > goal.getPriority()) {
-                                active.stop();
-                                return true;
-                            }
-                            return false;
-                        });
-                    }
-                    goal.start();
-                    activeGoals.add(goal);
-                }
+        // Use iterator to safely remove while iterating
+        java.util.Iterator<Goal> activeIterator = activeGoals.iterator();
+        while (activeIterator.hasNext()) {
+            Goal goal = activeIterator.next();
+            if (!goal.canContinue()) {
+                goal.stop();
+                activeIterator.remove();
             }
         }
 
-        // Tick all active goals
-        for (Goal goal : activeGoals) {
+        // Check for new goals to start
+        for (Goal goal : goals) {
+            if (!activeGoals.contains(goal) && goal.canUse()) {
+                // Check if this goal conflicts with active goals
+                if (goal.isExclusive()) {
+                    // Stop lower priority goals
+                    activeGoals.removeIf(active -> {
+                        if (active.getPriority() > goal.getPriority()) {
+                            active.stop();
+                            return true;
+                        }
+                        return false;
+                    });
+                }
+                goal.start();
+                activeGoals.add(goal);
+            }
+        }
+
+        // Tick all active goals (create copy to avoid ConcurrentModificationException)
+        for (Goal goal : new java.util.ArrayList<>(activeGoals)) {
             goal.tick();
         }
 
@@ -247,10 +258,12 @@ public class MobAI {
 
     /**
      * Get movement speed based on mob state.
+     * Uses the mob's moveSpeed attribute.
      */
     private float getMovementSpeed() {
-        // Base speed, can be modified by goals
-        return 0.7f;
+        // Scale the mob's moveSpeed (which is per-tick) to navigator speed
+        // Typical moveSpeed is 0.1f (blocks/tick), scale to ~0.7 for navigation
+        return mob.getMoveSpeed() * 7.0f;
     }
 
     /**

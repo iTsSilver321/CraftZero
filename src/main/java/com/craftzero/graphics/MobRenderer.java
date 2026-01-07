@@ -14,6 +14,7 @@ public class MobRenderer {
 
     // Cached models
     private HumanoidModel humanoidModel;
+    private SkeletonModel skeletonModel;
     private PigModel pigModel;
     private CowModel cowModel; // CHANGED: Use specific class
     private SheepModel sheepModel; // CHANGED: Use specific class
@@ -36,6 +37,9 @@ public class MobRenderer {
 
         humanoidModel = new HumanoidModel();
         humanoidModel.buildMeshes();
+
+        skeletonModel = new SkeletonModel();
+        skeletonModel.buildMeshes();
 
         pigModel = PigModel.create();
         pigModel.buildMeshes();
@@ -71,6 +75,13 @@ public class MobRenderer {
         if (texture == null)
             return;
 
+        // Calculate hurt flash intensity (1.0 = just hit, fades to 0)
+        float hurtFlash = 0.0f;
+        if (mob.getHurtTime() > 0) {
+            hurtFlash = (float) mob.getHurtTime() / 10.0f; // 10 tick hurt duration
+        }
+        shader.setUniform("hurtFlash", hurtFlash);
+
         float limbSwing = mob.getLimbSwing();
         float limbSwingAmount = lerp(mob.getPrevLimbSwingAmount(), mob.getLimbSwingAmount(), partialTick);
         float ageInTicks = entity.getTicksExisted() + partialTick;
@@ -81,6 +92,10 @@ public class MobRenderer {
             case HUMANOID:
             case CREEPER:
                 renderHumanoid(mob, texture, renderX, renderY, renderZ, renderBodyYaw,
+                        limbSwing, limbSwingAmount, ageInTicks, partialTick, headYaw);
+                break;
+            case SKELETON:
+                renderSkeleton(mob, texture, renderX, renderY, renderZ, renderBodyYaw,
                         limbSwing, limbSwingAmount, ageInTicks, partialTick, headYaw);
                 break;
             case QUADRUPED:
@@ -136,6 +151,32 @@ public class MobRenderer {
 
         texture.bind(0);
         renderModelPart(humanoidModel.root);
+        texture.unbind();
+    }
+
+    private void renderSkeleton(Mob mob, Texture texture,
+            float x, float y, float z, float bodyYaw,
+            float limbSwing, float limbSwingAmount, float ageInTicks,
+            float partialTick, float headYaw) {
+        float headPitch = mob.getRenderPitch(partialTick);
+        skeletonModel.animate(limbSwing, limbSwingAmount, ageInTicks, headYaw, headPitch);
+
+        float deathRotation = 0;
+        if (mob.isDead()) {
+            deathRotation = Math.min(mob.getDeathTime() * 0.1f, 1.5f);
+        }
+
+        // Set up transforms
+        modelMatrix.identity();
+        modelMatrix.translate(x, y, z);
+        modelMatrix.rotateY((float) Math.toRadians(-bodyYaw));
+        modelMatrix.rotateZ(deathRotation);
+        modelMatrix.scale(MODEL_SCALE);
+
+        skeletonModel.root.calculateTransform(modelMatrix);
+
+        texture.bind(0);
+        renderModelPart(skeletonModel.root);
         texture.unbind();
     }
 
@@ -204,12 +245,17 @@ public class MobRenderer {
             render(entity, camera, partialTick);
         }
 
+        // Reset hurt flash to avoid affecting other rendered objects
+        shader.setUniform("hurtFlash", 0.0f);
+
         glEnable(GL_CULL_FACE);
     }
 
     public void cleanup() {
         if (humanoidModel != null)
             humanoidModel.cleanup();
+        if (skeletonModel != null)
+            skeletonModel.cleanup();
         if (pigModel != null)
             pigModel.cleanup();
         if (cowModel != null)

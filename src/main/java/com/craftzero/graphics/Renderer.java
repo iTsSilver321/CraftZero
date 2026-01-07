@@ -51,6 +51,7 @@ public class Renderer {
         shaderProgram.createUniform("lightColor");
         shaderProgram.createUniform("sunBrightness"); // Day/night multiplier
         shaderProgram.createUniform("entityBrightness"); // Entity lighting override
+        shaderProgram.createUniform("hurtFlash"); // Red tint when entity takes damage
 
         // Sky Blue background
         glClearColor(0.529f, 0.808f, 0.922f, 1.0f);

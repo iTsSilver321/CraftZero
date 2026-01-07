@@ -24,6 +24,9 @@ uniform float sunBrightness = 1.0;
 // When > 0, uses this instead of vertexColor for brightness
 uniform float entityBrightness = 0.0;
 
+// Hurt flash: 0.0 = no hurt, 1.0 = fully red (just hit)
+uniform float hurtFlash = 0.0;
+
 void main() {
     // Sample texture
     vec4 textureColor = texture(textureSampler, texCoord);
@@ -48,6 +51,12 @@ void main() {
     
     // Apply to texture
     vec3 result = textureColor.rgb * dynamicVertexColor;
+    
+    // Apply hurt flash (red tint overlay)
+    if (hurtFlash > 0.0) {
+        vec3 hurtColor = vec3(1.0, 0.4, 0.4); // Bright red-ish
+        result = mix(result, hurtColor, hurtFlash * 0.5);
+    }
     
     // Apply fog
     if (fogEnabled) {

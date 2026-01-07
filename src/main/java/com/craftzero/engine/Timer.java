@@ -5,14 +5,14 @@ package com.craftzero.engine;
  * Provides frame-independent movement and timing utilities.
  */
 public class Timer {
-    
+
     private double lastLoopTime;
     private float deltaTime;
     private float accumulator;
     private int fps;
     private int fpsCount;
     private float fpsTimer;
-    
+
     public void init() {
         lastLoopTime = getTime();
         deltaTime = 0;
@@ -21,25 +21,25 @@ public class Timer {
         fpsCount = 0;
         fpsTimer = 0;
     }
-    
+
     public double getTime() {
         return System.nanoTime() / 1_000_000_000.0;
     }
-    
+
     public float getDeltaTime() {
         return deltaTime;
     }
-    
+
     public void update() {
         double currentTime = getTime();
         deltaTime = (float) (currentTime - lastLoopTime);
         lastLoopTime = currentTime;
-        
+
         // Clamp delta time to prevent spiral of death
         if (deltaTime > 0.25f) {
             deltaTime = 0.25f;
         }
-        
+
         // FPS counter
         fpsTimer += deltaTime;
         fpsCount++;
@@ -49,15 +49,15 @@ public class Timer {
             fpsTimer = 0;
         }
     }
-    
+
     public int getFps() {
         return fps;
     }
-    
+
     public float getLastLoopTime() {
         return (float) lastLoopTime;
     }
-    
+
     /**
      * For fixed timestep physics updates.
      * Accumulates time and returns how many fixed updates should run.
@@ -71,7 +71,7 @@ public class Timer {
         }
         return updates;
     }
-    
+
     /**
      * Returns interpolation alpha for rendering between physics states.
      */

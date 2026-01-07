@@ -3,6 +3,7 @@ package com.craftzero.entity;
 import com.craftzero.physics.AABB;
 import com.craftzero.world.BlockType;
 import com.craftzero.world.World;
+import lombok.Getter;
 import org.joml.Vector3f;
 
 import java.util.List;
@@ -17,44 +18,57 @@ import java.util.List;
 public abstract class Entity {
 
     // Current position (bottom-center / feet level)
+    @Getter
     protected float x, y, z;
 
     // Previous position for render interpolation (20hz physics -> 60hz display)
+    @Getter
     protected float prevX, prevY, prevZ;
 
     // Velocity
+    @Getter
     protected float motionX, motionY, motionZ;
 
     // Rotation (degrees)
+    @Getter
     protected float yaw; // Horizontal rotation (0-360)
+    @Getter
     protected float pitch; // Vertical rotation (-90 to 90)
     protected float prevYaw, prevPitch; // For interpolation
 
     // Dimensions
+    @Getter
     protected final float width;
+    @Getter
     protected final float height;
 
     // Collision state
     protected boolean onGround;
+    @Getter
     protected boolean collidedHorizontally;
     protected boolean collidedVertically;
+    @Getter
     protected boolean inWater;
 
     // Physics constants
-    protected static final float GRAVITY = -28.0f; // blocks/s^2 (Minecraft-like)
-    protected static final float TERMINAL_VELOCITY = -78.4f; // blocks/s
+    // Physics constants (Standard Minecraft Values)
+    protected static final float GRAVITY = -28.0f;
+    protected static final float TERMINAL_VELOCITY = -78.4f;
     protected static final float AIR_RESISTANCE = 0.98f;
     protected static final float GROUND_FRICTION = 0.6f;
 
     // State
     protected boolean removed = false;
+    @Getter
     protected int ticksExisted = 0;
 
     // Animation tracking
+    @Getter
     protected float distanceWalked = 0.0f;
     protected float prevDistanceWalked = 0.0f;
 
     // Reference to world
+    @Getter
     protected World world;
 
     public Entity(float width, float height) {
@@ -152,33 +166,37 @@ public abstract class Entity {
             motionZ *= waterDrag;
             motionY *= 0.9f; // Slightly less drag on Y for bobbing feel
 
-            // Bobbing effect - automatic buoyancy when in water
-            // This creates the natural up/down motion
-            float bobbing = (float) Math.sin(ticksExisted * 0.15f) * 0.02f;
+            // Bobbing effect - subtle buoyancy when in water
+            // Keep this weak to avoid glitchy appearance
+            float bobbing = (float) Math.sin(ticksExisted * 0.15f) * 0.01f;
             motionY += bobbing;
 
             // Swim up (try to reach surface)
             BlockType blockAbove = world.getBlock((int) Math.floor(x), (int) Math.floor(y + height + 0.5f),
                     (int) Math.floor(z));
-            if (blockAbove != BlockType.WATER && motionY < 0) {
-                // Near surface - float
-                motionY += 0.04f;
+            if (blockAbove != BlockType.WATER) {
+                // Near surface - gentle upward force to help exit water
+                if (motionY < 0.15f) {
+                    motionY += 0.06f; // Surface float
+                }
             }
 
         } else {
             // === NORMAL PHYSICS ===
             // Apply gravity if not on ground
+            // 1. Gravity
             if (!onGround) {
-                motionY -= 0.08f; // Gravity per tick
+                motionY -= getGravityPerTick(); // Use dynamic gravity (standard 0.08)
                 if (motionY < -3.92f) {
                     motionY = -3.92f; // Terminal velocity
                 }
             }
 
-            // Apply air resistance
-            motionX *= 0.98f;
-            motionZ *= 0.98f;
-            motionY *= 0.98f;
+            // 2. Air Resistance
+            float drag = getAirResistance(); // Use dynamic drag (standard 0.98)
+            motionX *= drag;
+            motionZ *= drag;
+            motionY *= 0.98f; // Y drag usually stays standard
         }
 
         // Move with collision (motion is already per-tick, no deltaTime needed)
@@ -342,7 +360,7 @@ public abstract class Entity {
         }
 
         int blockX = (int) Math.floor(x);
-        int blockY = (int) Math.floor(y + height * 0.5f); // Check at body level
+        int blockY = (int) Math.floor(y + height * 0.1f); // Check at feet level for natural water exit
         int blockZ = (int) Math.floor(z);
 
         BlockType block = world.getBlock(blockX, blockY, blockZ);
@@ -466,81 +484,10 @@ public abstract class Entity {
         return dx * dx + dy * dy + dz * dz;
     }
 
-    // Getters
-    public float getX() {
-        return x;
-    }
-
-    public float getY() {
-        return y;
-    }
-
-    public float getZ() {
-        return z;
-    }
-
-    public float getPrevX() {
-        return prevX;
-    }
-
-    public float getPrevY() {
-        return prevY;
-    }
-
-    public float getPrevZ() {
-        return prevZ;
-    }
-
-    public float getMotionX() {
-        return motionX;
-    }
-
-    public float getMotionY() {
-        return motionY;
-    }
-
-    public float getMotionZ() {
-        return motionZ;
-    }
-
-    public float getYaw() {
-        return yaw;
-    }
-
-    public float getPitch() {
-        return pitch;
-    }
-
-    public float getWidth() {
-        return width;
-    }
-
-    public float getHeight() {
-        return height;
-    }
+    // Getters (generated by Lombok @Getter on fields)
 
     public boolean isOnGround() {
         return onGround;
-    }
-
-    public boolean isCollidedHorizontally() {
-        return collidedHorizontally;
-    }
-
-    public boolean isInWater() {
-        return inWater;
-    }
-
-    public int getTicksExisted() {
-        return ticksExisted;
-    }
-
-    public float getDistanceWalked() {
-        return distanceWalked;
-    }
-
-    public World getWorld() {
-        return world;
     }
 
     // Setters
@@ -562,5 +509,15 @@ public abstract class Entity {
 
     public void setPitch(float pitch) {
         this.pitch = pitch;
+    }
+
+    // Physics hooks for subclasses to override (e.g. for knockback effects)
+
+    protected float getGravityPerTick() {
+        return 0.08f; // Standard Minecraft gravity
+    }
+
+    protected float getAirResistance() {
+        return 0.98f; // Standard Minecraft air drag
     }
 }

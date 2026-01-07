@@ -102,6 +102,10 @@ public class MeleeAttackGoal implements Goal {
         // Attack if in range
         if (dist <= attackRange && mob.canAttack()) {
             performAttack(player);
+        } else if (mob.isStuckOnLedge()) {
+            // Stuck on ledge - immediately try alternate path
+            tryAlternatePath();
+            mob.clearTrapped();
         } else if (stuckTicks < STUCK_THRESHOLD) {
             // Move toward player (with cliff awareness)
             moveTowardTarget();

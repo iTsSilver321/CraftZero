@@ -94,6 +94,19 @@ public class WanderGoal implements Goal {
         if (!hasTarget)
             return;
 
+        // Check if mob is stuck on a ledge - immediately pick new target
+        if (mob.isStuckOnLedge()) {
+            if (pickSafeTarget()) {
+                mob.clearTrapped(); // Clear the stuck state
+                stuckTime = 0;
+            } else {
+                // Can't find any safe target - stop
+                mob.stopMoving();
+                hasTarget = false;
+            }
+            return;
+        }
+
         // Calculate direction to target
         float dx = targetX - mob.getX();
         float dz = targetZ - mob.getZ();

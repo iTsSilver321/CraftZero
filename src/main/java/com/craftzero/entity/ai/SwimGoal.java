@@ -54,8 +54,8 @@ public class SwimGoal implements Goal {
         boolean headUnderwater = (headBlock == BlockType.WATER);
 
         if (headUnderwater) {
-            // Swim up to surface
-            mob.addMotion(0, 0.04f, 0);
+            // Swim up to surface - stronger impulse to help exit water
+            mob.addMotion(0, 0.08f, 0);
         }
 
         // Random swimming motion (slight side-to-side)

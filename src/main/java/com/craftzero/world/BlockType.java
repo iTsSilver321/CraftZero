@@ -54,7 +54,13 @@ public enum BlockType {
     WOODEN_AXE(30, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
     STONE_AXE(31, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
     IRON_AXE(32, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
-    DIAMOND_AXE(33, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0);
+    DIAMOND_AXE(33, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+
+    // Swords - combat weapons using items.png
+    WOODEN_SWORD(34, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    STONE_SWORD(35, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    IRON_SWORD(36, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0),
+    DIAMOND_SWORD(37, false, true, 0f, 0, 0, 0, ToolType.Category.NONE, 0);
 
     private final int id;
     private final boolean solid;
@@ -117,7 +123,8 @@ public enum BlockType {
     public boolean isTool() {
         return this == WOODEN_PICKAXE || this == STONE_PICKAXE || this == IRON_PICKAXE || this == DIAMOND_PICKAXE ||
                 this == WOODEN_SHOVEL || this == STONE_SHOVEL || this == IRON_SHOVEL || this == DIAMOND_SHOVEL ||
-                this == WOODEN_AXE || this == STONE_AXE || this == IRON_AXE || this == DIAMOND_AXE;
+                this == WOODEN_AXE || this == STONE_AXE || this == IRON_AXE || this == DIAMOND_AXE ||
+                this == WOODEN_SWORD || this == STONE_SWORD || this == IRON_SWORD || this == DIAMOND_SWORD;
     }
 
     /**
@@ -149,6 +156,14 @@ public enum BlockType {
                 return ToolType.IRON_AXE;
             case DIAMOND_AXE:
                 return ToolType.DIAMOND_AXE;
+            case WOODEN_SWORD:
+                return ToolType.WOODEN_SWORD;
+            case STONE_SWORD:
+                return ToolType.STONE_SWORD;
+            case IRON_SWORD:
+                return ToolType.IRON_SWORD;
+            case DIAMOND_SWORD:
+                return ToolType.DIAMOND_SWORD;
             default:
                 return ToolType.NONE;
         }
@@ -265,6 +280,15 @@ public enum BlockType {
                 return new int[] { 2, 7 };
             case DIAMOND_AXE:
                 return new int[] { 3, 7 };
+            // Swords (row 4)
+            case WOODEN_SWORD:
+                return new int[] { 0, 4 };
+            case STONE_SWORD:
+                return new int[] { 1, 4 };
+            case IRON_SWORD:
+                return new int[] { 2, 4 };
+            case DIAMOND_SWORD:
+                return new int[] { 3, 4 };
             default:
                 return null;
         }

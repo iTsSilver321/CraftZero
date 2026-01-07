@@ -64,6 +64,13 @@ public class PanicGoal implements Goal {
     public void tick() {
         panicTime--;
 
+        // Check if stuck on a ledge - immediately pick new direction
+        if (mob.isStuckOnLedge()) {
+            pickSafeFleeDirection();
+            mob.clearTrapped();
+            return;
+        }
+
         // Move toward flee position
         float dx = fleeX - mob.getX();
         float dz = fleeZ - mob.getZ();

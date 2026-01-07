@@ -122,7 +122,7 @@ public class HumanoidModel {
 
                 // Arm swing - zombie arms extend forward (~80 degrees)
                 float armSwing = (float) Math.cos(limbSwing * 0.6662f) * 0.5f * limbSwingAmount;
-                float zombieArmAngle = (float) Math.toRadians(-80); // Arms raised forward
+                float zombieArmAngle = (float) Math.toRadians(80); // Arms raised forward (positive = forward)
                 rightArm.setRotation(zombieArmAngle + armSwing, 0, 0);
                 leftArm.setRotation(zombieArmAngle - armSwing, 0, 0);
 

@@ -200,7 +200,8 @@ public abstract class Mob extends LivingEntity {
      * Enum for different model types.
      */
     public enum MobModelType {
-        HUMANOID, // Zombie, Skeleton
+        HUMANOID, // Zombie (thick limbs)
+        SKELETON, // Skeleton (thin limbs)
         CREEPER, // No arms
         SPIDER, // 8 legs
         QUADRUPED, // Pig, Cow, Sheep

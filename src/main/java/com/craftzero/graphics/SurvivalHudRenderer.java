@@ -250,10 +250,26 @@ public class SurvivalHudRenderer {
             }
 
             if (alpha > 0) {
-                float textScale = 0.5f; // Adjust scale for pixel look
+                float textScale = 2.0f; // Larger for Minecraft bitmap font
                 int textWidth = textRenderer.getStringWidth(currentItemName, textScale);
                 float textX = (windowWidth - textWidth) / 2.0f;
-                float textY = windowHeight - 90;
+                // Dynamic positioning
+                float textY = windowHeight - 120; // Default: comfortably above hearts (Y-90)
+
+                // Check if bubbles are visible (copied logic from render loop)
+                boolean bubblesVisible = stats.getCurrentAir() < PlayerStats.MAX_AIR_SECONDS;
+                if (!bubblesVisible) {
+                    for (float t : bubblePopTimers) {
+                        if (t > 0) {
+                            bubblesVisible = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (bubblesVisible) {
+                    textY -= 26; // Move up to clear bubbles (Y-116)
+                }
 
                 // Draw shadow
                 textRenderer.drawText(currentItemName, textX + 2, textY + 2, textScale,

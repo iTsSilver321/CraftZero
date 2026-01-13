@@ -685,7 +685,7 @@ public class InventoryRenderer {
         }
         String name = sb.toString();
 
-        float scale = 0.5f;
+        float scale = 1.5f; // Larger for Minecraft bitmap font
         int textWidth = textRenderer.getStringWidth(name, scale);
         int padding = 4;
 
@@ -702,10 +702,9 @@ public class InventoryRenderer {
         // Draw Border
         drawRectOutline(boxX, boxY, boxWidth, boxHeight, 0.3f, 0.0f, 0.8f, 1.0f);
 
-        // Draw Text - align vertically
-        // Compensate for likely TextRenderer V-flip offset (visual shift)
-        // Passing boxY - 2 results in visual text appearing centered.
-        textRenderer.drawText(name, boxX + padding, boxY - 2, scale, new float[] { 1f, 1f, 1f, 1f });
+        // Draw Text - align vertically inside the box
+        // Position text inside the box (positive offset moves it down)
+        textRenderer.drawText(name, boxX + padding, boxY + 4, scale, new float[] { 1f, 1f, 1f, 1f });
     }
 
     /**

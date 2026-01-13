@@ -135,6 +135,10 @@ public class Player {
     private boolean isRetracting = false; // true = going down, false = coming up
     private com.craftzero.world.BlockType lastHeldItemType = null; // Track for inventory changes
 
+    // Death state
+    private int deathTime = 0; // Ticks since death (for death animation)
+    private float spawnX, spawnY, spawnZ; // Spawn point for respawn
+
     public Player(float x, float y, float z) {
         this.position = new Vector3f(x, y, z);
         this.prevPosition = new Vector3f(x, y, z);
@@ -157,6 +161,10 @@ public class Player {
         this.fallStartY = y;
         this.wasFalling = false;
         this.dropItemFromHand = false;
+        // Store spawn point for respawning
+        this.spawnX = x;
+        this.spawnY = y;
+        this.spawnZ = z;
     }
 
     private AABB createBoundingBox() {
@@ -170,6 +178,11 @@ public class Player {
      * Handle player input.
      */
     public void handleInput(float deltaTime) {
+        // Block all input when dead
+        if (stats.isDead()) {
+            return;
+        }
+
         // Track elapsed time for double-tap detection
         if (lastWPressTime >= 0) {
             lastWPressTime += deltaTime;
@@ -620,7 +633,10 @@ public class Player {
         boolean successfulHit = target.damage(damage, null);
 
         // 4. ONLY Apply Knockback and Effects if the hit was successful
-        if (successfulHit) {
+        // AND the target is still alive (no knockback on killing blow - Minecraft
+        // behavior)
+        // NOTE: Check health directly because isDead() isn't set until next tick()
+        if (successfulHit && target.getHealth() > 0) {
 
             // A. Calculate Knockback Strength
             // A. Base Strength (Reduced for control)
@@ -669,10 +685,13 @@ public class Player {
                     velocity.z *= 0.6f;
                 }
             }
+        }
 
-            // D. Durability is only consumed on valid hits
-            if (heldItem != null && heldItem.isTool()) {
-                boolean toolBroke = heldItem.useDurability();
+        // D. Durability is only consumed on valid hits (even if target died)
+        if (successfulHit) {
+            com.craftzero.inventory.ItemStack heldItem2 = inventory.getItemInHand();
+            if (heldItem2 != null && heldItem2.isTool()) {
+                boolean toolBroke = heldItem2.useDurability();
                 if (toolBroke) {
                     inventory.getHotbar()[inventory.getSelectedSlot()] = null;
                 }
@@ -690,6 +709,17 @@ public class Player {
         prevRenderYawOffset = renderYawOffset;
         prevSwingProgress = swingProgress;
         prevUseProgress = useProgress;
+
+        // Handle death state - only increment death time, skip all physics
+        if (stats.isDead()) {
+            // Drop items on first frame of death
+            if (deathTime == 0) {
+                dropAllItems();
+            }
+            deathTime++;
+            velocity.set(0, 0, 0); // Stop all movement
+            return;
+        }
 
         updateSwing(deltaTime);
         updateUse(deltaTime);
@@ -1745,6 +1775,56 @@ public class Player {
         return isUsingItem;
     }
 
+    // ============== Death State ==============
+
+    /**
+     * Check if player is dead.
+     */
+    public boolean isDead() {
+        return stats.isDead();
+    }
+
+    /**
+     * Get death time in ticks (for death animation).
+     */
+    public int getDeathTime() {
+        return deathTime;
+    }
+
+    /**
+     * Respawn the player at spawn point with full health.
+     */
+    public void respawn() {
+        // Reset stats (health, hunger, etc.)
+        stats.respawn();
+
+        // Clear inventory just in case (though it should be empty from death drop)
+        inventory.clearInventory();
+
+        // Reset death animation
+        deathTime = 0;
+
+        // Reset position to spawn point
+        position.set(spawnX, spawnY, spawnZ);
+        prevPosition.set(position);
+
+        // Reset velocity
+        velocity.set(0, 0, 0);
+
+        // Reset physics state
+        onGround = false;
+        flying = false;
+        sprinting = false;
+        sneaking = false;
+        fallStartY = spawnY;
+
+        // Update bounding box
+        boundingBox = createBoundingBox();
+
+        // Reset camera
+        camera.setPosition(spawnX, spawnY + EYE_HEIGHT, spawnZ);
+    }
+
     // ============== Slot Switch Animation ==============
 
     private int pendingSlot = -1;
@@ -1830,5 +1910,70 @@ public class Player {
      */
     public float getSlotSwitchProgress(float partialTick) {
         return prevSlotSwitchProgress + (slotSwitchProgress - prevSlotSwitchProgress) * partialTick;
+    }
+
+    /**
+     * Drop all items in inventory into the world (on death).
+     */
+    public void dropAllItems() {
+        if (world == null)
+            return;
+
+        float dropX = position.x;
+        float dropY = position.y + 1.0f; // Drop at body height
+        float dropZ = position.z;
+
+        java.util.Random rand = new java.util.Random();
+
+        // Drop hotbar items
+        com.craftzero.inventory.ItemStack[] hotbar = inventory.getHotbar();
+        for (int i = 0; i < hotbar.length; i++) {
+            if (hotbar[i] != null && !hotbar[i].isEmpty()) {
+                // Random velocity for scatter effect
+                float velX = (rand.nextFloat() - 0.5f) * 3.0f;
+                float velY = rand.nextFloat() * 3.0f + 2.0f;
+                float velZ = (rand.nextFloat() - 0.5f) * 3.0f;
+                world.spawnThrownItem(dropX, dropY, dropZ, hotbar[i].getType(), hotbar[i].getCount(),
+                        velX, velY, velZ);
+            }
+        }
+
+        // Drop main inventory items
+        com.craftzero.inventory.ItemStack[] main = inventory.getMainInventory();
+        for (int i = 0; i < main.length; i++) {
+            if (main[i] != null && !main[i].isEmpty()) {
+                float velX = (rand.nextFloat() - 0.5f) * 3.0f;
+                float velY = rand.nextFloat() * 3.0f + 2.0f;
+                float velZ = (rand.nextFloat() - 0.5f) * 3.0f;
+                world.spawnThrownItem(dropX, dropY, dropZ, main[i].getType(), main[i].getCount(),
+                        velX, velY, velZ);
+            }
+        }
+
+        // Drop crafting grid items
+        com.craftzero.inventory.ItemStack[] crafting = inventory.getCraftingGrid();
+        for (int i = 0; i < crafting.length; i++) {
+            if (crafting[i] != null && !crafting[i].isEmpty()) {
+                float velX = (rand.nextFloat() - 0.5f) * 3.0f;
+                float velY = rand.nextFloat() * 3.0f + 2.0f;
+                float velZ = (rand.nextFloat() - 0.5f) * 3.0f;
+                world.spawnThrownItem(dropX, dropY, dropZ, crafting[i].getType(), crafting[i].getCount(),
+                        velX, velY, velZ);
+            }
+        }
+
+        // Drop any item held in cursor
+        com.craftzero.inventory.ItemStack cursor = inventory.getCursorItem();
+        if (cursor != null && !cursor.isEmpty()) {
+            float velX = (rand.nextFloat() - 0.5f) * 3.0f;
+            float velY = rand.nextFloat() * 3.0f + 2.0f;
+            float velZ = (rand.nextFloat() - 0.5f) * 3.0f;
+            world.spawnThrownItem(dropX, dropY, dropZ, cursor.getType(), cursor.getCount(),
+                    velX, velY, velZ);
+            inventory.setCursorItem(null);
+        }
+
+        // Clear inventory after dropping
+        inventory.clearInventory();
     }
 }

@@ -165,4 +165,16 @@ public class Inventory {
         return false;
     }
 
+    /**
+     * Clear all items from the inventory (hotbar, main, and crafting).
+     */
+    public void clearInventory() {
+        for (int i = 0; i < hotbar.length; i++) {
+            hotbar[i] = null;
+        }
+        for (int i = 0; i < mainInventory.length; i++) {
+            mainInventory[i] = null;
+        }
+        clearCraftingGrid();
+    }
 }

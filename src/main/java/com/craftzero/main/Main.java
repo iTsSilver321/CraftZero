@@ -51,6 +51,7 @@ public class Main implements Runnable {
     private MobRenderer mobRenderer;
     private com.craftzero.graphics.PlayerRenderer playerRenderer;
     private CraftingTableScreen craftingTableScreen;
+    private com.craftzero.graphics.DeathScreen deathScreen;
     private World world;
     private MobSpawner mobSpawner;
     private Player player;
@@ -177,6 +178,11 @@ public class Main implements Runnable {
         // Create crafting table screen
         craftingTableScreen = new CraftingTableScreen(player.getInventory());
 
+        // Initialize death screen
+        deathScreen = new com.craftzero.graphics.DeathScreen();
+        deathScreen.init(window);
+        deathScreen.setTextRenderer(textRenderer);
+
         // Lock cursor for FPS mode
         Input.setCursorLocked(true);
         paused = false;
@@ -256,6 +262,26 @@ public class Main implements Runnable {
     }
 
     private void handleInput() {
+        // Handle death screen input
+        if (player.isDead()) {
+            // Unlock cursor for death screen button interaction
+            if (Input.isCursorLocked()) {
+                Input.setCursorLocked(false);
+            }
+
+            // Handle respawn via R key or clicking respawn button
+            boolean respawnPressed = Input.isKeyPressed(GLFW_KEY_R) || Input.isKeyPressed(GLFW_KEY_ENTER);
+            boolean respawnClicked = deathScreen.isRespawnClicked(Input.isButtonPressed(GLFW_MOUSE_BUTTON_LEFT));
+
+            if (respawnPressed || respawnClicked) {
+                player.respawn();
+                // Re-lock cursor after respawning
+                Input.setCursorLocked(true);
+                paused = false;
+            }
+            return; // Block all other input when dead
+        }
+
         // Toggle camera mode with F5
         if (Input.isKeyPressed(GLFW_KEY_F5)) {
             player.cycleCameraMode();
@@ -427,6 +453,8 @@ public class Main implements Runnable {
             hudRenderer.updateOrtho(window.getWidth(), window.getHeight());
             survivalHudRenderer.updateOrtho(window.getWidth(), window.getHeight());
             inventoryRenderer.updateOrtho(window.getWidth(), window.getHeight());
+            deathScreen.updateOrtho(window.getWidth(), window.getHeight());
+            textRenderer.updateOrtho(window.getWidth(), window.getHeight());
             window.setResized(false);
         }
 
@@ -480,8 +508,10 @@ public class Main implements Runnable {
         playerRenderer.render(player, player.getCamera(), partialTick, player.getCameraMode());
         renderer.endRender();
 
-        // Render HUD (crosshair)
-        hudRenderer.render(window);
+        // Render HUD (crosshair) - only when alive
+        if (!player.isDead()) {
+            hudRenderer.render(window);
+        }
 
         // Render survival HUD (hearts and hunger)
         survivalHudRenderer.render(player.getStats(), player.getInventory(), deltaTime);
@@ -491,6 +521,11 @@ public class Main implements Runnable {
 
         // Render crafting table overlay (if open)
         inventoryRenderer.renderCraftingTable(craftingTableScreen);
+
+        // Render death screen overlay (if dead)
+        if (player.isDead()) {
+            deathScreen.render(player.getDeathTime(), (float) Input.getMouseX(), (float) Input.getMouseY());
+        }
     }
 
     private void cleanup() {
@@ -527,6 +562,9 @@ public class Main implements Runnable {
         }
         if (inventoryPlayerRenderer != null) {
             inventoryPlayerRenderer.cleanup();
+        }
+        if (deathScreen != null) {
+            deathScreen.cleanup();
         }
         window.cleanup();
         System.out.println("CraftZero shut down successfully.");

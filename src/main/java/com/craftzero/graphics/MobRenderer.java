@@ -199,9 +199,16 @@ public class MobRenderer {
 
         model.animate(limbSwing, limbSwingAmount, ageInTicks);
 
+        // Death animation - fall over like humanoids
+        float deathRotation = 0;
+        if (mob.isDead()) {
+            deathRotation = Math.min(mob.getDeathTime() * 0.1f, 1.5f);
+        }
+
         modelMatrix.identity();
         modelMatrix.translate(x, y + yOffset, z);
         modelMatrix.rotateY((float) Math.toRadians(-bodyYaw));
+        modelMatrix.rotateZ(deathRotation);
         modelMatrix.scale(MODEL_SCALE);
 
         model.root.calculateTransform(modelMatrix);

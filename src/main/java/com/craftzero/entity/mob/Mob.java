@@ -47,8 +47,21 @@ public abstract class Mob extends LivingEntity {
 
     @Override
     public void tick() {
-        if (dead)
+        // When dead, only handle death animation - skip AI and movement
+        if (dead) {
+            // Store previous position for interpolation
+            prevX = x;
+            prevY = y;
+            prevZ = z;
+
+            // Increment death timer (handled by LivingEntity.tick() normally, but we need
+            // it here)
+            deathTime++;
+            if (deathTime >= 20) { // Remove after 1 second
+                remove();
+            }
             return;
+        }
 
         // Update AI FIRST - this sets targetYaw and forwardSpeed
         ai.tick();

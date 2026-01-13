@@ -307,17 +307,34 @@ public class PlayerRenderer {
             playerModel.leftArm.setRotation(swingRot, sinSqrtSwing * 0.6f, sinSqrtSwing * 0.2f);
         }
 
+        // Death animation - player falls over
+        float deathRotation = 0;
+        if (player.isDead()) {
+            deathRotation = Math.min(player.getDeathTime() * 0.1f, 1.5f);
+        }
+
         modelMatrix.identity();
         modelMatrix.translate(renderX, renderY, renderZ);
         modelMatrix.rotateY((float) Math.toRadians(-bodyYaw));
+        modelMatrix.rotateZ(deathRotation);
         modelMatrix.scale(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
 
         playerModel.root.calculateTransform(modelMatrix);
+
+        // Apply hurt flash when dead (red tint)
+        if (player.isDead()) {
+            shader.setUniform("hurtFlash", 0.5f);
+        }
 
         glDisable(GL_CULL_FACE);
         playerTexture.bind(0);
         renderModelPart(playerModel.root);
         playerTexture.unbind();
+
+        // Reset hurt flash
+        if (player.isDead()) {
+            shader.setUniform("hurtFlash", 0.0f);
+        }
 
         // Render held item in third person
         if (atlas != null || itemsTexture != null) {

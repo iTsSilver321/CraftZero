@@ -1,44 +1,49 @@
 package com.craftzero.graphics;
 
 import org.lwjgl.BufferUtils;
-
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
 
-import java.awt.*;
+import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
-import java.util.HashMap;
-import java.util.Map;
 
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL15.*;
 import static org.lwjgl.opengl.GL20.*;
 import static org.lwjgl.opengl.GL30.*;
 
+/**
+ * Minecraft bitmap font renderer using default.png texture.
+ * The font texture is a 16x16 grid of 8x8 pixel characters (128x128 or
+ * 256x128).
+ */
 public class TextRenderer {
 
     private int vao, vbo;
     private ShaderProgram shader;
     private int fontTextureId;
-    private Map<Character, Glyph> glyphs = new HashMap<>();
     private int windowWidth, windowHeight;
 
-    private static final int FONT_SIZE = 32; // Bitmap resolution
-    private static final int BITMAP_WIDTH = 512;
-    private static final int BITMAP_HEIGHT = 512;
+    // Minecraft font uses 8x8 pixel characters in a 16x16 grid
+    private static final int CHAR_WIDTH = 8;
+    private static final int CHAR_HEIGHT = 8;
+    private static final int GRID_COLS = 16;
+    private static final int GRID_ROWS = 16;
 
-    private static class Glyph {
-        float x, y, width, height;
-        float xOffset, yOffset, xAdvance;
-    }
+    // Character widths for proportional spacing (Minecraft uses variable width)
+    private int[] charWidths = new int[256];
+
+    private int textureWidth = 128;
+    private int textureHeight = 128;
 
     public void init(int windowWidth, int windowHeight) throws Exception {
         this.windowWidth = windowWidth;
         this.windowHeight = windowHeight;
 
-        // Generate Font Texture
-        generateFontTexture();
+        // Load Minecraft font texture
+        loadFontTexture();
 
         // Setup Shader
         shader = new ShaderProgram();
@@ -58,7 +63,8 @@ public class TextRenderer {
                         "uniform sampler2D text;\n" +
                         "uniform vec4 textColor;\n" +
                         "void main() {\n" +
-                        "    vec4 sampled = vec4(1.0, 1.0, 1.0, texture(text, TexCoords).r);\n" +
+                        "    vec4 sampled = texture(text, TexCoords);\n" +
+                        "    if (sampled.a < 0.1) discard;\n" +
                         "    color = textColor * sampled;\n" +
                         "}");
         shader.link();
@@ -78,64 +84,31 @@ public class TextRenderer {
         glBindVertexArray(0);
     }
 
-    private void generateFontTexture() {
-        BufferedImage image = new BufferedImage(BITMAP_WIDTH, BITMAP_HEIGHT, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g = image.createGraphics();
-        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-        g.setFont(new Font("Segoe UI", Font.PLAIN, FONT_SIZE));
-        g.setColor(Color.WHITE);
-
-        FontMetrics fm = g.getFontMetrics();
-        int x = 0;
-        int y = 0;
-        int intHeight = fm.getHeight();
-
-        int padding = 2; // Padding to prevent texture bleeding
-
-        for (int i = 32; i < 127; i++) {
-            char c = (char) i;
-            int charWidth = fm.charWidth(c);
-            int charHeight = fm.getHeight();
-
-            if (x + charWidth + padding >= BITMAP_WIDTH) {
-                x = 0;
-                y += intHeight + padding; // Add vertical padding
-            }
-
-            g.drawString(String.valueOf(c), x, y + fm.getAscent());
-
-            Glyph glyph = new Glyph();
-            glyph.x = x / (float) BITMAP_WIDTH;
-            glyph.y = y / (float) BITMAP_HEIGHT;
-            glyph.width = charWidth / (float) BITMAP_WIDTH;
-            glyph.height = charHeight / (float) BITMAP_HEIGHT;
-            glyph.xOffset = 0;
-            glyph.yOffset = 0;
-            glyph.xAdvance = charWidth;
-
-            glyphs.put(c, glyph);
-            x += charWidth + padding;
+    private void loadFontTexture() throws Exception {
+        // Load the Minecraft font from resources
+        InputStream is = getClass().getResourceAsStream("/textures/font/default.png");
+        if (is == null) {
+            throw new Exception("Could not find font texture: /textures/font/default.png");
         }
-        g.dispose();
+
+        BufferedImage image = ImageIO.read(is);
+        is.close();
+
+        textureWidth = image.getWidth();
+        textureHeight = image.getHeight();
+
+        // Calculate character widths by scanning each character cell
+        calculateCharWidths(image);
 
         // Upload texture
         fontTextureId = glGenTextures();
         glBindTexture(GL_TEXTURE_2D, fontTextureId);
 
-        int[] pixels = new int[BITMAP_WIDTH * BITMAP_HEIGHT];
-        image.getRGB(0, 0, BITMAP_WIDTH, BITMAP_HEIGHT, pixels, 0, BITMAP_WIDTH);
+        int[] pixels = new int[textureWidth * textureHeight];
+        image.getRGB(0, 0, textureWidth, textureHeight, pixels, 0, textureWidth);
 
-        ByteBuffer buffer = BufferUtils.createByteBuffer(BITMAP_WIDTH * BITMAP_HEIGHT * 4);
+        ByteBuffer buffer = BufferUtils.createByteBuffer(textureWidth * textureHeight * 4);
         for (int pixel : pixels) {
-            // Extract alpha from red channel since we drew white text
-            int alpha = (pixel >> 24) & 0xFF;
-            // Or just use the alpha itself? BufferedImage is TYPE_INT_ARGB
-            // If we drew white (255,255,255) with alpha, the RGB are 255.
-            // Let's use Red channel as 'intensity' for single channel texture or keep
-            // generic.
-
-            // Standard approach: use trace.
-            // Let's just create RGBA texture to be safe
             buffer.put((byte) ((pixel >> 16) & 0xFF)); // R
             buffer.put((byte) ((pixel >> 8) & 0xFF)); // G
             buffer.put((byte) (pixel & 0xFF)); // B
@@ -143,11 +116,60 @@ public class TextRenderer {
         }
         buffer.flip();
 
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, BITMAP_WIDTH, BITMAP_HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, textureWidth, textureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        // Use NEAREST filtering for pixel-perfect Minecraft look
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    }
+
+    /**
+     * Calculate the width of each character by scanning the font texture.
+     * Minecraft characters have variable widths.
+     */
+    private void calculateCharWidths(BufferedImage image) {
+        int cellWidth = textureWidth / GRID_COLS;
+        int cellHeight = textureHeight / GRID_ROWS;
+
+        for (int charIndex = 0; charIndex < 256; charIndex++) {
+            int col = charIndex % GRID_COLS;
+            int row = charIndex / GRID_COLS;
+
+            int cellX = col * cellWidth;
+            int cellY = row * cellHeight;
+
+            // Find the rightmost non-transparent pixel
+            int width = 0;
+            for (int x = cellWidth - 1; x >= 0; x--) {
+                boolean found = false;
+                for (int y = 0; y < cellHeight; y++) {
+                    int px = cellX + x;
+                    int py = cellY + y;
+                    if (px < textureWidth && py < textureHeight) {
+                        int pixel = image.getRGB(px, py);
+                        int alpha = (pixel >> 24) & 0xFF;
+                        if (alpha > 0) {
+                            width = x + 2; // +1 for the pixel, +1 for spacing
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if (found)
+                    break;
+            }
+
+            // Minimum width for space character
+            if (width == 0) {
+                width = 4;
+            }
+
+            charWidths[charIndex] = width;
+        }
+
+        // Override space width
+        charWidths[32] = 4;
     }
 
     public void drawText(String text, float x, float y, float scale, float[] color) {
@@ -164,49 +186,35 @@ public class TextRenderer {
         Matrix4f projection = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
         shader.setUniform("projection", projection);
 
+        int cellWidth = textureWidth / GRID_COLS;
+        int cellHeight = textureHeight / GRID_ROWS;
+
+        float charW = cellWidth * scale;
+        float charH = cellHeight * scale;
+
         for (char c : text.toCharArray()) {
-            Glyph glyph = glyphs.get(c);
-            if (glyph == null)
+            int charIndex = (int) c;
+            if (charIndex < 0 || charIndex >= 256)
                 continue;
 
-            float xPos = x + glyph.xOffset * scale;
-            float yPos = y + glyph.yOffset * scale; // Assuming top-left origin?
-            // Font rendering usually baseline. My generator used top-left.
-            // Let's assume y is top of text.
+            int col = charIndex % GRID_COLS;
+            int row = charIndex / GRID_COLS;
 
-            float w = glyph.width * BITMAP_WIDTH * scale;
-            float h = glyph.height * BITMAP_HEIGHT * scale;
-
-            float u = glyph.x;
-            float v = glyph.y; // Inverted? AWT is top-left 0,0. OpenGL 0,0 is bottom-left usually depending on
-                               // ortho.
-            // My ortho is 0,0 top-left (ortho(0, w, h, 0)).
-            // So texture coords: 0,0 is top-left of image? No, OpenGL texture orgin is
-            // bottom-left.
-            // AWT image (0,0) is top-left.
-            // buffer.put stores rows top-to-bottom.
-            // So if I upload straight, 0,0 in UV is bottom-left of image. The image is
-            // flipped.
-            // Standard fix: flip Y in shader or CPU.
-            // Or simply: AWT Y=0 is the first byte. OpenGL Y=0 is the first byte?
-            // OpenGL default: 0,0 is bottom-left.
-            // Actually, let's just use standard UV:
-            // Top-Left of quad: U, V
-
-            // Just try standard and flip if upside down.
-
-            float u2 = u + glyph.width;
-            float v2 = v + glyph.height;
+            // UV coordinates for this character
+            float u1 = (float) col / GRID_COLS;
+            float v1 = (float) row / GRID_ROWS;
+            float u2 = (float) (col + 1) / GRID_COLS;
+            float v2 = (float) (row + 1) / GRID_ROWS;
 
             // Vertices: Pos(x,y) Tex(u,v)
             float[] vertices = {
-                    xPos, yPos + h, u, v2,
-                    xPos, yPos, u, v,
-                    xPos + w, yPos, u2, v,
+                    x, y + charH, u1, v2,
+                    x, y, u1, v1,
+                    x + charW, y, u2, v1,
 
-                    xPos, yPos + h, u, v2,
-                    xPos + w, yPos, u2, v,
-                    xPos + w, yPos + h, u2, v2
+                    x, y + charH, u1, v2,
+                    x + charW, y, u2, v1,
+                    x + charW, y + charH, u2, v2
             };
 
             glBindBuffer(GL_ARRAY_BUFFER, vbo);
@@ -215,7 +223,8 @@ public class TextRenderer {
 
             glDrawArrays(GL_TRIANGLES, 0, 6);
 
-            x += glyph.xAdvance * scale;
+            // Advance by character width
+            x += charWidths[charIndex] * scale;
         }
 
         glBindVertexArray(0);
@@ -226,11 +235,37 @@ public class TextRenderer {
     public int getStringWidth(String text, float scale) {
         int width = 0;
         for (char c : text.toCharArray()) {
-            Glyph glyph = glyphs.get(c);
-            if (glyph != null) {
-                width += glyph.xAdvance * scale;
+            int charIndex = (int) c;
+            if (charIndex >= 0 && charIndex < 256) {
+                width += charWidths[charIndex];
             }
         }
-        return width;
+        return (int) (width * scale);
+    }
+
+    /**
+     * Update the orthographic projection for window resize/fullscreen.
+     */
+    public void updateOrtho(int width, int height) {
+        this.windowWidth = width;
+        this.windowHeight = height;
+    }
+
+    /**
+     * Cleanup resources.
+     */
+    public void cleanup() {
+        if (shader != null) {
+            shader.cleanup();
+        }
+        if (vao != 0) {
+            glDeleteVertexArrays(vao);
+        }
+        if (vbo != 0) {
+            glDeleteBuffers(vbo);
+        }
+        if (fontTextureId != 0) {
+            glDeleteTextures(fontTextureId);
+        }
     }
 }

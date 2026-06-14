@@ -56,12 +56,47 @@ public class Block {
                 };
         }
 
+        public static float[] getCuboidFaceVertices(int face, float x, float y, float z, BlockShape.Cuboid box) {
+                float x0 = x + box.minX();
+                float y0 = y + box.minY();
+                float z0 = z + box.minZ();
+                float x1 = x + box.maxX();
+                float y1 = y + box.maxY();
+                float z1 = z + box.maxZ();
+
+                return switch (face) {
+                        case FACE_TOP -> new float[] {
+                                        x0, y1, z0, x0, y1, z1, x1, y1, z1, x1, y1, z0
+                        };
+                        case FACE_BOTTOM -> new float[] {
+                                        x0, y0, z1, x0, y0, z0, x1, y0, z0, x1, y0, z1
+                        };
+                        case FACE_NORTH -> new float[] {
+                                        x1, y1, z0, x1, y0, z0, x0, y0, z0, x0, y1, z0
+                        };
+                        case FACE_SOUTH -> new float[] {
+                                        x0, y1, z1, x0, y0, z1, x1, y0, z1, x1, y1, z1
+                        };
+                        case FACE_EAST -> new float[] {
+                                        x1, y1, z1, x1, y0, z1, x1, y0, z0, x1, y1, z0
+                        };
+                        case FACE_WEST -> new float[] {
+                                        x0, y1, z0, x0, y0, z0, x0, y0, z1, x0, y1, z1
+                        };
+                        default -> new float[12];
+                };
+        }
+
         /**
          * Get texture coordinates for a face.
          * Returns 8 floats (4 vertices * 2 components).
          */
         public static float[] getFaceTexCoords(BlockType type, int face) {
-                float[] uv = type.getTextureCoords(face);
+                return getFaceTexCoords(type, face, 0);
+        }
+
+        public static float[] getFaceTexCoords(BlockType type, int face, int metadata) {
+                float[] uv = type.getTextureCoords(face, metadata);
                 float u1 = uv[0], v1 = uv[1], u2 = uv[2], v2 = uv[3];
 
                 // UV layout matching TL -> BL -> BR -> TR

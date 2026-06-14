@@ -58,7 +58,7 @@ public class LineOfSightUtil {
             int by = (int) Math.floor(y);
             int bz = (int) Math.floor(z);
 
-            BlockType block = world.getBlock(bx, by, bz);
+            BlockType block = world.getBlockIfLoaded(bx, by, bz, BlockType.BEDROCK);
             if (block != null && block.isSolid() && !block.isTransparent()) {
                 return false; // Blocked by solid block
             }
@@ -88,7 +88,7 @@ public class LineOfSightUtil {
 
         // Check if there's ground within maxFallHeight blocks below
         for (int checkY = by; checkY >= by - maxFallHeight; checkY--) {
-            BlockType block = world.getBlock(bx, checkY, bz);
+            BlockType block = world.getBlockIfLoaded(bx, checkY, bz, BlockType.AIR);
             if (block != null && block.isSolid()) {
                 return true; // Found ground
             }

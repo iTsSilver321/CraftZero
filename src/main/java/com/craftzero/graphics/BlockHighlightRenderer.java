@@ -1,9 +1,9 @@
 package com.craftzero.graphics;
 
 import com.craftzero.physics.Raycast;
+import com.craftzero.physics.AABB;
 
 import org.joml.Matrix4f;
-import org.joml.Vector3i;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
@@ -237,54 +237,14 @@ public class BlockHighlightRenderer {
             return;
         }
 
-        Vector3i pos = target.blockPos;
+        AABB box = target.selectionBox != null
+                ? target.selectionBox
+                : AABB.forBlock(target.blockPos.x, target.blockPos.y, target.blockPos.z);
 
-        // Calculate which faces are visible to the player
-        // A face is visible if:
-        // 1. The camera is on the same side as the face normal (facing camera)
-        // 2. The neighbor block on that face does not occlude it (exposed)
-        float camX = camera.getPosition().x;
-        float camY = camera.getPosition().y;
-        float camZ = camera.getPosition().z;
-
-        boolean[] visibleFaces = new boolean[6];
-
-        // Check visibility against block face planes (Back-Face Culling for Wireframe)
-        // A face is visible if the camera is strictly "in front" of the face plane.
-
-        // Face 0: Top (+Y) -> Plane at Y+1. Camera must be > Y+1.
-        visibleFaces[0] = (camY > pos.y + 1.0f) && !world.getBlock(pos.x, pos.y + 1, pos.z).occludesFace();
-
-        // Face 1: Bottom (-Y) -> Plane at Y. Camera must be < Y.
-        visibleFaces[1] = (camY < pos.y) && !world.getBlock(pos.x, pos.y - 1, pos.z).occludesFace();
-
-        // Face 2: North (-Z) -> Plane at Z. Camera must be < Z.
-        visibleFaces[2] = (camZ < pos.z) && !world.getBlock(pos.x, pos.y, pos.z - 1).occludesFace();
-
-        // Face 3: South (+Z) -> Plane at Z+1. Camera must be > Z+1.
-        visibleFaces[3] = (camZ > pos.z + 1.0f) && !world.getBlock(pos.x, pos.y, pos.z + 1).occludesFace();
-
-        // Face 4: East (+X) -> Plane at X+1. Camera must be > X+1.
-        visibleFaces[4] = (camX > pos.x + 1.0f) && !world.getBlock(pos.x + 1, pos.y, pos.z).occludesFace();
-
-        // Face 5: West (-X) -> Plane at X. Camera must be < X.
-        visibleFaces[5] = (camX < pos.x) && !world.getBlock(pos.x - 1, pos.y, pos.z).occludesFace();
-
-        // Build vertices for visible faces only
-        float[] faceVerts = new float[24];
-        int vertexCount = 0;
         vertexBuffer.clear();
-        for (int face = 0; face < 6; face++) {
-            if (visibleFaces[face]) {
-                getFaceVertices(face, faceVerts);
-                vertexBuffer.put(faceVerts);
-                vertexCount += 8; // 8 vertices per face
-            }
-        }
+        putBoxEdges(box);
         vertexBuffer.flip();
-
-        if (vertexCount == 0)
-            return; // No visible faces
+        int vertexCount = 24;
 
         // Update VBO with visible face vertices
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
@@ -305,7 +265,7 @@ public class BlockHighlightRenderer {
         shader.bind();
 
         // Calculate MVP
-        modelMatrix.identity().translate(pos.x, pos.y, pos.z);
+        modelMatrix.identity();
         Matrix4f mvp = new Matrix4f();
         camera.getProjectionMatrix().mul(camera.getViewMatrix(), mvp);
         mvp.mul(modelMatrix);
@@ -320,6 +280,31 @@ public class BlockHighlightRenderer {
 
         glLineWidth(1.0f);
         glDisable(GL_BLEND);
+    }
+
+    private void putBoxEdges(AABB box) {
+        float x0 = box.getMin().x - 0.001f;
+        float y0 = box.getMin().y - 0.001f;
+        float z0 = box.getMin().z - 0.001f;
+        float x1 = box.getMax().x + 0.001f;
+        float y1 = box.getMax().y + 0.001f;
+        float z1 = box.getMax().z + 0.001f;
+
+        float[] vertices = {
+                x0, y0, z0, x1, y0, z0,
+                x1, y0, z0, x1, y0, z1,
+                x1, y0, z1, x0, y0, z1,
+                x0, y0, z1, x0, y0, z0,
+                x0, y1, z0, x1, y1, z0,
+                x1, y1, z0, x1, y1, z1,
+                x1, y1, z1, x0, y1, z1,
+                x0, y1, z1, x0, y1, z0,
+                x0, y0, z0, x0, y1, z0,
+                x1, y0, z0, x1, y1, z0,
+                x1, y0, z1, x1, y1, z1,
+                x0, y0, z1, x0, y1, z1
+        };
+        vertexBuffer.put(vertices);
     }
 
     public void cleanup() {

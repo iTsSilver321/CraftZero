@@ -14,6 +14,13 @@ public class ChunkMeshData {
     public final float[] opaqueColors;
     public final int[] opaqueIndices;
 
+    // Cutout mesh data (alpha-tested blocks such as leaves)
+    public final float[] cutoutPositions;
+    public final float[] cutoutTexCoords;
+    public final float[] cutoutNormals;
+    public final float[] cutoutColors;
+    public final int[] cutoutIndices;
+
     // Transparent mesh data
     public final float[] transPositions;
     public final float[] transTexCoords;
@@ -27,6 +34,8 @@ public class ChunkMeshData {
     public ChunkMeshData(
             float[] opaquePositions, float[] opaqueTexCoords, float[] opaqueNormals,
             float[] opaqueColors, int[] opaqueIndices,
+            float[] cutoutPositions, float[] cutoutTexCoords, float[] cutoutNormals,
+            float[] cutoutColors, int[] cutoutIndices,
             float[] transPositions, float[] transTexCoords, float[] transNormals,
             float[] transColors, int[] transIndices) {
 
@@ -36,13 +45,19 @@ public class ChunkMeshData {
         this.opaqueColors = opaqueColors;
         this.opaqueIndices = opaqueIndices;
 
+        this.cutoutPositions = cutoutPositions;
+        this.cutoutTexCoords = cutoutTexCoords;
+        this.cutoutNormals = cutoutNormals;
+        this.cutoutColors = cutoutColors;
+        this.cutoutIndices = cutoutIndices;
+
         this.transPositions = transPositions;
         this.transTexCoords = transTexCoords;
         this.transNormals = transNormals;
         this.transColors = transColors;
         this.transIndices = transIndices;
 
-        this.empty = (opaquePositions.length == 0 && transPositions.length == 0);
+        this.empty = (opaquePositions.length == 0 && cutoutPositions.length == 0 && transPositions.length == 0);
     }
 
     /**
@@ -50,6 +65,10 @@ public class ChunkMeshData {
      */
     public boolean hasOpaqueMesh() {
         return opaquePositions.length > 0;
+    }
+
+    public boolean hasCutoutMesh() {
+        return cutoutPositions.length > 0;
     }
 
     /**

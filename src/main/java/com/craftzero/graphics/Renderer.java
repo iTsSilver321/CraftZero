@@ -52,6 +52,7 @@ public class Renderer {
         shaderProgram.createUniform("sunBrightness"); // Day/night multiplier
         shaderProgram.createUniform("entityBrightness"); // Entity lighting override
         shaderProgram.createUniform("hurtFlash"); // Red tint when entity takes damage
+        shaderProgram.createUniform("alphaCutoff"); // Alpha-test threshold for cutout geometry
 
         // Sky Blue background
         glClearColor(0.529f, 0.808f, 0.922f, 1.0f);
@@ -138,6 +139,7 @@ public class Renderer {
         shaderProgram.setUniform("lightColor", lightColor);
         shaderProgram.setUniform("sunBrightness", sunBrightness);
         shaderProgram.setUniform("entityBrightness", 0.0f); // Default: use vertex colors
+        shaderProgram.setUniform("alphaCutoff", 0.0f);
     }
 
     /**
@@ -149,6 +151,11 @@ public class Renderer {
         mesh.render();
     }
 
+    public void renderMesh(Mesh mesh, Matrix4f modelMatrix) {
+        shaderProgram.setUniform("modelMatrix", modelMatrix);
+        mesh.render();
+    }
+
     /**
      * Render a mesh with identity model matrix (during batch).
      */
@@ -156,6 +163,19 @@ public class Renderer {
         modelMatrix.identity();
         shaderProgram.setUniform("modelMatrix", modelMatrix);
         mesh.render();
+    }
+
+    public void useIdentityModelMatrix() {
+        modelMatrix.identity();
+        shaderProgram.setUniform("modelMatrix", modelMatrix);
+    }
+
+    public void renderPreparedMesh(Mesh mesh) {
+        mesh.renderBound();
+    }
+
+    public void endPreparedMeshBatch() {
+        Mesh.unbind();
     }
 
     /**
@@ -208,6 +228,10 @@ public class Renderer {
      */
     public void setEntityBrightness(float brightness) {
         shaderProgram.setUniform("entityBrightness", brightness);
+    }
+
+    public void setAlphaCutoff(float cutoff) {
+        shaderProgram.setUniform("alphaCutoff", cutoff);
     }
 
     public void cleanup() {

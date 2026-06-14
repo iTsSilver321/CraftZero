@@ -1,5 +1,13 @@
 package com.craftzero.main;
 
+import com.craftzero.progression.PlayerProgression;
+import com.craftzero.progression.StatusEffectInstance;
+import com.craftzero.progression.StatusEffectType;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /**
  * Player survival stats: health, hunger, and saturation.
  * Implements Minecraft-style mechanics:
@@ -39,6 +47,8 @@ public class PlayerStats {
     // Spawn invincibility
     private static final float SPAWN_INVINCIBILITY_TIME = 5.0f; // 5 seconds of invincibility after spawn
     private float invincibilityTimer = SPAWN_INVINCIBILITY_TIME;
+    private float hurtInvulnerabilityTimer = 0.0f;
+    private float lastDamageAmount = 0.0f;
 
     // State tracking
     private boolean isDead = false;
@@ -47,6 +57,8 @@ public class PlayerStats {
     public static final float MAX_AIR_SECONDS = 15.0f; // 15 seconds of breath
     private float currentAir;
     private float drownTimer = 0f;
+    private final PlayerProgression progression;
+    private final List<StatusEffectInstance> activeEffects;
 
     public PlayerStats() {
         this.health = MAX_HEALTH;
@@ -54,6 +66,8 @@ public class PlayerStats {
         this.saturation = 15.0f; // Start with high saturation (requested 15)
         this.invincibilityTimer = SPAWN_INVINCIBILITY_TIME;
         this.currentAir = MAX_AIR_SECONDS;
+        this.progression = new PlayerProgression();
+        this.activeEffects = new ArrayList<>();
     }
 
     /**
@@ -71,6 +85,13 @@ public class PlayerStats {
         if (invincibilityTimer > 0) {
             invincibilityTimer -= deltaTime;
         }
+        if (hurtInvulnerabilityTimer > 0) {
+            hurtInvulnerabilityTimer -= deltaTime;
+            if (hurtInvulnerabilityTimer <= 0) {
+                lastDamageAmount = 0.0f;
+            }
+        }
+        tickEffects(deltaTime);
 
         // Hunger drain from activities
         float drainRate = HUNGER_DRAIN_IDLE;
@@ -150,10 +171,48 @@ public class PlayerStats {
      * 
      * @param amount damage amount
      */
-    public void damage(float amount) {
-        if (isDead || invincibilityTimer > 0)
-            return;
+    public boolean damage(float amount) {
+        if (isDead || amount <= 0 || invincibilityTimer > 0) {
+            return false;
+        }
+        if (hurtInvulnerabilityTimer > 0) {
+            if (amount <= lastDamageAmount) {
+                return false;
+            }
+            damageInternal(amount - lastDamageAmount);
+            lastDamageAmount = amount;
+            return true;
+        }
         damageInternal(amount);
+        hurtInvulnerabilityTimer = CombatRules.PLAYER_HURT_INVULNERABILITY_TICKS / 20.0f;
+        lastDamageAmount = amount;
+        return true;
+    }
+
+    private void tickEffects(float deltaTime) {
+        int ticks = Math.max(1, Math.round(deltaTime * 20.0f));
+        for (int step = 0; step < ticks; step++) {
+            for (int i = activeEffects.size() - 1; i >= 0; i--) {
+                StatusEffectInstance effect = activeEffects.get(i);
+                applyEffectTick(effect);
+                StatusEffectInstance next = effect.ticked();
+                if (next.expired()) {
+                    activeEffects.remove(i);
+                } else {
+                    activeEffects.set(i, next);
+                }
+            }
+        }
+    }
+
+    private void applyEffectTick(StatusEffectInstance effect) {
+        if (effect.type() == StatusEffectType.REGENERATION && effect.durationTicks() % 50 == 0) {
+            heal(1.0f + effect.amplifier());
+        } else if (effect.type() == StatusEffectType.POISON && effect.durationTicks() % 25 == 0 && health > 1.0f) {
+            health = Math.max(1.0f, health - (1.0f + effect.amplifier()));
+        } else if (effect.type() == StatusEffectType.HUNGER && effect.durationTicks() % 20 == 0) {
+            hunger = Math.max(0, hunger - (0.025f * (effect.amplifier() + 1)));
+        }
     }
 
     /**
@@ -215,13 +274,69 @@ public class PlayerStats {
         starvationTimer = 0f;
         drownTimer = 0f;
         invincibilityTimer = SPAWN_INVINCIBILITY_TIME;
+        hurtInvulnerabilityTimer = 0.0f;
+        lastDamageAmount = 0.0f;
+        activeEffects.clear();
     }
 
     /**
      * Check if player is currently invincible.
      */
     public boolean isInvincible() {
-        return invincibilityTimer > 0;
+        return invincibilityTimer > 0 || hurtInvulnerabilityTimer > 0;
+    }
+
+    public void restore(float health, float hunger, float saturation, float currentAir) {
+        this.health = Math.max(0, Math.min(MAX_HEALTH, health));
+        this.hunger = Math.max(0, Math.min(MAX_HUNGER, hunger));
+        this.saturation = Math.max(0, Math.min(MAX_SATURATION, saturation));
+        this.currentAir = Math.max(0, Math.min(MAX_AIR_SECONDS, currentAir));
+        this.isDead = this.health <= 0;
+        this.starvationTimer = 0f;
+        this.drownTimer = 0f;
+        this.invincibilityTimer = 0f;
+        this.hurtInvulnerabilityTimer = 0f;
+        this.lastDamageAmount = 0f;
+    }
+
+    public PlayerProgression getProgression() {
+        return progression;
+    }
+
+    public List<StatusEffectInstance> getActiveEffects() {
+        return Collections.unmodifiableList(activeEffects);
+    }
+
+    public void setActiveEffects(List<StatusEffectInstance> effects) {
+        activeEffects.clear();
+        if (effects != null) {
+            for (StatusEffectInstance effect : effects) {
+                if (effect != null && !effect.expired()) {
+                    activeEffects.add(effect);
+                }
+            }
+        }
+    }
+
+    public void addEffect(StatusEffectInstance effect) {
+        if (effect == null || effect.expired()) {
+            return;
+        }
+        for (int i = 0; i < activeEffects.size(); i++) {
+            StatusEffectInstance existing = activeEffects.get(i);
+            if (existing.type() == effect.type()) {
+                if (effect.amplifier() > existing.amplifier()
+                        || effect.durationTicks() > existing.durationTicks()) {
+                    activeEffects.set(i, effect);
+                }
+                return;
+            }
+        }
+        activeEffects.add(effect);
+    }
+
+    public void clearEffects() {
+        activeEffects.clear();
     }
 
     // Getters

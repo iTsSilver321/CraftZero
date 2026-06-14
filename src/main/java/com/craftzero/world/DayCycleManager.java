@@ -43,6 +43,7 @@ public class DayCycleManager {
         this.lightColor = new Vector3f();
         this.sunDirection = new Vector3f();
         this.moonDirection = new Vector3f();
+        updateLighting();
     }
 
     public void update(float deltaTime) {
@@ -164,7 +165,28 @@ public class DayCycleManager {
     }
 
     public void setTime(float time) {
-        this.time = time;
+        this.time = ((time % TICKS_PER_DAY) + TICKS_PER_DAY) % TICKS_PER_DAY;
+        updateLighting();
+    }
+
+    public boolean isNight() {
+        return time >= 12541 && time < 23458;
+    }
+
+    public boolean isDay() {
+        return time >= 0 && time < 12000;
+    }
+
+    public boolean isDaylightBurnTime() {
+        return isDay() && sunDirection.y > 0.0f;
+    }
+
+    public void skipToMorning() {
+        if (isNight()) {
+            days++;
+            moonPhase = days % 8;
+            setTime(0);
+        }
     }
 
     /**

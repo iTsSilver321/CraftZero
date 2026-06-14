@@ -1,16 +1,14 @@
 package com.craftzero.entity.mob;
 
 import com.craftzero.entity.ai.*;
-import com.craftzero.world.BlockType;
+import com.craftzero.inventory.ItemType;
 
 /**
  * Chicken mob - passive, slow falling, drops feathers and chicken.
  */
 public class Chicken extends Mob {
 
-    private static final float WIDTH = 0.4f;
-    private static final float HEIGHT = 0.7f;
-    private static final float MAX_HEALTH = 4.0f;
+    private static final MobBalance.Spec SPEC = MobBalance.CHICKEN;
 
     // Slow falling
     private static final float CHICKEN_GRAVITY = -10.0f; // Much slower than normal
@@ -20,11 +18,12 @@ public class Chicken extends Mob {
     private static final int EGG_INTERVAL = 6000; // 5 minutes
 
     public Chicken() {
-        super(WIDTH, HEIGHT, MAX_HEALTH);
-        this.hostile = false;
-        this.burnsInSunlight = false;
-        this.moveSpeed = 0.12f;
-        this.experienceValue = 1;
+        super(SPEC.width(), SPEC.height(), SPEC.maxHealth());
+        this.definition = MobDefinition.CHICKEN;
+        this.hostile = SPEC.hostile();
+        this.burnsInSunlight = SPEC.burnsInSunlight();
+        this.moveSpeed = SPEC.moveSpeed();
+        this.experienceValue = SPEC.experienceValue();
         this.eggTimer = random.nextInt(EGG_INTERVAL);
 
         setupAI();
@@ -93,10 +92,8 @@ public class Chicken extends Mob {
 
     @Override
     public void dropLoot() {
-        // Drop 1-2 feathers
-        dropItems(BlockType.DIRT, 0, 2); // Placeholder for FEATHER
-        // Drop 1 raw chicken
-        dropItems(BlockType.DIRT, 1, 1); // Placeholder for RAW_CHICKEN
+        dropItems(ItemType.FEATHER, 0, 2);
+        dropItems(isOnFire() ? ItemType.COOKED_CHICKEN : ItemType.RAW_CHICKEN, 1, 1);
     }
 
     @Override

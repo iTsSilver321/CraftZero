@@ -1,5 +1,6 @@
 package com.craftzero.graphics;
 
+import com.craftzero.resources.ResourcePackManager;
 import org.lwjgl.system.MemoryStack;
 
 import java.io.IOException;
@@ -82,8 +83,9 @@ public class Texture {
     }
 
     private static ByteBuffer loadFromResource(String resourcePath) throws Exception {
-        // Load actual PNG file from resources
-        java.io.InputStream is = Texture.class.getResourceAsStream(resourcePath);
+        // Load texture-pack override first, then classpath default.
+        java.io.InputStream is = ResourcePackManager.openActive(resourcePath)
+                .orElseGet(() -> Texture.class.getResourceAsStream(resourcePath));
         if (is == null) {
             throw new Exception("Resource not found: " + resourcePath);
         }

@@ -1,16 +1,26 @@
 package com.craftzero.inventory;
 
-import com.craftzero.world.BlockType;
+import com.craftzero.progression.EnchantmentInstance;
+import com.craftzero.progression.PotionData;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
 /**
  * Represents a stack of items in the inventory.
- * Supports durability for tools.
+ * Supports durability plus Release 1.0-era structured metadata such as
+ * enchantments and potion identity.
  */
 public class ItemStack {
     @Getter
-    private BlockType type;
+    private ItemType type;
     @Getter
     @Setter
     private int count;
@@ -20,19 +30,25 @@ public class ItemStack {
     private int durability; // Current durability (-1 = not a tool)
     @Getter
     private int maxDurability; // Max durability (-1 = not a tool)
+    @Setter
+    private String customName;
+    private final List<EnchantmentInstance> enchantments;
+    private PotionData potionData;
+    private final Map<String, String> metadata;
 
-    public ItemStack(BlockType type, int count) {
+    public ItemStack(ItemType type, int count) {
         this.type = type;
         this.count = count;
+        this.enchantments = new ArrayList<>();
+        this.metadata = new LinkedHashMap<>();
 
-        // Tools don't stack and have durability
-        if (type.isTool()) {
+        // Damageable items don't stack and have durability
+        if (type != null && type.isDamageable()) {
             this.maxStackSize = 1;
-            ToolType toolType = type.getToolType();
-            this.maxDurability = toolType.getMaxDurability();
+            this.maxDurability = type.getMaxDurability();
             this.durability = this.maxDurability;
         } else {
-            this.maxStackSize = 64;
+            this.maxStackSize = type != null ? type.getMaxStackSize() : 64;
             this.maxDurability = -1;
             this.durability = -1;
         }
@@ -41,9 +57,9 @@ public class ItemStack {
     /**
      * Create an ItemStack with specific durability (for tools).
      */
-    public ItemStack(BlockType type, int count, int durability) {
+    public ItemStack(ItemType type, int count, int durability) {
         this(type, count);
-        if (type.isTool()) {
+        if (type != null && type.isDamageable()) {
             this.durability = durability;
         }
     }
@@ -70,10 +86,89 @@ public class ItemStack {
         return type != null && type.isTool();
     }
 
+    public boolean isDamageable() {
+        return type != null && type.isDamageable();
+    }
+
+    public ItemStack copy() {
+        ItemStack copy = new ItemStack(type, count, durability);
+        copy.customName = customName;
+        copy.enchantments.addAll(enchantments);
+        copy.potionData = potionData;
+        copy.metadata.putAll(metadata);
+        return copy;
+    }
+
+    public String getCustomName() {
+        return customName;
+    }
+
+    public List<EnchantmentInstance> getEnchantments() {
+        return Collections.unmodifiableList(enchantments);
+    }
+
+    public void setEnchantments(Collection<EnchantmentInstance> values) {
+        enchantments.clear();
+        if (values != null) {
+            for (EnchantmentInstance value : values) {
+                if (value != null) {
+                    enchantments.add(value);
+                }
+            }
+        }
+    }
+
+    public void addEnchantment(EnchantmentInstance enchantment) {
+        if (enchantment != null) {
+            enchantments.add(enchantment);
+        }
+    }
+
+    public PotionData getPotionData() {
+        return potionData;
+    }
+
+    public void setPotionData(PotionData potionData) {
+        this.potionData = potionData;
+    }
+
+    public Map<String, String> getMetadata() {
+        return Collections.unmodifiableMap(metadata);
+    }
+
+    public void setMetadata(Map<String, String> values) {
+        metadata.clear();
+        if (values != null) {
+            for (Map.Entry<String, String> entry : values.entrySet()) {
+                if (entry.getKey() != null && entry.getValue() != null) {
+                    metadata.put(entry.getKey(), entry.getValue());
+                }
+            }
+        }
+    }
+
+    public void putMetadata(String key, String value) {
+        if (key != null && value != null) {
+            metadata.put(key, value);
+        }
+    }
+
+    public boolean canMergeWith(ItemStack other) {
+        if (other == null) {
+            return false;
+        }
+        return type == other.type
+                && durability == other.durability
+                && Objects.equals(customName, other.customName)
+                && Objects.equals(enchantments, other.enchantments)
+                && Objects.equals(potionData, other.potionData)
+                && Objects.equals(metadata, other.metadata);
+    }
+
     /**
      * Use durability (reduces by 1).
      * 
-     * @return true if tool broke (durability reached 0)
+     * @return true if the item broke (durability reached 0)
      */
     public boolean useDurability() {
         if (durability > 0) {
@@ -81,6 +176,14 @@ public class ItemStack {
             return durability <= 0;
         }
         return false;
+    }
+
+    public void setDurability(int durability) {
+        if (!isDamageable()) {
+            this.durability = -1;
+            return;
+        }
+        this.durability = Math.max(0, Math.min(maxDurability, durability));
     }
 
     /**

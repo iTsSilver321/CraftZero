@@ -1,6 +1,7 @@
 package com.craftzero.entity.ai.pathfinding;
 
 import com.craftzero.world.BlockType;
+import com.craftzero.world.Chunk;
 import com.craftzero.world.World;
 
 /**
@@ -34,7 +35,6 @@ public class PathNodeEvaluator {
         // Check if entity can stand here
         BlockType groundBlock = getBlock(x, y - 1, z);
         BlockType feetBlock = getBlock(x, y, z);
-        BlockType headBlock = getBlock(x, y + 1, z);
 
         // Must have solid ground
         if (groundBlock == null || !groundBlock.isSolid()) {
@@ -48,6 +48,9 @@ public class PathNodeEvaluator {
             int dropY = findGround(x, y, z);
             if (dropY >= 0) {
                 node.y = dropY; // Adjust to actual ground level
+                y = dropY;
+                groundBlock = getBlock(x, y - 1, z);
+                feetBlock = getBlock(x, y, z);
             } else {
                 node.type = PathNode.NodeType.BLOCKED;
                 return;
@@ -55,11 +58,7 @@ public class PathNodeEvaluator {
         }
 
         // Check if feet and head space is clear
-        if (feetBlock != null && feetBlock.isSolid() && !isDoor(feetBlock)) {
-            node.type = PathNode.NodeType.BLOCKED;
-            return;
-        }
-        if (headBlock != null && headBlock.isSolid() && !isDoor(headBlock)) {
+        if (!hasEntityClearance(x, y, z)) {
             node.type = PathNode.NodeType.BLOCKED;
             return;
         }
@@ -167,9 +166,32 @@ public class PathNodeEvaluator {
      * Get block at position (with bounds check).
      */
     private BlockType getBlock(int x, int y, int z) {
-        if (world == null || y < 0 || y > 255)
-            return null;
-        return world.getBlock(x, y, z);
+        if (world == null || y < 0 || y >= Chunk.HEIGHT)
+            return BlockType.BEDROCK;
+        return world.getBlockIfLoaded(x, y, z, BlockType.BEDROCK);
+    }
+
+    private boolean hasEntityClearance(int x, int y, int z) {
+        float halfWidth = Math.max(0.0f, entityWidth * 0.5f - 0.001f);
+        float centerX = x + 0.5f;
+        float centerZ = z + 0.5f;
+        int minX = (int) Math.floor(centerX - halfWidth);
+        int maxX = (int) Math.floor(centerX + halfWidth);
+        int minZ = (int) Math.floor(centerZ - halfWidth);
+        int maxZ = (int) Math.floor(centerZ + halfWidth);
+        int heightBlocks = Math.max(1, (int) Math.ceil(entityHeight));
+
+        for (int bx = minX; bx <= maxX; bx++) {
+            for (int bz = minZ; bz <= maxZ; bz++) {
+                for (int by = y; by < y + heightBlocks; by++) {
+                    BlockType block = getBlock(bx, by, bz);
+                    if (block != null && block.isSolid() && !isDoor(block)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     /**
@@ -189,6 +211,22 @@ public class PathNodeEvaluator {
             return false;
         if (to.type == PathNode.NodeType.DANGEROUS)
             return false;
+
+        int dx = Integer.compare(to.x, from.x);
+        int dz = Integer.compare(to.z, from.z);
+        if (dx != 0 && dz != 0) {
+            PathNode sideA = new PathNode(from.x + dx, to.y, from.z);
+            evaluateNode(sideA);
+            if (sideA.type == PathNode.NodeType.BLOCKED || sideA.type == PathNode.NodeType.DANGEROUS) {
+                return false;
+            }
+
+            PathNode sideB = new PathNode(from.x, to.y, from.z + dz);
+            evaluateNode(sideB);
+            if (sideB.type == PathNode.NodeType.BLOCKED || sideB.type == PathNode.NodeType.DANGEROUS) {
+                return false;
+            }
+        }
 
         return true;
     }

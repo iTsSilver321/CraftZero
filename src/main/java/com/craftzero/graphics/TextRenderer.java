@@ -1,5 +1,6 @@
 package com.craftzero.graphics;
 
+import com.craftzero.resources.ResourcePackManager;
 import org.lwjgl.BufferUtils;
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
@@ -86,7 +87,8 @@ public class TextRenderer {
 
     private void loadFontTexture() throws Exception {
         // Load the Minecraft font from resources
-        InputStream is = getClass().getResourceAsStream("/textures/font/default.png");
+        InputStream is = ResourcePackManager.openActive("/textures/font/default.png")
+                .orElseGet(() -> getClass().getResourceAsStream("/textures/font/default.png"));
         if (is == null) {
             throw new Exception("Could not find font texture: /textures/font/default.png");
         }
@@ -175,6 +177,11 @@ public class TextRenderer {
     public void drawText(String text, float x, float y, float scale, float[] color) {
         if (text == null || text.isEmpty())
             return;
+
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
         shader.bind();
         shader.setUniform("textColor", new Vector4f(color[0], color[1], color[2], color[3]));

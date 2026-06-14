@@ -2,6 +2,7 @@ package com.craftzero.entity.ai;
 
 import com.craftzero.entity.LivingEntity;
 import com.craftzero.main.Player;
+import java.util.function.BooleanSupplier;
 
 /**
  * AI Goal: Target the nearest player within range.
@@ -13,23 +14,32 @@ public class TargetNearestGoal implements Goal {
     private final MobAI ai;
     private final float range;
     private final boolean requireSight;
+    private final BooleanSupplier canTargetPredicate;
 
     private int checkCooldown;
     private int sightLostTicks; // How long we've been without sight
+    private int targetRefreshCooldown;
     private static final int CHECK_INTERVAL = 10; // Check every 0.5 seconds
-    private static final int SIGHT_MEMORY = 60; // Remember target for 3 seconds without sight
+    private static final int SIGHT_MEMORY = 40; // Remember target for 2 seconds without sight
 
     public TargetNearestGoal(LivingEntity mob, MobAI ai, float range) {
         this(mob, ai, range, true); // Default: require sight
     }
 
     public TargetNearestGoal(LivingEntity mob, MobAI ai, float range, boolean requireSight) {
+        this(mob, ai, range, requireSight, () -> true);
+    }
+
+    public TargetNearestGoal(LivingEntity mob, MobAI ai, float range, boolean requireSight,
+            BooleanSupplier canTargetPredicate) {
         this.mob = mob;
         this.ai = ai;
         this.range = range;
         this.requireSight = requireSight;
+        this.canTargetPredicate = canTargetPredicate;
         this.checkCooldown = 0;
         this.sightLostTicks = 0;
+        this.targetRefreshCooldown = 0;
     }
 
     @Override
@@ -44,18 +54,25 @@ public class TargetNearestGoal implements Goal {
             return ai.hasMoveTarget(); // Keep current target if we have one
         }
 
+        if (!canTargetPredicate.getAsBoolean()) {
+            ai.clearMoveTarget();
+            ai.clearTarget();
+            return false;
+        }
+
         checkCooldown = CHECK_INTERVAL;
         return findTarget();
     }
 
     @Override
     public boolean canContinue() {
-        if (!ai.hasMoveTarget()) {
+        if (!ai.hasMoveTarget() || !canTargetPredicate.getAsBoolean()) {
             return false;
         }
 
         Player player = mob.getWorld() != null ? mob.getWorld().getPlayer() : null;
-        if (player == null || player.getStats().getHealth() <= 0) {
+        if (player == null || player.getStats().getHealth() <= 0 || player.isCreative()
+                || !player.getDifficulty().allowsHostileSpawns()) {
             return false;
         }
 
@@ -78,13 +95,18 @@ public class TargetNearestGoal implements Goal {
         }
 
         // Update target position
-        ai.setMoveTarget(player.getPosition().x, player.getPosition().z);
+        targetRefreshCooldown--;
+        if (targetRefreshCooldown <= 0) {
+            ai.setMoveTarget(player.getPosition().x, player.getPosition().z);
+            targetRefreshCooldown = CHECK_INTERVAL;
+        }
         return true;
     }
 
     @Override
     public void start() {
         sightLostTicks = 0;
+        targetRefreshCooldown = 0;
     }
 
     @Override
@@ -109,6 +131,10 @@ public class TargetNearestGoal implements Goal {
         if (mob.getWorld() == null)
             return false;
 
+        if (!canTargetPredicate.getAsBoolean()) {
+            return false;
+        }
+
         Player player = mob.getWorld().getPlayer();
         if (player == null)
             return false;
@@ -119,7 +145,7 @@ public class TargetNearestGoal implements Goal {
             return false;
 
         // Check if player is alive
-        if (player.getStats().getHealth() <= 0)
+        if (player.getStats().getHealth() <= 0 || player.isCreative() || !player.getDifficulty().allowsHostileSpawns())
             return false;
 
         // Check line of sight if required

@@ -172,9 +172,9 @@ public abstract class Entity {
             motionY += bobbing;
 
             // Swim up (try to reach surface)
-            BlockType blockAbove = world.getBlock((int) Math.floor(x), (int) Math.floor(y + height + 0.5f),
-                    (int) Math.floor(z));
-            if (blockAbove != BlockType.WATER) {
+            BlockType blockAbove = world.getBlockIfLoaded((int) Math.floor(x),
+                    (int) Math.floor(y + height + 0.5f), (int) Math.floor(z), BlockType.AIR);
+            if (!blockAbove.isWater()) {
                 // Near surface - gentle upward force to help exit water
                 if (motionY < 0.15f) {
                     motionY += 0.06f; // Surface float
@@ -264,6 +264,10 @@ public abstract class Entity {
         onGround = collidedVertically && originalDy < 0;
 
         // Cancel velocity on collision
+        if (dx != originalDx)
+            motionX = 0;
+        if (dy != originalDy)
+            motionY = 0;
         if (dz != originalDz)
             motionZ = 0;
 
@@ -339,10 +343,7 @@ public abstract class Entity {
         for (int bx = startX; bx <= endX; bx++) {
             for (int by = startY; by <= endY; by++) {
                 for (int bz = startZ; bz <= endZ; bz++) {
-                    BlockType block = world.getBlock(bx, by, bz);
-                    if (block != null && block.isSolid()) {
-                        colliders.add(AABB.forBlock(bx, by, bz));
-                    }
+                    colliders.addAll(world.getCollisionBoxesIfLoaded(bx, by, bz));
                 }
             }
         }
@@ -363,8 +364,8 @@ public abstract class Entity {
         int blockY = (int) Math.floor(y + height * 0.1f); // Check at feet level for natural water exit
         int blockZ = (int) Math.floor(z);
 
-        BlockType block = world.getBlock(blockX, blockY, blockZ);
-        inWater = (block == BlockType.WATER);
+        BlockType block = world.getBlockIfLoaded(blockX, blockY, blockZ, BlockType.AIR);
+        inWater = block.isWater();
     }
 
     /**

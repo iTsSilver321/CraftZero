@@ -57,8 +57,9 @@ public class Window {
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 
-        // Anti-aliasing
-        glfwWindowHint(GLFW_SAMPLES, 4);
+        // Minecraft Release 1.0 renders crisp pixel edges; multisampling costs a lot
+        // of fill time for this blocky scene and is intentionally disabled.
+        glfwWindowHint(GLFW_SAMPLES, 0);
 
         // Create the window
         handle = glfwCreateWindow(width, height, title, NULL, NULL);
@@ -117,9 +118,6 @@ public class Window {
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
 
-        // Enable multisampling
-        glEnable(GL_MULTISAMPLE);
-
         // Set clear color to sky blue
         glClearColor(0.529f, 0.808f, 0.922f, 1.0f);
 
@@ -134,6 +132,10 @@ public class Window {
 
     public boolean shouldClose() {
         return glfwWindowShouldClose(handle);
+    }
+
+    public boolean isFocused() {
+        return glfwGetWindowAttrib(handle, GLFW_FOCUSED) == GLFW_TRUE;
     }
 
     public void cleanup() {
@@ -220,6 +222,12 @@ public class Window {
 
         // Trigger resize handling to update GUI/camera
         resized = true;
+    }
+
+    public void setFullscreen(boolean fullscreen) {
+        if (this.fullscreen != fullscreen) {
+            toggleFullscreen();
+        }
     }
 
     public boolean isFullscreen() {

@@ -4,7 +4,7 @@ import com.craftzero.engine.Window;
 import com.craftzero.main.PlayerStats;
 import com.craftzero.inventory.Inventory;
 import com.craftzero.inventory.ItemStack;
-import com.craftzero.world.BlockType;
+import com.craftzero.inventory.ItemType;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryUtil;
 
@@ -165,31 +165,7 @@ public class SurvivalHudRenderer {
     }
 
     public void render(PlayerStats stats, Inventory inventory, float deltaTime) {
-        // Animation Logic for Item Name
-        int currentSlot = inventory.getSelectedSlot();
-        if (currentSlot != lastSelectedSlot) {
-            lastSelectedSlot = currentSlot;
-            ItemStack item = inventory.getHotbar()[currentSlot];
-            if (item != null) {
-                // Formatting name: convert ENUM_CONST to Title Case
-                String rawName = item.getType().toString();
-                String[] words = rawName.split("_");
-                StringBuilder sb = new StringBuilder();
-                for (String word : words) {
-                    if (sb.length() > 0)
-                        sb.append(" ");
-                    sb.append(word.charAt(0)).append(word.substring(1).toLowerCase());
-                }
-                currentItemName = sb.toString();
-                animationTime = 0f;
-            } else {
-                currentItemName = ""; // Reset if empty slot
-            }
-        }
-
-        if (!currentItemName.isEmpty()) {
-            animationTime += deltaTime;
-        }
+        updateItemNameAnimation(inventory, deltaTime);
 
         // FORCE fresh state
         glDisable(GL_DEPTH_TEST);
@@ -220,12 +196,8 @@ public class SurvivalHudRenderer {
 
         // Bubbles go ABOVE hunger (if air < max or animating)
         // Check if any bubble is popping OR air < max
-        boolean isAnimating = false;
-        for (float t : bubblePopTimers)
-            if (t > 0)
-                isAnimating = true;
-
-        if (stats.getCurrentAir() < PlayerStats.MAX_AIR_SECONDS || isAnimating) {
+        boolean bubblesVisible = stats.getCurrentAir() < PlayerStats.MAX_AIR_SECONDS || hasBubbleAnimation();
+        if (bubblesVisible) {
             // Move up to avoid overlap (hunger is ~18px tall + padding? bottomY is top of
             // icons?)
             // Icons draw downwards? Usually (x, y) is top-left.
@@ -239,45 +211,7 @@ public class SurvivalHudRenderer {
 
         shader.unbind();
 
-        // Render Item Name with Animation
-        if (!currentItemName.isEmpty() && animationTime < TOTAL_DURATION && textRenderer != null) {
-            float alpha = 1.0f;
-            if (animationTime < FADE_IN_DURATION) {
-                alpha = animationTime / FADE_IN_DURATION;
-            } else if (animationTime > FADE_IN_DURATION + STAY_DURATION) {
-                float fadeOutTime = animationTime - (FADE_IN_DURATION + STAY_DURATION);
-                alpha = 1.0f - (fadeOutTime / FADE_OUT_DURATION);
-            }
-
-            if (alpha > 0) {
-                float textScale = 2.0f; // Larger for Minecraft bitmap font
-                int textWidth = textRenderer.getStringWidth(currentItemName, textScale);
-                float textX = (windowWidth - textWidth) / 2.0f;
-                // Dynamic positioning
-                float textY = windowHeight - 120; // Default: comfortably above hearts (Y-90)
-
-                // Check if bubbles are visible (copied logic from render loop)
-                boolean bubblesVisible = stats.getCurrentAir() < PlayerStats.MAX_AIR_SECONDS;
-                if (!bubblesVisible) {
-                    for (float t : bubblePopTimers) {
-                        if (t > 0) {
-                            bubblesVisible = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (bubblesVisible) {
-                    textY -= 26; // Move up to clear bubbles (Y-116)
-                }
-
-                // Draw shadow
-                textRenderer.drawText(currentItemName, textX + 2, textY + 2, textScale,
-                        new float[] { 0f, 0f, 0f, alpha });
-                // Draw Text
-                textRenderer.drawText(currentItemName, textX, textY, textScale, new float[] { 1f, 1f, 1f, alpha });
-            }
-        }
+        renderItemName(bubblesVisible);
 
         // Update lastAir for next frame comparison
         lastAir = stats.getCurrentAir();
@@ -285,6 +219,100 @@ public class SurvivalHudRenderer {
         // Restore state
         glEnable(GL_DEPTH_TEST);
         // glDisable(GL_BLEND); // Keep blending enabled for World renderer
+    }
+
+    public void renderHotbarOnly(Inventory inventory, float deltaTime) {
+        updateItemNameAnimation(inventory, deltaTime);
+
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_CULL_FACE);
+
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        shader.bind();
+        shader.setUniform("projection", ortho);
+        drawHotbar(inventory, windowWidth / 2, windowHeight - 60);
+        shader.unbind();
+
+        renderItemName(false);
+        glEnable(GL_DEPTH_TEST);
+    }
+
+    private void updateItemNameAnimation(Inventory inventory, float deltaTime) {
+        if (inventory == null) {
+            currentItemName = "";
+            lastSelectedSlot = -1;
+            return;
+        }
+
+        int currentSlot = inventory.getSelectedSlot();
+        if (currentSlot != lastSelectedSlot) {
+            lastSelectedSlot = currentSlot;
+            ItemStack item = inventory.getHotbar()[currentSlot];
+            if (item != null && !item.isEmpty()) {
+                currentItemName = displayName(item.getType());
+                animationTime = 0f;
+            } else {
+                currentItemName = "";
+            }
+        }
+
+        if (!currentItemName.isEmpty()) {
+            animationTime += deltaTime;
+        }
+    }
+
+    private String displayName(ItemType type) {
+        String rawName = type.toString();
+        String[] words = rawName.split("_");
+        StringBuilder sb = new StringBuilder();
+        for (String word : words) {
+            if (sb.length() > 0) {
+                sb.append(" ");
+            }
+            sb.append(word.charAt(0)).append(word.substring(1).toLowerCase());
+        }
+        return sb.toString();
+    }
+
+    private boolean hasBubbleAnimation() {
+        for (float t : bubblePopTimers) {
+            if (t > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void renderItemName(boolean bubblesVisible) {
+        if (currentItemName.isEmpty() || animationTime >= TOTAL_DURATION || textRenderer == null) {
+            return;
+        }
+
+        float alpha = 1.0f;
+        if (animationTime < FADE_IN_DURATION) {
+            alpha = animationTime / FADE_IN_DURATION;
+        } else if (animationTime > FADE_IN_DURATION + STAY_DURATION) {
+            float fadeOutTime = animationTime - (FADE_IN_DURATION + STAY_DURATION);
+            alpha = 1.0f - (fadeOutTime / FADE_OUT_DURATION);
+        }
+
+        if (alpha <= 0) {
+            return;
+        }
+
+        float textScale = 2.0f;
+        int textWidth = textRenderer.getStringWidth(currentItemName, textScale);
+        float textX = (windowWidth - textWidth) / 2.0f;
+        float textY = windowHeight - 120;
+        if (bubblesVisible) {
+            textY -= 26;
+        }
+
+        textRenderer.drawText(currentItemName, textX + 2, textY + 2, textScale,
+                new float[] { 0f, 0f, 0f, alpha });
+        textRenderer.drawText(currentItemName, textX, textY, textScale, new float[] { 1f, 1f, 1f, alpha });
     }
 
     private void drawHotbar(Inventory inventory, int centerX, int y) {
@@ -413,10 +441,10 @@ public class SurvivalHudRenderer {
                 int itemX = startX + i * slotWidth + itemOffset + 3;
                 int itemY = hotbarY + (hotbarHeight - itemSize) / 2;
 
-                if (item.getType().isItem()) {
-                    drawItemSprite(itemX, itemY, itemSize, item.getType());
-                } else {
+                if (item.getType().isBlockItem() && !item.getType().usesItemTexture()) {
                     drawIsometricBlockIcon(itemX, itemY, itemSize, item.getType());
+                } else {
+                    drawItemSprite(itemX, itemY, itemSize, item.getType());
                 }
 
                 // Draw stack count
@@ -459,15 +487,15 @@ public class SurvivalHudRenderer {
         drawShape(vertices, 4, r, g, b, a);
     }
 
-    private void drawItemIcon(int x, int y, BlockType type) {
+    private void drawItemIcon(int x, int y, ItemType type) {
         // If atlas is available, draw textured icon
         if (atlas != null) {
-            if (type.isItem()) {
-                // Items render as flat 2D sprites (like stick)
-                drawItemSprite(x + 4, y + 4, HOTBAR_SLOT_SIZE - 8, type);
-            } else {
+            if (type.isBlockItem() && !type.usesItemTexture()) {
                 // Blocks render as isometric 3D cubes
                 drawIsometricBlockIcon(x + 4, y + 4, HOTBAR_SLOT_SIZE - 8, type);
+            } else {
+                // Items render as flat 2D sprites (like stick)
+                drawItemSprite(x + 4, y + 4, HOTBAR_SLOT_SIZE - 8, type);
             }
             return;
         }
@@ -487,17 +515,16 @@ public class SurvivalHudRenderer {
     /**
      * Draw an item as a flat 2D sprite (for sticks, tools, etc).
      */
-    private void drawItemSprite(int x, int y, int size, BlockType type) {
+    private void drawItemSprite(int x, int y, int size, ItemType type) {
         float[] uv;
         Texture texToUse;
 
         // Check if this item uses items.png
-        if (type.usesItemTexture() && itemsTexture != null) {
-            int[] pos = type.getItemTexturePos();
-            uv = GuiTexture.getItemUV(pos[0], pos[1]);
+        if (ItemTextureResolver.usesItemsAtlas(type) && itemsTexture != null) {
+            uv = ItemTextureResolver.getUv(type);
             texToUse = itemsTexture;
         } else {
-            uv = type.getTextureCoords(2); // Use side texture for blocks as items
+            uv = ItemTextureResolver.getUv(type);
             texToUse = atlas;
         }
 
@@ -527,7 +554,7 @@ public class SurvivalHudRenderer {
      * Shows 3 faces: top, left side, right side (like Minecraft inventory).
      * Orientation: top corner pointing straight up at 45 degrees.
      */
-    private void drawIsometricBlockIcon(int x, int y, int size, BlockType type) {
+    private void drawIsometricBlockIcon(int x, int y, int size, ItemType type) {
         // Get UVs for each face
         float[] topUV = type.getTextureCoords(0); // Top face
         float[] sideUV = type.getTextureCoords(2); // Side face

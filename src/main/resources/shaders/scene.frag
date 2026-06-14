@@ -26,13 +26,14 @@ uniform float entityBrightness = 0.0;
 
 // Hurt flash: 0.0 = no hurt, 1.0 = fully red (just hit)
 uniform float hurtFlash = 0.0;
+uniform float alphaCutoff = 0.0;
 
 void main() {
     // Sample texture
     vec4 textureColor = texture(textureSampler, texCoord);
     
-    // Discard transparent pixels
-    if (textureColor.a < 0.0) {
+    // Discard alpha-tested pixels for cutout blocks and item sprites.
+    if (textureColor.a <= alphaCutoff) {
         discard;
     }
     

@@ -2,7 +2,9 @@ package com.craftzero.ui;
 
 import com.craftzero.engine.Input;
 import com.craftzero.inventory.Inventory;
+import com.craftzero.inventory.ItemStackOps;
 import com.craftzero.inventory.ItemStack;
+import com.craftzero.inventory.SlotAccess;
 import com.craftzero.crafting.CraftingRecipe;
 import com.craftzero.crafting.CraftingRegistry;
 import com.craftzero.world.BlockType;
@@ -114,10 +116,12 @@ public class InventoryScreen {
             Input.setCursorLocked(true);
             hoveredSlot = -1;
 
-            // If holding an item, drop it back into inventory (or drop on ground - future)
+            // If holding an item, try to merge it back into inventory. Keep any
+            // leftover on the cursor so closing the screen never deletes items.
             if (inventory.getCursorItem() != null) {
-                // For now, just clear it (would be dropped in full game)
-                inventory.setCursorItem(null);
+                if (inventory.addItem(inventory.getCursorItem())) {
+                    inventory.setCursorItem(null);
+                }
             }
         }
     }
@@ -266,11 +270,11 @@ public class InventoryScreen {
                         break;
 
                     // Try to add to inventory (main or hotbar)
-                    if (inventory.addItem(output)) {
-                        inventory.consumeCraftingIngredients();
-                    } else {
+                    if (!inventory.canAddItem(output)) {
                         break; // Inventory full
                     }
+                    inventory.addItem(output);
+                    inventory.consumeCraftingIngredients();
                 }
                 return;
             }
@@ -283,7 +287,7 @@ public class InventoryScreen {
                 // Pick up result
                 inventory.setCursorItem(slotItem);
                 inventory.consumeCraftingIngredients();
-            } else if (cursorItem.getType() == slotItem.getType()) {
+            } else if (ItemStackOps.canMerge(cursorItem, slotItem)) {
                 // Stack result onto cursor
                 if (cursorItem.getCount() + slotItem.getCount() <= cursorItem.getMaxStackSize()) {
                     cursorItem.add(slotItem.getCount());
@@ -299,32 +303,8 @@ public class InventoryScreen {
                 boolean isHotbarSlot = slotIndex >= 27;
                 ItemStack[] targetSlots = isHotbarSlot ? inventory.getMainInventory() : inventory.getHotbar();
 
-                // Try to stack with existing items first
-                for (int i = 0; i < targetSlots.length && !slotItem.isEmpty(); i++) {
-                    ItemStack target = targetSlots[i];
-                    if (target != null && target.getType() == slotItem.getType()) {
-                        int space = target.getMaxStackSize() - target.getCount();
-                        int toMove = Math.min(space, slotItem.getCount());
-                        if (toMove > 0) {
-                            target.add(toMove);
-                            slotItem.remove(toMove);
-                        }
-                    }
-                }
-
-                // Try to find an empty slot
-                if (!slotItem.isEmpty()) {
-                    for (int i = 0; i < targetSlots.length; i++) {
-                        if (targetSlots[i] == null || targetSlots[i].isEmpty()) {
-                            targetSlots[i] = slotItem;
-                            setItemInSlot(slotIndex, null);
-                            break;
-                        }
-                    }
-                }
-
-                // Clean up if stack is now empty
-                if (slotItem != null && slotItem.isEmpty()) {
+                ItemStackOps.moveIntoSlots(SlotAccess.of(targetSlots), slotItem);
+                if (slotItem.isEmpty()) {
                     setItemInSlot(slotIndex, null);
                 }
             }
@@ -335,26 +315,20 @@ public class InventoryScreen {
             // Right-click logic
             if (cursorItem == null && slotItem != null) {
                 // Pick up half the stack
-                int half = (slotItem.getCount() + 1) / 2;
-                ItemStack picked = new ItemStack(slotItem.getType(), half);
-                slotItem.remove(half);
+                ItemStack picked = ItemStackOps.splitHalf(slotItem);
                 if (slotItem.isEmpty()) {
                     setItemInSlot(slotIndex, null);
                 }
                 inventory.setCursorItem(picked);
             } else if (cursorItem != null && slotItem == null) {
                 // Place one item
-                setItemInSlot(slotIndex, new ItemStack(cursorItem.getType(), 1));
-                cursorItem.remove(1);
+                setItemInSlot(slotIndex, ItemStackOps.splitOne(cursorItem));
                 if (cursorItem.isEmpty()) {
                     inventory.setCursorItem(null);
                 }
-            } else if (cursorItem != null && slotItem != null
-                    && cursorItem.getType() == slotItem.getType()) {
+            } else if (ItemStackOps.canMerge(slotItem, cursorItem)) {
                 // Add one to stack
-                if (slotItem.getCount() < slotItem.getMaxStackSize()) {
-                    slotItem.add(1);
-                    cursorItem.remove(1);
+                if (ItemStackOps.mergeAmountInto(slotItem, cursorItem, 1) > 0) {
                     if (cursorItem.isEmpty()) {
                         inventory.setCursorItem(null);
                     }
@@ -371,12 +345,9 @@ public class InventoryScreen {
                 setItemInSlot(slotIndex, cursorItem);
                 inventory.setCursorItem(null);
             } else if (cursorItem != null && slotItem != null) {
-                if (cursorItem.getType() == slotItem.getType()) {
+                if (ItemStackOps.canMerge(slotItem, cursorItem)) {
                     // Merge stacks
-                    int space = slotItem.getMaxStackSize() - slotItem.getCount();
-                    int toAdd = Math.min(space, cursorItem.getCount());
-                    slotItem.add(toAdd);
-                    cursorItem.remove(toAdd);
+                    ItemStackOps.mergeInto(slotItem, cursorItem);
                     if (cursorItem.isEmpty()) {
                         inventory.setCursorItem(null);
                     }

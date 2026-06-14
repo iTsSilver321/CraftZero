@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Chunk class representing a 16x256x16 section of the world.
+ * Chunk class representing a 16x128x16 section of the world.
  * Uses face culling to optimize mesh generation.
  * Uses staged loading: EMPTY → GENERATED → LIGHTED → READY
  */
@@ -26,16 +26,20 @@ public class Chunk {
     }
 
     public static final int WIDTH = 16;
-    public static final int HEIGHT = 256;
+    public static final int HEIGHT = 128;
     public static final int DEPTH = 16;
     public static final int TOTAL_BLOCKS = WIDTH * HEIGHT * DEPTH;
 
     private final int chunkX;
     private final int chunkZ;
     private final short[] blocks;
+    private final byte[] metadata;
     private Mesh mesh; // Opaque
-    private Mesh transparentMesh; // Transparent (glass, water, leaves)
+    private Mesh cutoutMesh; // Alpha-tested blocks (leaves)
+    private Mesh transparentMesh; // Transparent (glass, water, ice)
     private boolean dirty;
+    private boolean modified;
+    private long modificationVersion;
     private boolean empty;
 
     // Chunk state for staged loading
@@ -43,6 +47,7 @@ public class Chunk {
 
     // Sky light system (0-15 per block, stored as nibbles)
     private byte[] skyLight; // Nibble storage: 2 values per byte
+    private byte[] blockLight; // Nibble storage: torch/lava/furnace light
     private int[] heightMap; // Highest solid block per column
     private boolean lightDirty;
 
@@ -56,9 +61,13 @@ public class Chunk {
         this.chunkX = chunkX;
         this.chunkZ = chunkZ;
         this.blocks = new short[TOTAL_BLOCKS];
+        this.metadata = new byte[TOTAL_BLOCKS];
         this.skyLight = new byte[TOTAL_BLOCKS / 2 + 1]; // Nibble storage
+        this.blockLight = new byte[TOTAL_BLOCKS / 2 + 1];
         this.heightMap = new int[WIDTH * DEPTH];
         this.dirty = true;
+        this.modified = false;
+        this.modificationVersion = 0L;
         this.lightDirty = true;
         this.empty = true;
         this.state = ChunkState.EMPTY;
@@ -89,17 +98,64 @@ public class Chunk {
         return BlockType.fromId(blocks[getIndex(x, y, z)]);
     }
 
+    public int getBlockMetadata(int x, int y, int z) {
+        if (!isInBounds(x, y, z)) {
+            return 0;
+        }
+        return metadata[getIndex(x, y, z)] & 0xFF;
+    }
+
     /**
      * Set block at local coordinates.
      */
     public void setBlock(int x, int y, int z, BlockType type) {
+        setBlock(x, y, z, type, 0);
+    }
+
+    public void setBlock(int x, int y, int z, BlockType type, int metadataValue) {
         if (!isInBounds(x, y, z)) {
             return;
         }
-        blocks[getIndex(x, y, z)] = (short) type.getId();
+        int index = getIndex(x, y, z);
+        blocks[index] = (short) type.getId();
+        metadata[index] = (byte) Math.max(0, Math.min(255, metadataValue));
         dirty = true;
+        modified = true;
+        modificationVersion++;
         lightDirty = true; // Recalculate sky light when blocks change
-        empty = false;
+        if (type != BlockType.AIR) {
+            empty = false;
+        } else {
+            recalculateEmptyFlag();
+        }
+    }
+
+    public short[] copyBlockIds() {
+        return java.util.Arrays.copyOf(blocks, blocks.length);
+    }
+
+    public byte[] copyBlockMetadata() {
+        return java.util.Arrays.copyOf(metadata, metadata.length);
+    }
+
+    public void loadBlockIds(short[] blockIds, boolean modified) {
+        loadBlockData(blockIds, new byte[blockIds.length], modified);
+    }
+
+    public void loadBlockData(short[] blockIds, byte[] metadataValues, boolean modified) {
+        if (blockIds.length != blocks.length) {
+            throw new IllegalArgumentException("Invalid block array length: " + blockIds.length);
+        }
+        if (metadataValues.length != metadata.length) {
+            throw new IllegalArgumentException("Invalid metadata array length: " + metadataValues.length);
+        }
+        System.arraycopy(blockIds, 0, blocks, 0, blocks.length);
+        System.arraycopy(metadataValues, 0, metadata, 0, metadata.length);
+        this.modified = modified;
+        this.modificationVersion = modified ? this.modificationVersion + 1 : 0L;
+        this.dirty = true;
+        this.lightDirty = true;
+        recalculateEmptyFlag();
     }
 
     /**
@@ -110,6 +166,24 @@ public class Chunk {
             return 0;
         }
         return blocks[getIndex(x, y, z)];
+    }
+
+    public int getBlockMetadataWithNeighbors(int x, int y, int z) {
+        if (y < 0 || y >= HEIGHT) {
+            return 0;
+        }
+
+        if (x < 0) {
+            return westNeighbor != null ? westNeighbor.getBlockMetadata(WIDTH + x, y, z) : 0;
+        } else if (x >= WIDTH) {
+            return eastNeighbor != null ? eastNeighbor.getBlockMetadata(x - WIDTH, y, z) : 0;
+        } else if (z < 0) {
+            return northNeighbor != null ? northNeighbor.getBlockMetadata(x, y, DEPTH + z) : 0;
+        } else if (z >= DEPTH) {
+            return southNeighbor != null ? southNeighbor.getBlockMetadata(x, y, z - DEPTH) : 0;
+        }
+
+        return getBlockMetadata(x, y, z);
     }
 
     /**
@@ -146,8 +220,17 @@ public class Chunk {
             neighbor = getBlock(nx, ny, nz);
         }
 
-        // Optimization: Never render face between identical blocks (water/glass)
+        // Fancy leaves are cutout blocks: neighboring leaf faces must remain so
+        // leaf clusters keep the speckled, see-through Release 1.0 look.
+        if (currentBlock == BlockType.LEAVES && neighbor == BlockType.LEAVES && currentBlock.isTransparent()) {
+            return true;
+        }
+
+        // Optimization: Never render face between identical opaque blocks.
         if (currentBlock == neighbor) {
+            return false;
+        }
+        if ((currentBlock.isWater() && neighbor.isWater()) || (currentBlock.isLava() && neighbor.isLava())) {
             return false;
         }
 
@@ -303,196 +386,7 @@ public class Chunk {
         if (!dirty) {
             return;
         }
-
-        // Calculate sky lighting first
-        calculateSkyLight();
-
-        // Clean up old meshes
-        if (mesh != null) {
-            mesh.cleanup();
-            mesh = null;
-        }
-        if (transparentMesh != null) {
-            transparentMesh.cleanup();
-            transparentMesh = null;
-        }
-
-        // Opaque buffers
-        List<Float> opaquePositions = new ArrayList<>();
-        List<Float> opaqueTexCoords = new ArrayList<>();
-        List<Float> opaqueNormals = new ArrayList<>();
-        List<Float> opaqueColors = new ArrayList<>();
-        List<Integer> opaqueIndices = new ArrayList<>();
-        int opaqueVertexCount = 0;
-
-        // Transparent buffers
-        List<Float> transPositions = new ArrayList<>();
-        List<Float> transTexCoords = new ArrayList<>();
-        List<Float> transNormals = new ArrayList<>();
-        List<Float> transColors = new ArrayList<>();
-        List<Integer> transIndices = new ArrayList<>();
-        int transVertexCount = 0;
-
-        // Get biome colors from colormap
-        float[] grassColor = com.craftzero.graphics.BiomeColormap.getGrassColor();
-        float[] foliageColor = com.craftzero.graphics.BiomeColormap.getFoliageColor();
-        float[] waterColor = com.craftzero.graphics.BiomeColormap.getWaterColor();
-
-        for (int y = 0; y < HEIGHT; y++) {
-            for (int z = 0; z < DEPTH; z++) {
-                for (int x = 0; x < WIDTH; x++) {
-                    BlockType type = getBlock(x, y, z);
-
-                    if (type.isAir()) {
-                        continue;
-                    }
-
-                    // World position for vertex generation
-                    int worldX = chunkX * WIDTH + x;
-                    int worldZ = chunkZ * DEPTH + z;
-
-                    // Determine vertex color based on block type
-                    float[] blockColor;
-                    if (type == BlockType.GRASS) {
-                        blockColor = grassColor;
-                    } else if (type == BlockType.LEAVES) {
-                        blockColor = foliageColor;
-                    } else if (type == BlockType.WATER) {
-                        blockColor = waterColor;
-                    } else {
-                        blockColor = new float[] { 1.0f, 1.0f, 1.0f }; // No tint
-                    }
-
-                    // Check each face
-                    for (int face = 0; face < 6; face++) {
-                        if (shouldRenderFace(x, y, z, face, type)) {
-                            // Select buffers based on transparency
-                            List<Float> positions;
-                            List<Float> texCoords;
-                            List<Float> normals;
-                            List<Float> colors;
-                            List<Integer> indices;
-                            int vCount;
-
-                            if (type.isTransparent()) {
-                                positions = transPositions;
-                                texCoords = transTexCoords;
-                                normals = transNormals;
-                                colors = transColors;
-                                indices = transIndices;
-                                vCount = transVertexCount;
-                            } else {
-                                positions = opaquePositions;
-                                texCoords = opaqueTexCoords;
-                                normals = opaqueNormals;
-                                colors = opaqueColors;
-                                indices = opaqueIndices;
-                                vCount = opaqueVertexCount;
-                            }
-
-                            // Determine block height (surface water is lower)
-                            float height = 1.0f;
-                            if (type == BlockType.WATER) {
-                                // Check block above locally
-                                boolean waterAbove = false;
-                                if (y < HEIGHT - 1) {
-                                    waterAbove = (getBlock(x, y + 1, z) == BlockType.WATER);
-                                }
-                                if (!waterAbove) {
-                                    height = 0.875f; // 7/8 height for surface water
-                                }
-                            }
-
-                            // Add vertices
-                            float[] faceVerts = Block.getFaceVertices(face, worldX, y, worldZ, height);
-                            for (float v : faceVerts) {
-                                positions.add(v);
-                            }
-
-                            // Add texture coordinates
-                            float[] faceTexCoords = Block.getFaceTexCoords(type, face);
-                            for (float t : faceTexCoords) {
-                                texCoords.add(t);
-                            }
-
-                            // Add normals
-                            float[] faceNormals = Block.getFaceNormals(face);
-                            for (float n : faceNormals) {
-                                normals.add(n);
-                            }
-
-                            // Add colors (4 vertices per face)
-                            // Apply Minecraft-style face shading and SMOOTH sky light
-                            float faceShade = getFaceShade(face);
-
-                            // Get light sampling position (adjacent block where light comes from)
-                            int lx = x, ly = y, lz = z;
-                            switch (face) {
-                                case Block.FACE_TOP -> ly++;
-                                case Block.FACE_BOTTOM -> ly--;
-                                case Block.FACE_NORTH -> lz--;
-                                case Block.FACE_SOUTH -> lz++;
-                                case Block.FACE_EAST -> lx++;
-                                case Block.FACE_WEST -> lx--;
-                            }
-
-                            // For grass blocks, only tint the TOP face
-                            float[] faceColor = blockColor;
-                            if (type == BlockType.GRASS && face != Block.FACE_TOP) {
-                                faceColor = new float[] { 1.0f, 1.0f, 1.0f };
-                            }
-
-                            // SMOOTH LIGHTING: sample each vertex corner separately
-                            for (int v = 0; v < 4; v++) {
-                                // Get averaged light level for this vertex corner
-                                int vertexLight = getVertexLight(lx, ly, lz, face, v);
-                                float skyBrightness = getSkyLightBrightness(vertexLight);
-                                float brightness = faceShade * skyBrightness;
-
-                                colors.add(faceColor[0] * brightness);
-                                colors.add(faceColor[1] * brightness);
-                                colors.add(faceColor[2] * brightness);
-                            }
-
-                            // Add indices
-                            int[] faceIndices = Block.getFaceIndices(vCount);
-                            for (int idx : faceIndices) {
-                                indices.add(idx);
-                            }
-
-                            if (type.isTransparent()) {
-                                transVertexCount += 4;
-                            } else {
-                                opaqueVertexCount += 4;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Create opaque mesh
-        if (!opaquePositions.isEmpty()) {
-            mesh = new Mesh(
-                    toFloatArray(opaquePositions),
-                    toFloatArray(opaqueTexCoords),
-                    toFloatArray(opaqueNormals),
-                    toFloatArray(opaqueColors),
-                    toIntArray(opaqueIndices));
-        }
-
-        // Create transparent mesh
-        if (!transPositions.isEmpty()) {
-            transparentMesh = new Mesh(
-                    toFloatArray(transPositions),
-                    toFloatArray(transTexCoords),
-                    toFloatArray(transNormals),
-                    toFloatArray(transColors),
-                    toIntArray(transIndices));
-        }
-
-        empty = (mesh == null && transparentMesh == null);
-        dirty = false;
+        applyMeshData(ChunkMeshBuilder.buildMeshData(this));
     }
 
     private float[] toFloatArray(List<Float> list) {
@@ -515,6 +409,10 @@ public class Chunk {
         return mesh;
     }
 
+    public Mesh getCutoutMesh() {
+        return cutoutMesh;
+    }
+
     public Mesh getTransparentMesh() {
         return transparentMesh;
     }
@@ -523,12 +421,42 @@ public class Chunk {
         return dirty;
     }
 
+    public boolean isModified() {
+        return modified;
+    }
+
+    public void clearModified() {
+        modified = false;
+    }
+
+    public long getModificationVersion() {
+        return modificationVersion;
+    }
+
+    public boolean clearModifiedIfVersion(long expectedVersion) {
+        if (modificationVersion != expectedVersion) {
+            return false;
+        }
+        clearModified();
+        return true;
+    }
+
     public void setDirty(boolean dirty) {
         this.dirty = dirty;
     }
 
     public boolean isEmpty() {
         return empty;
+    }
+
+    private void recalculateEmptyFlag() {
+        this.empty = true;
+        for (short id : blocks) {
+            if (id != BlockType.AIR.getId()) {
+                this.empty = false;
+                break;
+            }
+        }
     }
 
     public int getChunkX() {
@@ -563,7 +491,9 @@ public class Chunk {
             this.southNeighbor = south;
             this.eastNeighbor = east;
             this.westNeighbor = west;
-            this.dirty = true;
+            if (state.ordinal() >= ChunkState.LIGHTED.ordinal()) {
+                this.dirty = true;
+            }
         }
     }
 
@@ -607,6 +537,17 @@ public class Chunk {
         return getNibble(skyLight, index);
     }
 
+    public int getBlockLight(int x, int y, int z) {
+        if (!isInBounds(x, y, z)) {
+            return 0;
+        }
+        return getNibble(blockLight, getIndex(x, y, z));
+    }
+
+    public int getCombinedLight(int x, int y, int z) {
+        return Math.max(getSkyLight(x, y, z), getBlockLight(x, y, z));
+    }
+
     /**
      * Set sky light level for a block (0-15).
      */
@@ -615,6 +556,13 @@ public class Chunk {
             return;
         int index = getIndex(x, y, z);
         setNibble(skyLight, index, level);
+    }
+
+    private void setBlockLight(int x, int y, int z, int level) {
+        if (!isInBounds(x, y, z)) {
+            return;
+        }
+        setNibble(blockLight, getIndex(x, y, z), level);
     }
 
     /**
@@ -656,6 +604,7 @@ public class Chunk {
 
         // Clear all sky light first
         java.util.Arrays.fill(skyLight, (byte) 0);
+        java.util.Arrays.fill(blockLight, (byte) 0);
 
         // Queue for BFS flood fill: each entry is {x, y, z, lightLevel}
         java.util.Queue<int[]> lightQueue = new java.util.LinkedList<>();
@@ -735,7 +684,60 @@ public class Chunk {
             }
         }
 
+        calculateBlockLight();
         lightDirty = false;
+    }
+
+    private void calculateBlockLight() {
+        java.util.Queue<int[]> lightQueue = new java.util.LinkedList<>();
+
+        for (int y = 0; y < HEIGHT; y++) {
+            for (int z = 0; z < DEPTH; z++) {
+                for (int x = 0; x < WIDTH; x++) {
+                    int emission = getBlock(x, y, z).getLightEmission();
+                    if (emission > 0) {
+                        setBlockLight(x, y, z, emission);
+                        lightQueue.add(new int[] { x, y, z, emission });
+                    }
+                }
+            }
+        }
+
+        seedBlockLightFromNeighbors(lightQueue);
+
+        int[][] directions = {
+                { 1, 0, 0 }, { -1, 0, 0 },
+                { 0, 1, 0 }, { 0, -1, 0 },
+                { 0, 0, 1 }, { 0, 0, -1 }
+        };
+
+        while (!lightQueue.isEmpty()) {
+            int[] current = lightQueue.poll();
+            int cx = current[0], cy = current[1], cz = current[2], currentLight = current[3];
+            for (int[] dir : directions) {
+                int nx = cx + dir[0];
+                int ny = cy + dir[1];
+                int nz = cz + dir[2];
+                if (!isInBounds(nx, ny, nz)) {
+                    continue;
+                }
+
+                BlockType neighborBlock = getBlock(nx, ny, nz);
+                if (neighborBlock.occludesFace()) {
+                    continue;
+                }
+
+                int newLight = currentLight - 1;
+                if (newLight <= 0) {
+                    continue;
+                }
+
+                if (newLight > getBlockLight(nx, ny, nz)) {
+                    setBlockLight(nx, ny, nz, newLight);
+                    lightQueue.add(new int[] { nx, ny, nz, newLight });
+                }
+            }
+        }
     }
 
     /**
@@ -831,6 +833,48 @@ public class Chunk {
         }
     }
 
+    private void seedBlockLightFromNeighbors(java.util.Queue<int[]> lightQueue) {
+        if (northNeighbor != null) {
+            for (int x = 0; x < WIDTH; x++) {
+                for (int y = 0; y < HEIGHT; y++) {
+                    seedBlockBorder(lightQueue, x, y, 0, northNeighbor.getBlockLight(x, y, DEPTH - 1));
+                }
+            }
+        }
+        if (southNeighbor != null) {
+            for (int x = 0; x < WIDTH; x++) {
+                for (int y = 0; y < HEIGHT; y++) {
+                    seedBlockBorder(lightQueue, x, y, DEPTH - 1, southNeighbor.getBlockLight(x, y, 0));
+                }
+            }
+        }
+        if (eastNeighbor != null) {
+            for (int z = 0; z < DEPTH; z++) {
+                for (int y = 0; y < HEIGHT; y++) {
+                    seedBlockBorder(lightQueue, WIDTH - 1, y, z, eastNeighbor.getBlockLight(0, y, z));
+                }
+            }
+        }
+        if (westNeighbor != null) {
+            for (int z = 0; z < DEPTH; z++) {
+                for (int y = 0; y < HEIGHT; y++) {
+                    seedBlockBorder(lightQueue, 0, y, z, westNeighbor.getBlockLight(WIDTH - 1, y, z));
+                }
+            }
+        }
+    }
+
+    private void seedBlockBorder(java.util.Queue<int[]> lightQueue, int x, int y, int z, int neighborLight) {
+        if (neighborLight <= 1 || getBlock(x, y, z).occludesFace()) {
+            return;
+        }
+        int newLight = neighborLight - 1;
+        if (newLight > getBlockLight(x, y, z)) {
+            setBlockLight(x, y, z, newLight);
+            lightQueue.add(new int[] { x, y, z, newLight });
+        }
+    }
+
     /**
      * Mark light as needing recalculation.
      */
@@ -842,6 +886,10 @@ public class Chunk {
         if (mesh != null) {
             mesh.cleanup();
             mesh = null;
+        }
+        if (cutoutMesh != null) {
+            cutoutMesh.cleanup();
+            cutoutMesh = null;
         }
         if (transparentMesh != null) {
             transparentMesh.cleanup();
@@ -895,6 +943,28 @@ public class Chunk {
         return getSkyLight(x, y, z);
     }
 
+    public int getBlockLightWithNeighbors(int x, int y, int z) {
+        if (y < 0 || y >= HEIGHT) {
+            return 0;
+        }
+
+        if (x < 0) {
+            return westNeighbor != null ? westNeighbor.getBlockLight(WIDTH + x, y, z) : 0;
+        } else if (x >= WIDTH) {
+            return eastNeighbor != null ? eastNeighbor.getBlockLight(x - WIDTH, y, z) : 0;
+        } else if (z < 0) {
+            return northNeighbor != null ? northNeighbor.getBlockLight(x, y, DEPTH + z) : 0;
+        } else if (z >= DEPTH) {
+            return southNeighbor != null ? southNeighbor.getBlockLight(x, y, z - DEPTH) : 0;
+        }
+
+        return getBlockLight(x, y, z);
+    }
+
+    public int getCombinedLightWithNeighbors(int x, int y, int z) {
+        return Math.max(getSkyLightWithNeighbors(x, y, z), getBlockLightWithNeighbors(x, y, z));
+    }
+
     /**
      * Apply pre-built mesh data to this chunk.
      * MUST be called on the main thread (OpenGL context).
@@ -906,6 +976,10 @@ public class Chunk {
         if (mesh != null) {
             mesh.cleanup();
             mesh = null;
+        }
+        if (cutoutMesh != null) {
+            cutoutMesh.cleanup();
+            cutoutMesh = null;
         }
         if (transparentMesh != null) {
             transparentMesh.cleanup();
@@ -920,6 +994,16 @@ public class Chunk {
                     data.opaqueNormals,
                     data.opaqueColors,
                     data.opaqueIndices);
+        }
+
+        // Create cutout mesh
+        if (data.hasCutoutMesh()) {
+            cutoutMesh = new com.craftzero.graphics.Mesh(
+                    data.cutoutPositions,
+                    data.cutoutTexCoords,
+                    data.cutoutNormals,
+                    data.cutoutColors,
+                    data.cutoutIndices);
         }
 
         // Create transparent mesh

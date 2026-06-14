@@ -90,11 +90,11 @@ public class EscapeGoal implements Goal {
             float dx = escapeX - mob.getX();
             float dz = escapeZ - mob.getZ();
             float targetYaw = (float) Math.toDegrees(Math.atan2(dx, -dz));
-            mob.setMoveDirection(targetYaw, speed);
+            ai.requestMoveDirection(targetYaw, speed);
 
             // Try to jump if escape is above us
             if (escapeY > mob.getY() + 0.5f && mob.isOnGround()) {
-                mob.jump();
+                ai.requestJump();
             }
         }
     }
@@ -103,7 +103,7 @@ public class EscapeGoal implements Goal {
     public void stop() {
         hasEscape = false;
         trappedTicks = 0;
-        mob.stopMoving();
+        ai.requestStopMoving();
     }
 
     /**
@@ -127,8 +127,8 @@ public class EscapeGoal implements Goal {
             int nz = z + dir[1];
 
             // Check if direction is blocked (wall at feet or head level)
-            BlockType feetBlock = world.getBlock(nx, y, nz);
-            BlockType headBlock = world.getBlock(nx, y + 1, nz);
+            BlockType feetBlock = world.getBlockIfLoaded(nx, y, nz, BlockType.BEDROCK);
+            BlockType headBlock = world.getBlockIfLoaded(nx, y + 1, nz, BlockType.BEDROCK);
 
             if ((feetBlock != null && feetBlock.isSolid()) ||
                     (headBlock != null && headBlock.isSolid())) {
@@ -193,13 +193,13 @@ public class EscapeGoal implements Goal {
         int bz = (int) Math.floor(z);
 
         // Must have solid ground
-        BlockType ground = world.getBlock(bx, by - 1, bz);
+        BlockType ground = world.getBlockIfLoaded(bx, by - 1, bz, BlockType.AIR);
         if (ground == null || !ground.isSolid())
             return false;
 
         // Must have open space for feet and head
-        BlockType feet = world.getBlock(bx, by, bz);
-        BlockType head = world.getBlock(bx, by + 1, bz);
+        BlockType feet = world.getBlockIfLoaded(bx, by, bz, BlockType.BEDROCK);
+        BlockType head = world.getBlockIfLoaded(bx, by + 1, bz, BlockType.BEDROCK);
 
         if (feet != null && feet.isSolid())
             return false;
@@ -210,7 +210,7 @@ public class EscapeGoal implements Goal {
         int blockedDirs = 0;
         int[][] dirs = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
         for (int[] dir : dirs) {
-            BlockType b = world.getBlock(bx + dir[0], by, bz + dir[1]);
+            BlockType b = world.getBlockIfLoaded(bx + dir[0], by, bz + dir[1], BlockType.BEDROCK);
             if (b != null && b.isSolid())
                 blockedDirs++;
         }
@@ -250,12 +250,12 @@ public class EscapeGoal implements Goal {
             int bz = (int) Math.floor(z);
 
             // Check if blocked
-            BlockType feet = world.getBlock(bx, by, bz);
-            BlockType head = world.getBlock(bx, by + 1, bz);
+            BlockType feet = world.getBlockIfLoaded(bx, by, bz, BlockType.BEDROCK);
+            BlockType head = world.getBlockIfLoaded(bx, by + 1, bz, BlockType.BEDROCK);
 
             if (feet != null && feet.isSolid()) {
                 // Can we jump over?
-                BlockType above = world.getBlock(bx, by + 2, bz);
+                BlockType above = world.getBlockIfLoaded(bx, by + 2, bz, BlockType.BEDROCK);
                 if (above == null || !above.isSolid()) {
                     y += 1; // Assume we can jump
                 } else {

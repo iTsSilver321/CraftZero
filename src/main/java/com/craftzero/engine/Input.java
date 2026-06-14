@@ -1,5 +1,8 @@
 package com.craftzero.engine;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import static org.lwjgl.glfw.GLFW.*;
 
 /**
@@ -23,6 +26,7 @@ public class Input {
     private static double lastMouseX, lastMouseY;
     private static double deltaX, deltaY;
     private static double scrollX, scrollY;
+    private static final List<Character> typedCharacters = new ArrayList<>();
 
     private static boolean cursorLocked = false;
     private static boolean firstMouse = true;
@@ -42,6 +46,12 @@ public class Input {
                     keys[key] = false;
                     keysReleased[key] = true;
                 }
+            }
+        });
+
+        glfwSetCharCallback(windowHandle, (win, codepoint) -> {
+            if (codepoint >= 32 && codepoint < 256) {
+                typedCharacters.add((char) codepoint);
             }
         });
 
@@ -97,6 +107,7 @@ public class Input {
         // Reset scroll
         scrollX = 0;
         scrollY = 0;
+        typedCharacters.clear();
     }
 
     // Keyboard methods
@@ -110,6 +121,30 @@ public class Input {
 
     public static boolean isKeyReleased(int key) {
         return key >= 0 && key < MAX_KEYS && keysReleased[key];
+    }
+
+    public static List<Character> getTypedCharacters() {
+        return List.copyOf(typedCharacters);
+    }
+
+    public static List<Integer> getPressedKeys() {
+        List<Integer> pressed = new ArrayList<>();
+        for (int i = 0; i < MAX_KEYS; i++) {
+            if (keysPressed[i]) {
+                pressed.add(i);
+            }
+        }
+        return pressed;
+    }
+
+    public static List<Integer> getPressedButtons() {
+        List<Integer> pressed = new ArrayList<>();
+        for (int i = 0; i < MAX_BUTTONS; i++) {
+            if (buttonsPressed[i]) {
+                pressed.add(i);
+            }
+        }
+        return pressed;
     }
 
     // Mouse button methods

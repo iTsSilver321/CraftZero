@@ -3,9 +3,10 @@ package com.craftzero.ui;
 import com.craftzero.engine.Input;
 import com.craftzero.inventory.Inventory;
 import com.craftzero.inventory.ItemStack;
+import com.craftzero.inventory.ItemStackOps;
+import com.craftzero.inventory.ItemType;
 import com.craftzero.crafting.CraftingRecipe;
 import com.craftzero.crafting.CraftingRegistry;
-import com.craftzero.world.BlockType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -287,13 +288,13 @@ public class CraftingTableScreen {
                         break;
 
                     // Try to add to inventory
-                    if (inventory.addItem(output)) {
-                        consumeCraftingIngredients();
-                        // Re-check recipe for next iteration
-                        // getItemInSlot(9) does this via findRecipe3x3
-                    } else {
+                    if (!inventory.canAddItem(output)) {
                         break; // Inventory full
                     }
+                    inventory.addItem(output);
+                    consumeCraftingIngredients();
+                    // Re-check recipe for next iteration
+                    // getItemInSlot(9) does this via findRecipe3x3
                 }
             } else if (slotIndex >= 10 && slotIndex <= 45) {
                 // Quick Move Inventory (Hotbar <-> Main)
@@ -323,7 +324,7 @@ public class CraftingTableScreen {
                 // Pick up result
                 inventory.setCursorItem(slotItem);
                 consumeCraftingIngredients();
-            } else if (cursorItem.getType() == slotItem.getType()) {
+            } else if (ItemStackOps.canMerge(cursorItem, slotItem)) {
                 // Stack result onto cursor
                 if (cursorItem.getCount() + slotItem.getCount() <= cursorItem.getMaxStackSize()) {
                     cursorItem.add(slotItem.getCount());
@@ -338,9 +339,7 @@ public class CraftingTableScreen {
             if (cursorItem == null) {
                 // Pick up half
                 if (slotItem != null && !slotItem.isEmpty()) {
-                    int halfCount = (slotItem.getCount() + 1) / 2;
-                    ItemStack taken = new ItemStack(slotItem.getType(), halfCount);
-                    slotItem.remove(halfCount);
+                    ItemStack taken = ItemStackOps.splitHalf(slotItem);
                     if (slotItem.isEmpty()) {
                         setItemInSlot(slotIndex, null);
                     }
@@ -353,16 +352,12 @@ public class CraftingTableScreen {
                 // But specifically for drag. For single click, it should stack too.
 
                 if (slotItem == null) {
-                    setItemInSlot(slotIndex, new ItemStack(cursorItem.getType(), 1));
-                    cursorItem.remove(1);
+                    setItemInSlot(slotIndex, ItemStackOps.splitOne(cursorItem));
                     if (cursorItem.isEmpty()) {
                         inventory.setCursorItem(null);
                     }
-                } else if (slotItem.getType() == cursorItem.getType()) {
-                    int space = slotItem.getMaxStackSize() - slotItem.getCount();
-                    if (space > 0) {
-                        slotItem.add(1);
-                        cursorItem.remove(1);
+                } else if (ItemStackOps.canMerge(slotItem, cursorItem)) {
+                    if (ItemStackOps.mergeAmountInto(slotItem, cursorItem, 1) > 0) {
                         if (cursorItem.isEmpty()) {
                             inventory.setCursorItem(null);
                         }
@@ -380,11 +375,8 @@ public class CraftingTableScreen {
                 if (slotItem == null) {
                     setItemInSlot(slotIndex, cursorItem);
                     inventory.setCursorItem(null);
-                } else if (slotItem.getType() == cursorItem.getType()) {
-                    int space = slotItem.getMaxStackSize() - slotItem.getCount();
-                    int toAdd = Math.min(space, cursorItem.getCount());
-                    slotItem.add(toAdd);
-                    cursorItem.remove(toAdd);
+                } else if (ItemStackOps.canMerge(slotItem, cursorItem)) {
+                    ItemStackOps.mergeInto(slotItem, cursorItem);
                     if (cursorItem.isEmpty()) {
                         inventory.setCursorItem(null);
                     }
@@ -423,8 +415,8 @@ public class CraftingTableScreen {
         }
     }
 
-    private BlockType[] getCraftingPattern() {
-        BlockType[] pattern = new BlockType[9];
+    private ItemType[] getCraftingPattern() {
+        ItemType[] pattern = new ItemType[9];
         for (int i = 0; i < 9; i++) {
             pattern[i] = (craftingGrid[i] != null && !craftingGrid[i].isEmpty())
                     ? craftingGrid[i].getType()

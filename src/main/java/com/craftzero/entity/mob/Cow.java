@@ -1,23 +1,22 @@
 package com.craftzero.entity.mob;
 
 import com.craftzero.entity.ai.*;
-import com.craftzero.world.BlockType;
+import com.craftzero.inventory.ItemType;
 
 /**
  * Cow mob - passive, drops beef and leather.
  */
 public class Cow extends Mob {
 
-    private static final float WIDTH = 0.9f;
-    private static final float HEIGHT = 1.4f;
-    private static final float MAX_HEALTH = 10.0f;
+    private static final MobBalance.Spec SPEC = MobBalance.COW;
 
     public Cow() {
-        super(WIDTH, HEIGHT, MAX_HEALTH);
-        this.hostile = false;
-        this.burnsInSunlight = false;
-        this.moveSpeed = 0.1f;
-        this.experienceValue = 1;
+        super(SPEC.width(), SPEC.height(), SPEC.maxHealth());
+        this.definition = MobDefinition.COW;
+        this.hostile = SPEC.hostile();
+        this.burnsInSunlight = SPEC.burnsInSunlight();
+        this.moveSpeed = SPEC.moveSpeed();
+        this.experienceValue = SPEC.experienceValue();
 
         setupAI();
     }
@@ -29,10 +28,8 @@ public class Cow extends Mob {
 
     @Override
     public void dropLoot() {
-        // Drop 1-3 raw beef
-        dropItems(BlockType.DIRT, 1, 3); // Placeholder for RAW_BEEF
-        // Drop 0-2 leather
-        dropItems(BlockType.DIRT, 0, 2); // Placeholder for LEATHER
+        dropItems(isOnFire() ? ItemType.STEAK : ItemType.RAW_BEEF, 1, 3);
+        dropItems(ItemType.LEATHER, 0, 2);
     }
 
     @Override

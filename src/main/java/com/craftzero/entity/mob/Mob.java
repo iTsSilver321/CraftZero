@@ -5,6 +5,8 @@ import com.craftzero.entity.ai.EscapeGoal;
 import com.craftzero.entity.ai.LookAtPlayerGoal;
 import com.craftzero.entity.ai.MobAI;
 import com.craftzero.entity.ai.SwimGoal;
+import com.craftzero.inventory.ItemType;
+import com.craftzero.main.Player;
 import com.craftzero.world.BlockType;
 
 import java.util.Random;
@@ -21,6 +23,7 @@ public abstract class Mob extends LivingEntity {
     // Mob type flags
     protected boolean hostile;
     protected boolean burnsInSunlight;
+    protected MobDefinition definition;
 
     // Experience dropped on death
     protected int experienceValue;
@@ -90,26 +93,36 @@ public abstract class Mob extends LivingEntity {
         if (world == null)
             return;
 
-        // Only during day
         if (world.getDayCycleManager() == null)
             return;
-        float time = world.getDayCycleManager().getTime();
-        boolean isDay = time >= 0 && time < 12000;
 
-        if (!isDay)
+        if (isTouchingWater()) {
+            extinguish();
             return;
+        }
+
+        if (!world.getDayCycleManager().isDaylightBurnTime()) {
+            return;
+        }
 
         // Check sky light at head level
         int blockX = (int) Math.floor(x);
         int blockY = (int) Math.floor(y + height);
         int blockZ = (int) Math.floor(z);
 
-        int skyLight = world.getSkyLight(blockX, blockY, blockZ);
-
-        if (skyLight >= 15) {
+        if (world.canSeeSky(blockX, blockY, blockZ)) {
             // Burn! Set on fire for 8 seconds
             setOnFire(160);
         }
+    }
+
+    private boolean isTouchingWater() {
+        int blockX = (int) Math.floor(x);
+        int blockZ = (int) Math.floor(z);
+        int feetY = (int) Math.floor(y + 0.1f);
+        int headY = (int) Math.floor(y + height * 0.85f);
+        return world.getBlockIfLoaded(blockX, feetY, blockZ, BlockType.AIR).isWater()
+                || world.getBlockIfLoaded(blockX, headY, blockZ, BlockType.AIR).isWater();
     }
 
     /**
@@ -161,7 +174,7 @@ public abstract class Mob extends LivingEntity {
     /**
      * Spawn a dropped item at the mob's position.
      */
-    protected void dropItem(BlockType type, int count) {
+    protected void dropItem(ItemType type, int count) {
         if (world == null || type == null || count <= 0)
             return;
 
@@ -175,11 +188,14 @@ public abstract class Mob extends LivingEntity {
     /**
      * Drop items with random count.
      */
-    protected void dropItems(BlockType type, int min, int max) {
+    protected void dropItems(ItemType type, int min, int max) {
         int count = min + random.nextInt(max - min + 1);
         if (count > 0) {
             dropItem(type, count);
         }
+    }
+
+    public void onSuccessfulMeleeHit(Player player) {
     }
 
     /**
@@ -209,6 +225,10 @@ public abstract class Mob extends LivingEntity {
         return experienceValue;
     }
 
+    public MobDefinition getDefinition() {
+        return definition;
+    }
+
     /**
      * Enum for different model types.
      */
@@ -218,6 +238,12 @@ public abstract class Mob extends LivingEntity {
         CREEPER, // No arms
         SPIDER, // 8 legs
         QUADRUPED, // Pig, Cow, Sheep
-        CHICKEN // Small with wings
+        CHICKEN, // Small with wings
+        SLIME,
+        SQUID,
+        ENDERMAN,
+        SILVERFISH,
+        GHAST,
+        BLAZE
     }
 }

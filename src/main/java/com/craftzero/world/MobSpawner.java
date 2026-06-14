@@ -3,6 +3,7 @@ package com.craftzero.world;
 import com.craftzero.entity.mob.*;
 import com.craftzero.main.Player;
 
+import java.util.List;
 import java.util.Random;
 
 /**
@@ -21,6 +22,20 @@ public class MobSpawner {
     // Mob caps
     private static final int MAX_HOSTILE = 70;
     private static final int MAX_PASSIVE = 10;
+    private static final int MAX_WATER = 15;
+
+    private static final List<SpawnRule> OVERWORLD_HOSTILES = List.of(
+            new SpawnRule(MobDefinition.ZOMBIE, 10, 1, Chunk.HEIGHT - 3, false),
+            new SpawnRule(MobDefinition.SKELETON, 10, 1, Chunk.HEIGHT - 3, false),
+            new SpawnRule(MobDefinition.CREEPER, 10, 1, Chunk.HEIGHT - 3, false),
+            new SpawnRule(MobDefinition.SPIDER, 10, 1, Chunk.HEIGHT - 3, false),
+            new SpawnRule(MobDefinition.ENDERMAN, 2, 1, Chunk.HEIGHT - 3, false),
+            new SpawnRule(MobDefinition.SLIME, 4, 1, 39, false));
+    private static final List<SpawnRule> NETHER_HOSTILES = List.of(
+            new SpawnRule(MobDefinition.ZOMBIE_PIGMAN, 20, 1, Chunk.HEIGHT - 3, false),
+            new SpawnRule(MobDefinition.GHAST, 4, 32, Chunk.HEIGHT - 10, false),
+            new SpawnRule(MobDefinition.BLAZE, 3, 1, Chunk.HEIGHT - 3, false),
+            new SpawnRule(MobDefinition.MAGMA_CUBE, 4, 1, Chunk.HEIGHT - 3, false));
 
     // Spawn distances
     private static final float MIN_SPAWN_DISTANCE = 24.0f;
@@ -71,9 +86,12 @@ public class MobSpawner {
         // Count current mobs
         int hostileCount = 0;
         int passiveCount = 0;
+        int waterCount = 0;
         for (var entity : world.getEntities()) {
             if (entity instanceof Mob mob) {
-                if (mob.isHostile()) {
+                if (mob.getDefinition() != null && mob.getDefinition().category() == MobDefinition.MobCategory.WATER_CREATURE) {
+                    waterCount++;
+                } else if (mob.isHostile()) {
                     hostileCount++;
                 } else {
                     passiveCount++;
@@ -82,13 +100,17 @@ public class MobSpawner {
         }
 
         // Try to spawn hostile mobs
-        if (hostileCount < MAX_HOSTILE) {
+        if (!player.isCreative() && player.getDifficulty().allowsHostileSpawns() && hostileCount < MAX_HOSTILE) {
             trySpawnHostile(playerX, playerY, playerZ);
         }
 
         // Try to spawn passive mobs (less frequently)
         if (passiveCount < MAX_PASSIVE && random.nextFloat() < 0.2f) {
             trySpawnPassive(playerX, playerY, playerZ);
+        }
+
+        if (world.getDimension() == Dimension.OVERWORLD && waterCount < MAX_WATER && random.nextFloat() < 0.15f) {
+            trySpawnWater(playerX, playerY, playerZ);
         }
     }
 
@@ -99,34 +121,49 @@ public class MobSpawner {
 
         float spawnX = playerX + (float) Math.cos(angle) * distance;
         float spawnZ = playerZ + (float) Math.sin(angle) * distance;
+        int blockX = (int) Math.floor(spawnX);
+        int blockZ = (int) Math.floor(spawnZ);
+        if (!world.isChunkGeneratedForBlock(blockX, blockZ)) {
+            return;
+        }
 
         // Find valid Y (solid block with air above)
-        int spawnY = findSpawnY((int) spawnX, (int) playerY, (int) spawnZ);
+        int spawnY = findSpawnY(blockX, (int) playerY, blockZ);
         if (spawnY < 0)
             return;
 
-        // Check spawn conditions for hostile mobs
-        // Use effective light (considers time of day - sky light is reduced at night)
-        int light = getEffectiveLightForSpawning((int) spawnX, spawnY + 1, (int) spawnZ);
-        if (light > 7)
-            return; // Too bright for hostile mobs
-
-        // Check block below is solid
-        BlockType below = world.getBlock((int) spawnX, spawnY, (int) spawnZ);
-        if (!below.isSolid())
+        SpawnRule rule = chooseHostileRule(blockX, spawnY, blockZ);
+        if (rule == null || !canSpawnHostileAt(blockX, spawnY, blockZ))
             return;
 
-        // Check space is clear
-        BlockType atFeet = world.getBlock((int) spawnX, spawnY + 1, (int) spawnZ);
-        BlockType atHead = world.getBlock((int) spawnX, spawnY + 2, (int) spawnZ);
-        if (atFeet.isSolid() || atHead.isSolid())
+        Mob mob = createMobForRule(rule, blockX, spawnY, blockZ);
+        if (mob == null) {
             return;
-
-        // Pick mob type
-        Mob mob = createRandomHostileMob();
+        }
         mob.setPosition(spawnX + 0.5f, spawnY + 1, spawnZ + 0.5f);
 
         world.spawnEntity(mob);
+    }
+
+    private void trySpawnWater(float playerX, float playerY, float playerZ) {
+        float angle = random.nextFloat() * (float) Math.PI * 2;
+        float distance = MIN_SPAWN_DISTANCE + random.nextFloat() * 40.0f;
+        int blockX = (int) Math.floor(playerX + (float) Math.cos(angle) * distance);
+        int blockZ = (int) Math.floor(playerZ + (float) Math.sin(angle) * distance);
+        if (!world.isChunkGeneratedForBlock(blockX, blockZ)) {
+            return;
+        }
+        for (int y = Math.min(62, (int) playerY + 16); y >= 45; y--) {
+            if (world.getBlockIfLoaded(blockX, y, blockZ, BlockType.AIR).isWater()
+                    && world.getBlockIfLoaded(blockX, y + 1, blockZ, BlockType.AIR).isWater()) {
+                Mob squid = MobFactory.create(MobDefinition.SQUID);
+                if (squid != null) {
+                    squid.setPosition(blockX + 0.5f, y, blockZ + 0.5f);
+                    world.spawnEntity(squid);
+                }
+                return;
+            }
+        }
     }
 
     private void trySpawnPassive(float playerX, float playerY, float playerZ) {
@@ -136,26 +173,18 @@ public class MobSpawner {
 
         float spawnX = playerX + (float) Math.cos(angle) * distance;
         float spawnZ = playerZ + (float) Math.sin(angle) * distance;
+        int blockX = (int) Math.floor(spawnX);
+        int blockZ = (int) Math.floor(spawnZ);
+        if (!world.isChunkGeneratedForBlock(blockX, blockZ)) {
+            return;
+        }
 
         // Find valid Y
-        int spawnY = findSpawnY((int) spawnX, (int) playerY, (int) spawnZ);
+        int spawnY = findSpawnY(blockX, (int) playerY, blockZ);
         if (spawnY < 0)
             return;
 
-        // Check spawn conditions for passive mobs
-        int light = world.getSkyLight((int) spawnX, spawnY + 1, (int) spawnZ);
-        if (light < 9)
-            return; // Too dark for passive mobs
-
-        // Must spawn on grass
-        BlockType below = world.getBlock((int) spawnX, spawnY, (int) spawnZ);
-        if (below != BlockType.GRASS)
-            return;
-
-        // Check space is clear
-        BlockType atFeet = world.getBlock((int) spawnX, spawnY + 1, (int) spawnZ);
-        BlockType atHead = world.getBlock((int) spawnX, spawnY + 2, (int) spawnZ);
-        if (atFeet.isSolid() || atHead.isSolid())
+        if (!canSpawnPassiveAt(blockX, spawnY, blockZ))
             return;
 
         // Pick mob type
@@ -180,22 +209,49 @@ public class MobSpawner {
     }
 
     private boolean isValidSpawnY(int x, int y, int z) {
-        BlockType below = world.getBlock(x, y, z);
-        BlockType atFeet = world.getBlock(x, y + 1, z);
-        BlockType atHead = world.getBlock(x, y + 2, z);
+        if (!world.isChunkGeneratedForBlock(x, z)) {
+            return false;
+        }
+        BlockType below = world.getBlockIfLoaded(x, y, z, BlockType.AIR);
+        BlockType atFeet = world.getBlockIfLoaded(x, y + 1, z, BlockType.STONE);
+        BlockType atHead = world.getBlockIfLoaded(x, y + 2, z, BlockType.STONE);
 
         return below.isSolid() && !atFeet.isSolid() && !atHead.isSolid();
     }
 
+    boolean canSpawnHostileAt(int x, int groundY, int z) {
+        if (!world.isChunkGeneratedForBlock(x, z) || !hasClearSpawnSpace(x, groundY, z)) {
+            return false;
+        }
+        int light = getEffectiveLightForSpawning(x, groundY + 1, z);
+        return light <= 7;
+    }
+
+    boolean canSpawnPassiveAt(int x, int groundY, int z) {
+        if (!world.isChunkGeneratedForBlock(x, z) || !hasClearSpawnSpace(x, groundY, z)) {
+            return false;
+        }
+        int light = world.getSkyLight(x, groundY + 1, z);
+        if (light < 9) {
+            return false;
+        }
+        return world.getBlockIfLoaded(x, groundY, z, BlockType.AIR) == BlockType.GRASS;
+    }
+
+    private boolean hasClearSpawnSpace(int x, int groundY, int z) {
+        BlockType below = world.getBlockIfLoaded(x, groundY, z, BlockType.AIR);
+        if (!below.isSolid()) {
+            return false;
+        }
+
+        BlockType atFeet = world.getBlockIfLoaded(x, groundY + 1, z, BlockType.STONE);
+        BlockType atHead = world.getBlockIfLoaded(x, groundY + 2, z, BlockType.STONE);
+        return !atFeet.isSolid() && !atHead.isSolid();
+    }
+
     private Mob createRandomHostileMob() {
-        int type = random.nextInt(4);
-        return switch (type) {
-            case 0 -> new Zombie();
-            case 1 -> new Skeleton();
-            case 2 -> new Creeper();
-            case 3 -> new Spider();
-            default -> new Zombie();
-        };
+        SpawnRule rule = chooseWeighted(world.getDimension() == Dimension.NETHER ? NETHER_HOSTILES : OVERWORLD_HOSTILES);
+        return rule == null ? new Zombie() : MobFactory.create(rule.definition());
     }
 
     private Mob createRandomPassiveMob() {
@@ -207,5 +263,61 @@ public class MobSpawner {
             case 3 -> new Chicken();
             default -> new Pig();
         };
+    }
+
+    private SpawnRule chooseHostileRule(int x, int y, int z) {
+        List<SpawnRule> rules = world.getDimension() == Dimension.NETHER ? NETHER_HOSTILES : OVERWORLD_HOSTILES;
+        for (int attempts = 0; attempts < 8; attempts++) {
+            SpawnRule rule = chooseWeighted(rules);
+            if (rule != null && rule.matches(world, x, y, z)) {
+                if (rule.definition() == MobDefinition.SLIME && !isSlimeChunk(x, z)) {
+                    continue;
+                }
+                return rule;
+            }
+        }
+        return null;
+    }
+
+    private Mob createMobForRule(SpawnRule rule, int x, int y, int z) {
+        Mob mob = MobFactory.create(rule.definition());
+        if (mob instanceof Slime && rule.definition() == MobDefinition.SLIME) {
+            int size = random.nextInt(3) == 0 ? 4 : random.nextBoolean() ? 2 : 1;
+            mob = new Slime(size);
+        } else if (mob instanceof MagmaCube) {
+            int size = random.nextInt(3) == 0 ? 4 : random.nextBoolean() ? 2 : 1;
+            mob = new MagmaCube(size);
+        }
+        return mob;
+    }
+
+    private SpawnRule chooseWeighted(List<SpawnRule> rules) {
+        int total = 0;
+        for (SpawnRule rule : rules) {
+            total += Math.max(0, rule.weight());
+        }
+        if (total <= 0) {
+            return null;
+        }
+        int roll = random.nextInt(total);
+        for (SpawnRule rule : rules) {
+            roll -= Math.max(0, rule.weight());
+            if (roll < 0) {
+                return rule;
+            }
+        }
+        return rules.get(0);
+    }
+
+    boolean isSlimeChunk(int blockX, int blockZ) {
+        int chunkX = Math.floorDiv(blockX, Chunk.WIDTH);
+        int chunkZ = Math.floorDiv(blockZ, Chunk.DEPTH);
+        Random chunkRandom = new Random(world.getSeed()
+                + (long) (chunkX * chunkX * 0x4c1906)
+                + (long) (chunkX * 0x5ac0db)
+                + (long) (chunkZ * chunkZ) * 0x4307a7L
+                + (long) (chunkZ * 0x5f24f)
+                ^ 0x3ad8025fL);
+        return chunkRandom.nextInt(10) == 0;
     }
 }

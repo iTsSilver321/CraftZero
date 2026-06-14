@@ -1,7 +1,5 @@
 package com.craftzero.inventory;
 
-import com.craftzero.world.BlockType;
-
 public class Inventory {
     public static final int HOTBAR_SIZE = 9;
     public static final int MAIN_SIZE = 27;
@@ -10,6 +8,7 @@ public class Inventory {
     private ItemStack[] hotbar;
     private ItemStack[] mainInventory;
     private ItemStack[] craftingGrid; // 2x2 crafting grid
+    private ItemStack[] armor;
     private int selectedSlot;
 
     // Item currently being dragged by the mouse cursor
@@ -19,6 +18,7 @@ public class Inventory {
         this.hotbar = new ItemStack[HOTBAR_SIZE];
         this.mainInventory = new ItemStack[MAIN_SIZE];
         this.craftingGrid = new ItemStack[CRAFTING_SIZE];
+        this.armor = new ItemStack[4];
         this.selectedSlot = 0;
         this.cursorItem = null;
     }
@@ -61,11 +61,15 @@ public class Inventory {
         return craftingGrid;
     }
 
+    public ItemStack[] getArmor() {
+        return armor;
+    }
+
     /**
      * Get the crafting grid as BlockType array for recipe matching.
      */
-    public BlockType[] getCraftingPattern() {
-        BlockType[] pattern = new BlockType[4];
+    public ItemType[] getCraftingPattern() {
+        ItemType[] pattern = new ItemType[4];
         for (int i = 0; i < 4; i++) {
             pattern[i] = (craftingGrid[i] != null && !craftingGrid[i].isEmpty())
                     ? craftingGrid[i].getType()
@@ -121,48 +125,25 @@ public class Inventory {
         if (item == null || item.isEmpty())
             return true;
 
-        // 1. Try to merge with existing stacks in Hotbar
-        if (mergeToArrays(hotbar, item))
-            return true;
-        // 2. Try to merge with existing stacks in Main Inventory
-        if (mergeToArrays(mainInventory, item))
-            return true;
-
-        // 3. Try to add to empty slots in Hotbar
-        if (addToEmptySlots(hotbar, item))
-            return true;
-        // 4. Try to add to empty slots in Main Inventory
-        if (addToEmptySlots(mainInventory, item))
-            return true;
-
+        ItemStackOps.mergeIntoSlots(SlotAccess.of(hotbar), item);
+        if (!item.isEmpty()) {
+            ItemStackOps.mergeIntoSlots(SlotAccess.of(mainInventory), item);
+        }
+        if (!item.isEmpty()) {
+            ItemStackOps.placeIntoEmptySlots(SlotAccess.of(hotbar), item);
+        }
+        if (!item.isEmpty()) {
+            ItemStackOps.placeIntoEmptySlots(SlotAccess.of(mainInventory), item);
+        }
         return item.isEmpty();
     }
 
-    private boolean mergeToArrays(ItemStack[] slots, ItemStack item) {
-        for (int i = 0; i < slots.length; i++) {
-            if (slots[i] != null && slots[i].getType() == item.getType()) {
-                int space = slots[i].getMaxStackSize() - slots[i].getCount();
-                if (space > 0) {
-                    int toAdd = Math.min(space, item.getCount());
-                    slots[i].add(toAdd);
-                    item.remove(toAdd);
-                    if (item.isEmpty())
-                        return true;
-                }
-            }
+    public boolean canAddItem(ItemStack item) {
+        if (item == null || item.isEmpty()) {
+            return true;
         }
-        return false;
-    }
-
-    private boolean addToEmptySlots(ItemStack[] slots, ItemStack item) {
-        for (int i = 0; i < slots.length; i++) {
-            if (slots[i] == null) {
-                slots[i] = new ItemStack(item.getType(), item.getCount());
-                item.remove(item.getCount()); // Fully added
-                return true;
-            }
-        }
-        return false;
+        SlotAccess playerSlots = SlotAccess.concat(SlotAccess.of(hotbar), SlotAccess.of(mainInventory));
+        return ItemStackOps.canFullyMoveInto(playerSlots, item);
     }
 
     /**
@@ -174,6 +155,9 @@ public class Inventory {
         }
         for (int i = 0; i < mainInventory.length; i++) {
             mainInventory[i] = null;
+        }
+        for (int i = 0; i < armor.length; i++) {
+            armor[i] = null;
         }
         clearCraftingGrid();
     }

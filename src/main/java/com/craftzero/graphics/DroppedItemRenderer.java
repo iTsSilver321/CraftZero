@@ -1,11 +1,15 @@
 package com.craftzero.graphics;
 
 import com.craftzero.entity.DroppedItem;
+import com.craftzero.inventory.ItemRenderProfile;
+import com.craftzero.inventory.ItemType;
 import com.craftzero.world.Block;
 import com.craftzero.world.BlockType;
 import org.joml.Matrix4f;
 
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL15.*;
@@ -18,11 +22,25 @@ import static org.lwjgl.opengl.GL30.*;
  * transforms.
  */
 public class DroppedItemRenderer {
+    private static final float ITEM_RENDER_DISTANCE = 128.0f;
 
     private ShaderProgram shader;
-    private int vao, vbo, ebo;
-    private int vertexCount;
     private Matrix4f modelMatrix;
+    private final Map<ItemType, CachedMesh> meshCache = new EnumMap<>(ItemType.class);
+
+    private static class CachedMesh {
+        final int vao;
+        final int vbo;
+        final int ebo;
+        final int vertexCount;
+
+        CachedMesh(int vao, int vbo, int ebo, int vertexCount) {
+            this.vao = vao;
+            this.vbo = vbo;
+            this.ebo = ebo;
+            this.vertexCount = vertexCount;
+        }
+    }
 
     public void init() throws Exception {
         modelMatrix = new Matrix4f();
@@ -44,52 +62,8 @@ public class DroppedItemRenderer {
         shader.createUniform("lightDirection");
         shader.createUniform("lightColor");
         shader.createUniform("sunBrightness");
+        shader.createUniform("alphaCutoff");
 
-        // Create the cube mesh for rendering items
-        createCubeMesh();
-    }
-
-    /**
-     * Create a unit cube mesh (1x1x1) centered at origin.
-     * This will be scaled and transformed for each dropped item.
-     */
-    private void createCubeMesh() {
-        // We'll create mesh data dynamically per block type, but for now
-        // just set up the VAO structure.
-        // Vertex format: pos(3) + uv(2) + normal(3) + color(3) = 11 floats per vertex
-
-        vao = glGenVertexArrays();
-        vbo = glGenBuffers();
-        ebo = glGenBuffers();
-
-        glBindVertexArray(vao);
-
-        // Reserve buffer space - will be filled per item type
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, 1536 * Float.BYTES, GL_DYNAMIC_DRAW);
-
-        int stride = 11 * Float.BYTES;
-
-        // Position attribute (location 0)
-        glVertexAttribPointer(0, 3, GL_FLOAT, false, stride, 0);
-        glEnableVertexAttribArray(0);
-
-        // Texture coord attribute (location 1)
-        glVertexAttribPointer(1, 2, GL_FLOAT, false, stride, 3 * Float.BYTES);
-        glEnableVertexAttribArray(1);
-
-        // Normal attribute (location 2)
-        glVertexAttribPointer(2, 3, GL_FLOAT, false, stride, 5 * Float.BYTES);
-        glEnableVertexAttribArray(2);
-
-        // Color attribute (location 3) - white for all dropped items
-        glVertexAttribPointer(3, 3, GL_FLOAT, false, stride, 8 * Float.BYTES);
-        glEnableVertexAttribArray(3);
-
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, 256 * Integer.BYTES, GL_DYNAMIC_DRAW);
-
-        glBindVertexArray(0);
     }
 
     /**
@@ -182,10 +156,11 @@ public class DroppedItemRenderer {
         shader.setUniform("lightDirection", dayCycle.getSunDirection());
         shader.setUniform("lightColor", dayCycle.getLightColor());
 
-        glBindVertexArray(vao);
-
         // Render each item
         for (DroppedItem item : items) {
+            if (isTooFar(camera, item)) {
+                continue;
+            }
             // Query sky light at item position
             int worldX = (int) Math.floor(item.getX());
             int worldY = (int) Math.floor(item.getY());
@@ -198,38 +173,27 @@ public class DroppedItemRenderer {
             float finalBrightness = Math.max(0.08f, gammaLight) * dayCycle.getSunBrightness();
             shader.setUniform("sunBrightness", finalBrightness);
 
-            // Rebuild mesh for each item (different types need different meshes)
-            BlockType type = item.getBlockType();
+            ItemType type = item.getItemType();
 
             // Switch texture if needed
-            Texture requiredTexture = (type.usesItemTexture() && itemsTexture != null) ? itemsTexture : atlas;
+            Texture requiredTexture = (ItemTextureResolver.usesItemsAtlas(type) && itemsTexture != null)
+                    ? itemsTexture
+                    : atlas;
             if (requiredTexture != currentTexture) {
                 requiredTexture.bind(0);
                 currentTexture = requiredTexture;
             }
 
-            float[] vertices;
-            int[] indices;
-
-            if (type.isItem()) {
-                // Items render as flat 2D sprites (single plane)
-                vertices = buildItemSpriteVertices(type);
-                // Single quad indices
-                indices = new int[] { 0, 1, 2, 2, 3, 0 };
+            ItemRenderProfile profile = type.getRenderProfile();
+            CachedMesh mesh = meshCache.computeIfAbsent(type, this::createCachedMesh);
+            if (profile.modelKind() == ItemRenderProfile.ModelKind.BLOCK) {
+                shader.setUniform("alphaCutoff",
+                        type.getPlacedBlock().getRenderLayer() == com.craftzero.world.BlockRenderLayer.CUTOUT
+                                ? 0.1f
+                                : 0.0f);
             } else {
-                // Blocks render as 3D cubes
-                vertices = buildCubeVertices(type);
-                indices = buildCubeIndices();
+                shader.setUniform("alphaCutoff", 0.1f);
             }
-
-            // Upload vertices
-            glBindBuffer(GL_ARRAY_BUFFER, vbo);
-            glBufferSubData(GL_ARRAY_BUFFER, 0, vertices);
-
-            // Upload indices
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
-            glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, indices);
-            vertexCount = indices.length;
 
             // Determine how many overlapping blocks to show based on count
             // 1 = 1 block, 2-9 = 2 blocks, 10-31 = 3 blocks, 32+ = 4 blocks
@@ -249,7 +213,11 @@ public class DroppedItemRenderer {
             float baseY = item.getVisualY();
             float baseZ = item.getZ();
             float rotation = item.getRotation();
-            float scale = item.getScale();
+            float scale = item.getScale() * (profile.modelKind() == ItemRenderProfile.ModelKind.SPRITE
+                    ? Math.max(0.8f, profile.thirdPersonScale() / 0.375f)
+                    : 1.0f);
+
+            glBindVertexArray(mesh.vao);
 
             // Draw overlapping blocks with slight offsets
             for (int b = 0; b < blocksToDraw; b++) {
@@ -265,7 +233,7 @@ public class DroppedItemRenderer {
                         .scale(scale);
 
                 shader.setUniform("modelMatrix", modelMatrix);
-                glDrawElements(GL_TRIANGLES, vertexCount, GL_UNSIGNED_INT, 0);
+                glDrawElements(GL_TRIANGLES, mesh.vertexCount, GL_UNSIGNED_INT, 0);
             }
         }
 
@@ -276,23 +244,25 @@ public class DroppedItemRenderer {
         glEnable(GL_CULL_FACE);
     }
 
+    private static boolean isTooFar(Camera camera, DroppedItem item) {
+        float dx = item.getX() - camera.getPosition().x;
+        float dy = item.getY() - camera.getPosition().y;
+        float dz = item.getZ() - camera.getPosition().z;
+        float max = Math.min(camera.getFarPlane(), ITEM_RENDER_DISTANCE);
+        return dx * dx + dy * dy + dz * dz > max * max;
+    }
+
     /**
      * Build a flat 2D sprite mesh for items (single plane).
      * Vertex format: pos(3) + uv(2) + normal(3) + color(3) = 11 floats per vertex
      */
-    private float[] buildItemSpriteVertices(BlockType type) {
+    private float[] buildItemSpriteVertices(ItemType type) {
         float[] vertices = new float[4 * 11]; // 1 quad * 4 verts * 11 floats
         float h = 0.5f;
 
         // Get texture coordinates
         float[] uv;
-        if (type.usesItemTexture()) {
-            int[] pos = type.getItemTexturePos();
-            uv = GuiTexture.getItemUV(pos[0], pos[1]);
-        } else {
-            // Use side texture for blocks as items
-            uv = type.getTextureCoords(2);
-        }
+        uv = ItemTextureResolver.getUv(type);
 
         float u0 = uv[0], v0 = uv[1], u1 = uv[2], v1 = uv[3];
 
@@ -352,12 +322,49 @@ public class DroppedItemRenderer {
         return vertices;
     }
 
+    private CachedMesh createCachedMesh(ItemType type) {
+        ItemRenderProfile profile = type.getRenderProfile();
+        float[] vertices = profile.modelKind() == ItemRenderProfile.ModelKind.BLOCK
+                ? buildCubeVertices(type.getPlacedBlock())
+                : buildItemSpriteVertices(type);
+        int[] indices = profile.modelKind() == ItemRenderProfile.ModelKind.BLOCK
+                ? buildCubeIndices()
+                : new int[] { 0, 1, 2, 2, 3, 0 };
+
+        int vao = glGenVertexArrays();
+        int vbo = glGenBuffers();
+        int ebo = glGenBuffers();
+
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
+
+        int stride = 11 * Float.BYTES;
+        glVertexAttribPointer(0, 3, GL_FLOAT, false, stride, 0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, false, stride, 3 * Float.BYTES);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 3, GL_FLOAT, false, stride, 5 * Float.BYTES);
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(3, 3, GL_FLOAT, false, stride, 8 * Float.BYTES);
+        glEnableVertexAttribArray(3);
+
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices, GL_STATIC_DRAW);
+        glBindVertexArray(0);
+
+        return new CachedMesh(vao, vbo, ebo, indices.length);
+    }
+
     public void cleanup() {
         if (shader != null) {
             shader.cleanup();
         }
-        glDeleteBuffers(vbo);
-        glDeleteBuffers(ebo);
-        glDeleteVertexArrays(vao);
+        for (CachedMesh mesh : meshCache.values()) {
+            glDeleteBuffers(mesh.vbo);
+            glDeleteBuffers(mesh.ebo);
+            glDeleteVertexArrays(mesh.vao);
+        }
+        meshCache.clear();
     }
 }

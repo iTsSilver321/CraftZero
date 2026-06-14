@@ -1,6 +1,9 @@
 package com.craftzero.entity.ai;
 
+import com.craftzero.combat.DamageSource;
 import com.craftzero.entity.LivingEntity;
+import com.craftzero.entity.mob.Mob;
+import com.craftzero.main.CombatRules;
 import com.craftzero.main.Player;
 
 /**
@@ -64,7 +67,7 @@ public class MeleeAttackGoal implements Goal {
             return;
 
         Player player = mob.getWorld().getPlayer();
-        if (player == null)
+        if (player == null || player.isCreative() || !player.getDifficulty().allowsHostileSpawns())
             return;
 
         float playerX = player.getPosition().x;
@@ -100,7 +103,7 @@ public class MeleeAttackGoal implements Goal {
         }
 
         // Attack if in range
-        if (dist <= attackRange && mob.canAttack()) {
+        if (dist <= attackRange && mob.canAttack() && hasLineOfSight(player)) {
             performAttack(player);
         } else if (mob.isStuckOnLedge()) {
             // Stuck on ledge - immediately try alternate path
@@ -136,18 +139,18 @@ public class MeleeAttackGoal implements Goal {
 
                 if (safeYaw != targetYaw) {
                     // Use safe direction instead
-                    mob.setMoveDirection(safeYaw, chaseSpeed * 0.7f); // Slower when avoiding
+                    ai.requestMoveDirection(safeYaw, chaseSpeed * 0.7f); // Slower when avoiding
                     return;
                 } else {
                     // No safe direction - stop to avoid falling
-                    mob.stopMoving();
+                    ai.requestStopMoving();
                     return;
                 }
             }
 
-            mob.setMoveDirection(targetYaw, chaseSpeed);
+            ai.requestMoveDirection(targetYaw, chaseSpeed);
         } else {
-            mob.stopMoving();
+            ai.requestStopMoving();
         }
     }
 
@@ -160,38 +163,37 @@ public class MeleeAttackGoal implements Goal {
             float testYaw = currentYaw + offset;
             if (!LineOfSightUtil.isCliffAhead(mob.getWorld(),
                     mob.getX(), mob.getY(), mob.getZ(), testYaw, 2.0f)) {
-                mob.setMoveDirection(testYaw, chaseSpeed * 0.5f);
+                ai.requestMoveDirection(testYaw, chaseSpeed * 0.5f);
                 stuckTicks = 0; // Reset stuck counter
                 return;
             }
         }
 
         // Completely stuck (surrounded by cliffs) - just stop
-        mob.stopMoving();
+        ai.requestStopMoving();
     }
 
     private void performAttack(Player player) {
         mob.performAttack();
 
-        // Deal damage to player
-        player.getStats().damage(damage);
-
-        // Apply knockback to player
-        float dx = player.getPosition().x - mob.getX();
-        float dz = player.getPosition().z - mob.getZ();
-        float dist = (float) Math.sqrt(dx * dx + dz * dz);
-
-        if (dist > 0.01f) {
-            float knockback = 0.4f;
-            player.getVelocity().x += (dx / dist) * knockback;
-            player.getVelocity().y += 0.3f;
-            player.getVelocity().z += (dz / dist) * knockback;
+        player.hurt(damage, DamageSource.entity(DamageSource.Type.MOB_MELEE, mob,
+                CombatRules.MOB_MELEE_HORIZONTAL_KNOCKBACK,
+                CombatRules.MOB_MELEE_VERTICAL_KNOCKBACK));
+        if (mob instanceof Mob attackingMob) {
+            attackingMob.onSuccessfulMeleeHit(player);
         }
+    }
+
+    private boolean hasLineOfSight(Player player) {
+        return LineOfSightUtil.hasLineOfSight(
+                mob.getWorld(),
+                mob.getX(), mob.getY() + mob.getHeight() * 0.85f, mob.getZ(),
+                player.getPosition().x, player.getPosition().y + 1.6f, player.getPosition().z);
     }
 
     @Override
     public void stop() {
-        mob.stopMoving();
+        ai.requestStopMoving();
         stuckTicks = 0;
     }
 }

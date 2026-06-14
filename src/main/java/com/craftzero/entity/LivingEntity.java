@@ -1,5 +1,8 @@
 package com.craftzero.entity;
 
+import com.craftzero.combat.DamageSource;
+import com.craftzero.main.CombatRules;
+
 /**
  * Base class for all living entities (mobs, players).
  * Extends Entity with health, damage, death, and knockback mechanics.
@@ -43,6 +46,7 @@ public abstract class LivingEntity extends Entity {
     protected int jumpCooldown; // Cooldown to prevent infinite jumping
     protected int avoidanceCooldown; // Cooldown to prevent avoidance spam
     protected int continuousStuckTicks; // Track how long we are blocked by something tall
+    protected int knockbackControlTicks; // Short AI steering lock after taking knockback
     protected boolean isTrapped; // TRUE = mob is completely stuck and waiting for escape
     protected boolean stuckOnLedge; // TRUE = mob is on a ledge and can't find safe path forward
     protected int escapeScanTimer; // Timer for periodic 360° escape scans
@@ -62,24 +66,6 @@ public abstract class LivingEntity extends Entity {
     // =============================================================
     // PHYSICS OVERRIDES (Dynamic Physics)
     // =============================================================
-
-    @Override
-    protected float getGravityPerTick() {
-        // If recently hit (invulnerable), use FLOA gravity for knockback arc
-        if (invulnerableTime > 0) {
-            return 0.03f; // Floaty "Moon Gravity" for knockback only
-        }
-        return super.getGravityPerTick(); // Standard 0.08f for normal movement/jumps
-    }
-
-    @Override
-    protected float getAirResistance() {
-        // If recently hit (invulnerable), use LOW drag for long glide
-        if (invulnerableTime > 0) {
-            return 0.96f; // Gliding friction for knockback only
-        }
-        return super.getAirResistance(); // Standard 0.98f for normal movement
-    }
 
     protected boolean hasLookTarget; // Whether there's a look target
     protected int lookTimer; // Timer for random head movements
@@ -124,13 +110,15 @@ public abstract class LivingEntity extends Entity {
             invulnerableTime--;
         if (attackCooldown > 0)
             attackCooldown--;
+        if (knockbackControlTicks > 0)
+            knockbackControlTicks--;
 
         // Fire damage
         if (fireTicks > 0) {
             fireTicks--;
             // Deal fire damage every 20 ticks (1 second)
             if (ticksExisted - lastFireDamage >= 20) {
-                damage(1.0f, null);
+                damage(1.0f, DamageSource.point(DamageSource.Type.FIRE, x, y, z, 0.0f, 0.0f));
                 lastFireDamage = ticksExisted;
             }
         }
@@ -389,8 +377,8 @@ public abstract class LivingEntity extends Entity {
     private boolean isSolidAt(float bx, float by, float bz) {
         if (world == null)
             return false;
-        com.craftzero.world.BlockType bt = world.getBlock((int) Math.floor(bx), (int) Math.floor(by),
-                (int) Math.floor(bz));
+        com.craftzero.world.BlockType bt = world.getBlockIfLoaded((int) Math.floor(bx), (int) Math.floor(by),
+                (int) Math.floor(bz), com.craftzero.world.BlockType.BEDROCK);
         return bt != null && bt.isSolid();
     }
 
@@ -465,7 +453,10 @@ public abstract class LivingEntity extends Entity {
         // 2. Body is facing within 45 degrees of target direction (more lenient)
         boolean isFacingCorrectly = remainingYawDiff < 45.0f;
 
-        if (forwardSpeed > 0.001f && isFacingCorrectly) {
+        if (knockbackControlTicks > 0) {
+            motionX *= 0.98f;
+            motionZ *= 0.98f;
+        } else if (forwardSpeed > 0.001f && isFacingCorrectly) {
             // Move forward in the direction body is facing
             float bodyYawRad = (float) Math.toRadians(bodyYaw);
             // MATCHING PLAYER.JAVA COORDINATE SYSTEM:
@@ -596,8 +587,18 @@ public abstract class LivingEntity extends Entity {
      * @return true if damage was dealt
      */
     public boolean damage(float amount, Entity source) {
+        return damage(amount, source == null ? DamageSource.generic()
+                : DamageSource.entity(DamageSource.Type.GENERIC, source,
+                        CombatRules.ARROW_HORIZONTAL_KNOCKBACK,
+                        CombatRules.ARROW_VERTICAL_KNOCKBACK));
+    }
+
+    public boolean damage(float amount, DamageSource source) {
         if (dead)
             return false;
+        if (source == null) {
+            source = DamageSource.generic();
+        }
 
         // Invulnerability frame logic (Minecraft style)
         if (invulnerableTime > 0) {
@@ -610,31 +611,33 @@ public abstract class LivingEntity extends Entity {
         }
 
         // Track this damage for future comparisons
-        lastDamageAmount = amount;
+        lastDamageAmount = invulnerableTime > 0 ? lastDamageAmount + amount : amount;
 
         health -= amount;
         hurtTime = hurtDuration;
         invulnerableTime = maxInvulnerableTime;
-        lastDamageSource = source;
+        lastDamageSource = source.entity();
 
         // Note: Knockback is now applied externally by Player.attackEntity()
         // The source-based knockback below is for mob attacks
 
         // Apply knockback from source (for mob attacks on player)
-        if (source != null) {
-            float dx = x - source.getX();
-            float dz = z - source.getZ();
+        if (source.hasPosition() && source.hasKnockback()) {
+            float dx = x - source.sourceX();
+            float dz = z - source.sourceZ();
             float dist = (float) Math.sqrt(dx * dx + dz * dz);
 
             if (dist > 0.01f) {
-                float knockback = 0.4f;
+                float knockback = source.horizontalKnockback();
+                float verticalKnockback = source.verticalKnockback();
                 motionX += (dx / dist) * knockback;
-                motionY += 0.3f; // Slight upward knockback
+                motionY += verticalKnockback;
                 motionZ += (dz / dist) * knockback;
+                knockbackControlTicks = 10;
             }
         }
 
-        onHurt(amount, source);
+        onHurt(amount, source.entity());
         return true;
     }
 
@@ -750,6 +753,9 @@ public abstract class LivingEntity extends Entity {
         this.motionX += x;
         this.motionY += y;
         this.motionZ += z;
+        if (Math.abs(x) > 0.001f || Math.abs(z) > 0.001f || y > 0.001f) {
+            knockbackControlTicks = Math.max(knockbackControlTicks, 10);
+        }
     }
 
     /**

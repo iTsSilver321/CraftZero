@@ -95,7 +95,7 @@ public class PanicGoal implements Goal {
                 }
             }
 
-            mob.setMoveDirection(targetYaw, panicSpeed);
+            ai.requestMoveDirection(targetYaw, panicSpeed);
         } else {
             // Reached destination, pick new one
             pickSafeFleeDirection();
@@ -111,7 +111,7 @@ public class PanicGoal implements Goal {
     @Override
     public void stop() {
         panicking = false;
-        mob.stopMoving();
+        ai.requestStopMoving();
     }
 
     /**

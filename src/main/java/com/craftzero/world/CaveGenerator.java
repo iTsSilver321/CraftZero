@@ -16,8 +16,8 @@ public class CaveGenerator {
     // Chance a chunk starts a cave system (approx 1 in 10 for denser caves)
     private static final int CAVE_CHANCE = 10;
 
-    // Sea level for ocean check
-    private static final int SEA_LEVEL = 62;
+    private static final int SEA_LEVEL = ReleaseOneWorldGenerator.SEA_LEVEL;
+    private static final int LAVA_LEVEL = ReleaseOneWorldGenerator.LAVA_LEVEL;
 
     /**
      * Carve caves into the given chunk.
@@ -154,35 +154,34 @@ public class CaveGenerator {
 
                             BlockType current = chunk.getBlock(localX, y, localZ);
 
-                            // 1. Don't carve water or bedrock
-                            if (current == BlockType.WATER || current == BlockType.BEDROCK) {
+                            if (isProtectedFromCarving(chunk, localX, y, localZ, current)) {
                                 continue;
                             }
 
-                            // 2. OCEAN PUNCTURE SAFETY:
-                            // If we are below sea level, check if the block ABOVE is water.
-                            // If it is, DO NOT BREAK THIS BLOCK, or the ocean will leak in.
-                            if (y < SEA_LEVEL) {
-                                if (y < Chunk.HEIGHT - 1) {
-                                    BlockType above = chunk.getBlock(localX, y + 1, localZ);
-                                    if (above == BlockType.WATER) {
-                                        continue;
-                                    }
-                                }
-                            }
-
-                            // Lava Pools at depth
-                            if (y < 11) {
+                            if (y < LAVA_LEVEL) {
                                 chunk.setBlock(localX, y, localZ, BlockType.LAVA);
-                            } else {
-                                if (current != BlockType.AIR && current != BlockType.LAVA) {
-                                    chunk.setBlock(localX, y, localZ, BlockType.AIR);
-                                }
+                            } else if (current != BlockType.AIR && !current.isLava()) {
+                                chunk.setBlock(localX, y, localZ, BlockType.AIR);
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    private boolean isProtectedFromCarving(Chunk chunk, int localX, int y, int localZ, BlockType current) {
+        if (current == BlockType.BEDROCK || current.isWater() || current == BlockType.ICE) {
+            return true;
+        }
+        if (y <= SEA_LEVEL) {
+            for (int dy = 1; dy <= 3 && y + dy < Chunk.HEIGHT; dy++) {
+                BlockType above = chunk.getBlock(localX, y + dy, localZ);
+                if (above.isWater() || above == BlockType.ICE) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

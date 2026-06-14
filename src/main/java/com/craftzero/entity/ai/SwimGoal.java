@@ -46,12 +46,13 @@ public class SwimGoal implements Goal {
 
         // Check if head is submerged
         int headY = (int) Math.floor(mob.getY() + mob.getHeight() * 0.85f);
-        BlockType headBlock = world.getBlock(
+        BlockType headBlock = world.getBlockIfLoaded(
                 (int) Math.floor(mob.getX()),
                 headY,
-                (int) Math.floor(mob.getZ()));
+                (int) Math.floor(mob.getZ()),
+                BlockType.AIR);
 
-        boolean headUnderwater = (headBlock == BlockType.WATER);
+        boolean headUnderwater = headBlock.isWater();
 
         if (headUnderwater) {
             // Swim up to surface - stronger impulse to help exit water

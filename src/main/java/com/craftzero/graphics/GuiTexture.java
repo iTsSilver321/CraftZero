@@ -9,13 +9,20 @@ package com.craftzero.graphics;
  * - gui.png (256x256): hotbar, widgets, buttons
  * - inventory.png: player inventory background
  * - crafting.png: crafting table background
+ * - container.png: chest background
+ * - furnace.png: furnace background
  */
 public class GuiTexture {
 
     private static Texture iconsTexture;
     private static Texture guiTexture;
     private static Texture inventoryTexture;
+    private static Texture allItemsTexture;
     private static Texture craftingTexture;
+    private static Texture containerTexture;
+    private static Texture furnaceTexture;
+    private static Texture chestTexture;
+    private static Texture largeChestTexture;
     private static Texture itemsTexture; // Items atlas (stick, tools, etc.)
 
     private static boolean initialized = false;
@@ -30,7 +37,12 @@ public class GuiTexture {
         iconsTexture = new Texture("/textures/gui/icons.png");
         guiTexture = new Texture("/textures/gui/gui.png");
         inventoryTexture = new Texture("/textures/gui/inventory.png");
+        allItemsTexture = new Texture("/textures/gui/allitems.png");
         craftingTexture = new Texture("/textures/gui/crafting.png");
+        containerTexture = new Texture("/textures/gui/container.png");
+        furnaceTexture = new Texture("/textures/gui/furnace.png");
+        chestTexture = new Texture("/textures/item/chest.png");
+        largeChestTexture = new Texture("/textures/item/largechest.png");
         itemsTexture = new Texture("/textures/item/items.png");
 
         initialized = true;
@@ -49,8 +61,28 @@ public class GuiTexture {
         return inventoryTexture;
     }
 
+    public static Texture getAllItemsTexture() {
+        return allItemsTexture;
+    }
+
     public static Texture getCraftingTexture() {
         return craftingTexture;
+    }
+
+    public static Texture getContainerTexture() {
+        return containerTexture;
+    }
+
+    public static Texture getFurnaceTexture() {
+        return furnaceTexture;
+    }
+
+    public static Texture getChestTexture() {
+        return chestTexture;
+    }
+
+    public static Texture getLargeChestTexture() {
+        return largeChestTexture;
     }
 
     // ========== icons.png UV coordinates (256x256) ==========
@@ -134,11 +166,7 @@ public class GuiTexture {
      * items.png is a 16x16 grid of 16x16 pixel sprites.
      */
     public static float[] getItemUV(int col, int row) {
-        float u1 = col * 16f / ITEMS_SIZE;
-        float v1 = row * 16f / ITEMS_SIZE;
-        float u2 = (col + 1) * 16f / ITEMS_SIZE;
-        float v2 = (row + 1) * 16f / ITEMS_SIZE;
-        return new float[] { u1, v1, u2, v2 };
+        return ItemTextureResolver.getItemsUv(col, row);
     }
 
     /**
@@ -160,8 +188,18 @@ public class GuiTexture {
             guiTexture.cleanup();
         if (inventoryTexture != null)
             inventoryTexture.cleanup();
+        if (allItemsTexture != null)
+            allItemsTexture.cleanup();
         if (craftingTexture != null)
             craftingTexture.cleanup();
+        if (containerTexture != null)
+            containerTexture.cleanup();
+        if (furnaceTexture != null)
+            furnaceTexture.cleanup();
+        if (chestTexture != null)
+            chestTexture.cleanup();
+        if (largeChestTexture != null)
+            largeChestTexture.cleanup();
         if (itemsTexture != null)
             itemsTexture.cleanup();
         initialized = false;

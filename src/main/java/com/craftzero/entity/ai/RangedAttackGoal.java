@@ -1,6 +1,7 @@
 package com.craftzero.entity.ai;
 
 import com.craftzero.entity.LivingEntity;
+import com.craftzero.main.CombatRules;
 import com.craftzero.main.Player;
 
 /**
@@ -49,7 +50,7 @@ public class RangedAttackGoal implements Goal {
 
     @Override
     public void start() {
-        attackCooldown = attackInterval / 2; // Start with half cooldown
+        attackCooldown = attackInterval;
         strafeTime = 0;
         strafingClockwise = Math.random() > 0.5;
         strafeSpeed = 0.5f;
@@ -61,7 +62,7 @@ public class RangedAttackGoal implements Goal {
             return;
 
         Player player = mob.getWorld().getPlayer();
-        if (player == null)
+        if (player == null || player.isCreative() || !player.getDifficulty().allowsHostileSpawns())
             return;
 
         float targetX = player.getPosition().x;
@@ -73,12 +74,13 @@ public class RangedAttackGoal implements Goal {
         float dy = targetY - mob.getY();
         float dz = targetZ - mob.getZ();
         float dist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+        boolean hasSight = hasLineOfSight(player);
 
         // Look at player
         mob.lookAt(targetX, targetY + 1.6f, targetZ);
 
         // Movement behavior
-        if (dist <= attackRange && dist >= minRange) {
+        if (dist <= attackRange && dist >= minRange && hasSight) {
             // In attack range - strafe instead of approaching
             strafeTime++;
 
@@ -94,22 +96,22 @@ public class RangedAttackGoal implements Goal {
             float targetYaw = (float) Math.toDegrees(Math.atan2(dx, -dz));
             float strafeYaw = targetYaw + (strafingClockwise ? 90 : -90);
 
-            mob.setMoveDirection(strafeYaw, strafeSpeed);
+            ai.requestMoveDirection(strafeYaw, strafeSpeed);
 
-        } else if (dist > attackRange) {
+        } else if (dist > attackRange || !hasSight) {
             // Too far - move closer
             float targetYaw = (float) Math.toDegrees(Math.atan2(dx, -dz));
-            mob.setMoveDirection(targetYaw, 0.8f);
+            ai.requestMoveDirection(targetYaw, 0.8f);
 
         } else if (dist < minRange) {
             // Too close - back away
             float awayYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
-            mob.setMoveDirection(awayYaw, 0.6f);
+            ai.requestMoveDirection(awayYaw, 0.6f);
         }
 
         // Attack logic
         attackCooldown--;
-        if (attackCooldown <= 0 && dist <= attackRange && dist >= minRange) {
+        if (attackCooldown <= 0 && dist <= attackRange && dist >= minRange && hasSight) {
             // Fire projectile!
             shootArrow(player);
             attackCooldown = attackInterval;
@@ -143,17 +145,24 @@ public class RangedAttackGoal implements Goal {
         dy = (dy / dist) * projectileSpeed + 0.1f; // Add slight arc
         dz = (dz / dist) * projectileSpeed;
 
-        // TODO: Spawn arrow projectile when Arrow entity is implemented
-        // mob.getWorld().spawnArrow(spawnX, spawnY, spawnZ, dx, dy, dz, mob);
+        mob.getWorld().spawnArrow(spawnX, spawnY, spawnZ, dx, dy, dz, mob, false,
+                CombatRules.EASY_SKELETON_ARROW_DAMAGE);
 
         // Visual feedback - attack animation
         mob.performAttack();
     }
 
+    private boolean hasLineOfSight(Player player) {
+        return LineOfSightUtil.hasLineOfSight(
+                mob.getWorld(),
+                mob.getX(), mob.getY() + mob.getHeight() * 0.85f, mob.getZ(),
+                player.getPosition().x, player.getPosition().y + 1.6f, player.getPosition().z);
+    }
+
     @Override
     public void stop() {
-        mob.stopMoving();
-        attackCooldown = 0;
+        ai.requestStopMoving();
+        attackCooldown = attackInterval;
     }
 
     @Override

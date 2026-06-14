@@ -10,7 +10,8 @@ public class RavineGenerator {
 
     private static final int SEARCH_RADIUS = 2;
     private static final int RAVINE_CHANCE = 50; // 1 in 50 chunks (rare)
-    private static final int SEA_LEVEL = 62;
+    private static final int SEA_LEVEL = ReleaseOneWorldGenerator.SEA_LEVEL;
+    private static final int LAVA_LEVEL = ReleaseOneWorldGenerator.LAVA_LEVEL;
 
     public void generate(Chunk chunk, long worldSeed) {
         int chunkX = chunk.getX();
@@ -113,21 +114,13 @@ public class RavineGenerator {
                                     y >= 0 && y < Chunk.HEIGHT) {
 
                                 BlockType current = chunk.getBlock(localX, y, localZ);
-                                if (current == BlockType.WATER || current == BlockType.BEDROCK)
+                                if (isProtectedFromCarving(chunk, localX, y, localZ, current))
                                     continue;
 
-                                // Ocean check
-                                if (y < SEA_LEVEL && y < Chunk.HEIGHT - 1) {
-                                    if (chunk.getBlock(localX, y + 1, localZ) == BlockType.WATER)
-                                        continue;
-                                }
-
-                                if (y < 11) {
+                                if (y < LAVA_LEVEL) {
                                     chunk.setBlock(localX, y, localZ, BlockType.LAVA);
-                                } else {
-                                    if (current != BlockType.AIR && current != BlockType.LAVA) {
-                                        chunk.setBlock(localX, y, localZ, BlockType.AIR);
-                                    }
+                                } else if (current != BlockType.AIR && !current.isLava()) {
+                                    chunk.setBlock(localX, y, localZ, BlockType.AIR);
                                 }
                             }
                         }
@@ -135,5 +128,20 @@ public class RavineGenerator {
                 }
             }
         }
+    }
+
+    private boolean isProtectedFromCarving(Chunk chunk, int localX, int y, int localZ, BlockType current) {
+        if (current == BlockType.BEDROCK || current.isWater() || current == BlockType.ICE) {
+            return true;
+        }
+        if (y <= SEA_LEVEL) {
+            for (int dy = 1; dy <= 3 && y + dy < Chunk.HEIGHT; dy++) {
+                BlockType above = chunk.getBlock(localX, y + dy, localZ);
+                if (above.isWater() || above == BlockType.ICE) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

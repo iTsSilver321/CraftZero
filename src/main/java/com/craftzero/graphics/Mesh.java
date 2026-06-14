@@ -157,6 +157,15 @@ public class Mesh {
         glBindVertexArray(0);
     }
 
+    public void renderBound() {
+        glBindVertexArray(vaoId);
+        glDrawElements(GL_TRIANGLES, vertexCount, GL_UNSIGNED_INT, 0);
+    }
+
+    public static void unbind() {
+        glBindVertexArray(0);
+    }
+
     public void cleanup() {
         glDisableVertexAttribArray(0);
         glDisableVertexAttribArray(1);

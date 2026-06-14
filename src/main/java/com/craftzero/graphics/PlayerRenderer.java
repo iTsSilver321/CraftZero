@@ -3,10 +3,15 @@ package com.craftzero.graphics;
 import com.craftzero.graphics.model.ModelPart;
 import com.craftzero.graphics.model.PlayerModel;
 import com.craftzero.inventory.ItemStack;
+import com.craftzero.inventory.ItemRenderProfile;
+import com.craftzero.inventory.ItemType;
 import com.craftzero.main.Player;
 import com.craftzero.world.BlockType;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
+
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL15.*;
@@ -37,12 +42,18 @@ public class PlayerRenderer {
     private Texture atlas;
     private Texture itemsTexture;
 
-    // Held item rendering (simple VAO for a flat quad and cube)
+    // Legacy dynamic held meshes kept only for cleanup compatibility.
     private int itemVao;
     private int itemVbo;
     private int blockVao;
     private int blockVbo;
     private int blockEbo;
+    private final Map<ItemType, HeldMesh> heldItemMeshCache = new HashMap<>();
+    private final Map<BlockType, HeldMesh> heldBlockMeshCache = new HashMap<>();
+    private static final int HELD_VERTEX_FLOATS = 11;
+
+    private record HeldMesh(int vao, int vbo, int ebo, int drawCount, boolean indexed) {
+    }
 
     public PlayerRenderer(Renderer renderer) {
         this.renderer = renderer;
@@ -72,36 +83,8 @@ public class PlayerRenderer {
      * for blocks).
      */
     private void buildHeldItemMeshes() {
-        // Build a flat quad for item sprites (tools, sticks, etc.)
-        // Vertex format: pos(3) + uv(2) + normal(3) = 8 floats per vertex
-        float[] itemVertices = {
-                // x, y, z, u, v, nx, ny, nz
-                -0.5f, -0.5f, 0, 0, 1, 0, 0, 1,
-                0.5f, -0.5f, 0, 1, 1, 0, 0, 1,
-                0.5f, 0.5f, 0, 1, 0, 0, 0, 1,
-                -0.5f, 0.5f, 0, 0, 0, 0, 0, 1,
-        };
-
-        itemVao = glGenVertexArrays();
-        itemVbo = glGenBuffers();
-
-        glBindVertexArray(itemVao);
-        glBindBuffer(GL_ARRAY_BUFFER, itemVbo);
-        glBufferData(GL_ARRAY_BUFFER, itemVertices, GL_STATIC_DRAW);
-
-        int stride = 8 * Float.BYTES;
-        glVertexAttribPointer(0, 3, GL_FLOAT, false, stride, 0);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1, 2, GL_FLOAT, false, stride, 3 * Float.BYTES);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(2, 3, GL_FLOAT, false, stride, 5 * Float.BYTES);
-        glEnableVertexAttribArray(2);
-
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        glBindVertexArray(0);
-
-        // Build a small cube for block items
-        buildBlockMesh();
+        // Held item meshes are created lazily per ItemType/BlockType so the atlas UVs
+        // are stable and buffers are not rewritten during rendering.
     }
 
     private void buildBlockMesh() {
@@ -140,6 +123,8 @@ public class PlayerRenderer {
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(2, 3, GL_FLOAT, false, stride, 5 * Float.BYTES);
         glEnableVertexAttribArray(2);
+        glDisableVertexAttribArray(3);
+        glVertexAttrib3f(3, 1.0f, 1.0f, 1.0f);
 
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
@@ -191,50 +176,119 @@ public class PlayerRenderer {
         return i;
     }
 
-    private void updateBlockUVs(BlockType type) {
-        float s = 0.5f;
-        float[] v = new float[24 * 8];
+    private HeldMesh getHeldItemMesh(ItemType type) {
+        return heldItemMeshCache.computeIfAbsent(type, this::createHeldItemMesh);
+    }
 
-        // Get UVs from block type: top, bottom, side
+    private HeldMesh getHeldBlockMesh(BlockType type) {
+        return heldBlockMeshCache.computeIfAbsent(type, this::createHeldBlockMesh);
+    }
+
+    private HeldMesh createHeldItemMesh(ItemType type) {
+        float[] uv = ItemTextureResolver.getUv(type);
+        float[] vertices = {
+                -0.5f, -0.5f, 0.0f, uv[0], uv[3], 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                0.5f, -0.5f, 0.0f, uv[2], uv[3], 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                0.5f, 0.5f, 0.0f, uv[2], uv[1], 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                -0.5f, 0.5f, 0.0f, uv[0], uv[1], 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        };
+        int[] indices = { 0, 1, 2, 0, 2, 3 };
+        return uploadHeldMesh(vertices, indices);
+    }
+
+    private HeldMesh createHeldBlockMesh(BlockType type) {
+        float s = 0.5f;
+        float[] vertices = new float[24 * HELD_VERTEX_FLOATS];
         float[] topUV = type.getTextureCoords(0);
         float[] bottomUV = type.getTextureCoords(1);
         float[] sideUV = type.getTextureCoords(2);
-
         int i = 0;
-        // Front - side
-        i = setVert(v, i, -s, -s, s, sideUV[0], sideUV[3], 0, 0, 1);
-        i = setVert(v, i, s, -s, s, sideUV[2], sideUV[3], 0, 0, 1);
-        i = setVert(v, i, s, s, s, sideUV[2], sideUV[1], 0, 0, 1);
-        i = setVert(v, i, -s, s, s, sideUV[0], sideUV[1], 0, 0, 1);
-        // Back - side
-        i = setVert(v, i, s, -s, -s, sideUV[0], sideUV[3], 0, 0, -1);
-        i = setVert(v, i, -s, -s, -s, sideUV[2], sideUV[3], 0, 0, -1);
-        i = setVert(v, i, -s, s, -s, sideUV[2], sideUV[1], 0, 0, -1);
-        i = setVert(v, i, s, s, -s, sideUV[0], sideUV[1], 0, 0, -1);
-        // Top
-        i = setVert(v, i, -s, s, s, topUV[0], topUV[3], 0, 1, 0);
-        i = setVert(v, i, s, s, s, topUV[2], topUV[3], 0, 1, 0);
-        i = setVert(v, i, s, s, -s, topUV[2], topUV[1], 0, 1, 0);
-        i = setVert(v, i, -s, s, -s, topUV[0], topUV[1], 0, 1, 0);
-        // Bottom
-        i = setVert(v, i, -s, -s, -s, bottomUV[0], bottomUV[3], 0, -1, 0);
-        i = setVert(v, i, s, -s, -s, bottomUV[2], bottomUV[3], 0, -1, 0);
-        i = setVert(v, i, s, -s, s, bottomUV[2], bottomUV[1], 0, -1, 0);
-        i = setVert(v, i, -s, -s, s, bottomUV[0], bottomUV[1], 0, -1, 0);
-        // Right - side
-        i = setVert(v, i, s, -s, s, sideUV[0], sideUV[3], 1, 0, 0);
-        i = setVert(v, i, s, -s, -s, sideUV[2], sideUV[3], 1, 0, 0);
-        i = setVert(v, i, s, s, -s, sideUV[2], sideUV[1], 1, 0, 0);
-        i = setVert(v, i, s, s, s, sideUV[0], sideUV[1], 1, 0, 0);
-        // Left - side
-        i = setVert(v, i, -s, -s, -s, sideUV[0], sideUV[3], -1, 0, 0);
-        i = setVert(v, i, -s, -s, s, sideUV[2], sideUV[3], -1, 0, 0);
-        i = setVert(v, i, -s, s, s, sideUV[2], sideUV[1], -1, 0, 0);
-        setVert(v, i, -s, s, -s, sideUV[0], sideUV[1], -1, 0, 0);
+        i = setColoredVert(vertices, i, -s, -s, s, sideUV[0], sideUV[3], 0, 0, 1);
+        i = setColoredVert(vertices, i, s, -s, s, sideUV[2], sideUV[3], 0, 0, 1);
+        i = setColoredVert(vertices, i, s, s, s, sideUV[2], sideUV[1], 0, 0, 1);
+        i = setColoredVert(vertices, i, -s, s, s, sideUV[0], sideUV[1], 0, 0, 1);
+        i = setColoredVert(vertices, i, s, -s, -s, sideUV[0], sideUV[3], 0, 0, -1);
+        i = setColoredVert(vertices, i, -s, -s, -s, sideUV[2], sideUV[3], 0, 0, -1);
+        i = setColoredVert(vertices, i, -s, s, -s, sideUV[2], sideUV[1], 0, 0, -1);
+        i = setColoredVert(vertices, i, s, s, -s, sideUV[0], sideUV[1], 0, 0, -1);
+        i = setColoredVert(vertices, i, -s, s, s, topUV[0], topUV[3], 0, 1, 0);
+        i = setColoredVert(vertices, i, s, s, s, topUV[2], topUV[3], 0, 1, 0);
+        i = setColoredVert(vertices, i, s, s, -s, topUV[2], topUV[1], 0, 1, 0);
+        i = setColoredVert(vertices, i, -s, s, -s, topUV[0], topUV[1], 0, 1, 0);
+        i = setColoredVert(vertices, i, -s, -s, -s, bottomUV[0], bottomUV[3], 0, -1, 0);
+        i = setColoredVert(vertices, i, s, -s, -s, bottomUV[2], bottomUV[3], 0, -1, 0);
+        i = setColoredVert(vertices, i, s, -s, s, bottomUV[2], bottomUV[1], 0, -1, 0);
+        i = setColoredVert(vertices, i, -s, -s, s, bottomUV[0], bottomUV[1], 0, -1, 0);
+        i = setColoredVert(vertices, i, s, -s, s, sideUV[0], sideUV[3], 1, 0, 0);
+        i = setColoredVert(vertices, i, s, -s, -s, sideUV[2], sideUV[3], 1, 0, 0);
+        i = setColoredVert(vertices, i, s, s, -s, sideUV[2], sideUV[1], 1, 0, 0);
+        i = setColoredVert(vertices, i, s, s, s, sideUV[0], sideUV[1], 1, 0, 0);
+        i = setColoredVert(vertices, i, -s, -s, -s, sideUV[0], sideUV[3], -1, 0, 0);
+        i = setColoredVert(vertices, i, -s, -s, s, sideUV[2], sideUV[3], -1, 0, 0);
+        i = setColoredVert(vertices, i, -s, s, s, sideUV[2], sideUV[1], -1, 0, 0);
+        setColoredVert(vertices, i, -s, s, -s, sideUV[0], sideUV[1], -1, 0, 0);
 
-        glBindBuffer(GL_ARRAY_BUFFER, blockVbo);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, v);
+        int[] indices = {
+                0, 1, 2, 0, 2, 3,
+                4, 5, 6, 4, 6, 7,
+                8, 9, 10, 8, 10, 11,
+                12, 13, 14, 12, 14, 15,
+                16, 17, 18, 16, 18, 19,
+                20, 21, 22, 20, 22, 23,
+        };
+        return uploadHeldMesh(vertices, indices);
+    }
+
+    private int setColoredVert(float[] v, int i, float x, float y, float z,
+            float u, float vv, float nx, float ny, float nz) {
+        v[i++] = x;
+        v[i++] = y;
+        v[i++] = z;
+        v[i++] = u;
+        v[i++] = vv;
+        v[i++] = nx;
+        v[i++] = ny;
+        v[i++] = nz;
+        v[i++] = 1.0f;
+        v[i++] = 1.0f;
+        v[i++] = 1.0f;
+        return i;
+    }
+
+    private HeldMesh uploadHeldMesh(float[] vertices, int[] indices) {
+        int vao = glGenVertexArrays();
+        int vbo = glGenBuffers();
+        int ebo = glGenBuffers();
+
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices, GL_STATIC_DRAW);
+
+        int stride = HELD_VERTEX_FLOATS * Float.BYTES;
+        glVertexAttribPointer(0, 3, GL_FLOAT, false, stride, 0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, false, stride, 3 * Float.BYTES);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 3, GL_FLOAT, false, stride, 5 * Float.BYTES);
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(3, 3, GL_FLOAT, false, stride, 8 * Float.BYTES);
+        glEnableVertexAttribArray(3);
+
+        glBindVertexArray(0);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
+        return new HeldMesh(vao, vbo, ebo, indices.length, true);
+    }
+
+    private void renderHeldMesh(HeldMesh mesh) {
+        glBindVertexArray(mesh.vao());
+        if (mesh.indexed()) {
+            glDrawElements(GL_TRIANGLES, mesh.drawCount(), GL_UNSIGNED_INT, 0);
+        } else {
+            glDrawArrays(GL_TRIANGLES, 0, mesh.drawCount());
+        }
+        glBindVertexArray(0);
     }
 
     public void render(Player player, Camera camera, float partialTick, int cameraMode) {
@@ -384,9 +438,10 @@ public class PlayerRenderer {
         // Get held item
         ItemStack heldItem = player.getInventory().getItemInHand();
         boolean holdingItem = heldItem != null && !heldItem.isEmpty();
-        BlockType heldType = holdingItem ? heldItem.getType() : null;
-        boolean holdingBlock = holdingItem && heldType != null && !heldType.isItem();
-        boolean holdingTool = holdingItem && heldType != null && heldType.isItem();
+        ItemType heldType = holdingItem ? heldItem.getType() : null;
+        ItemRenderProfile heldProfile = holdingItem && heldType != null ? heldType.getRenderProfile() : null;
+        boolean holdingBlock = heldProfile != null && heldProfile.modelKind() == ItemRenderProfile.ModelKind.BLOCK;
+        boolean holdingSpriteItem = heldProfile != null && heldProfile.modelKind() == ItemRenderProfile.ModelKind.SPRITE;
 
         // Get slot switch animation progress (0 = retracted, 1 = visible)
         float slotSwitchProgress = player.getSlotSwitchProgress(partialTick);
@@ -460,16 +515,12 @@ public class PlayerRenderer {
         playerModel.leftArm.setRotation(0, 0, 0);
         playerModel.leftArm.calculateTransform(modelMatrix);
 
-        // Render arm ONLY when not holding a block (blocks replace the hand)
-        // Tools still show with the arm
-        if (!holdingBlock) {
-            playerTexture.bind(0);
-            renderModelPart(playerModel.leftArm);
-        }
+        playerTexture.bind(0);
+        renderModelPart(playerModel.leftArm);
 
         // Render held item (block or tool)
         if (holdingItem && (atlas != null || itemsTexture != null)) {
-            renderHeldItemFirstPerson(heldType, holdingBlock, holdingTool, camPos, camera,
+            renderHeldItemFirstPerson(heldType, heldProfile, holdingBlock, holdingSpriteItem, camPos, camera,
                     swingProgress, useProgress, walkDist, entityBrightness, switchOffset);
         }
 
@@ -481,7 +532,8 @@ public class PlayerRenderer {
     /**
      * Render held item in first person view.
      */
-    private void renderHeldItemFirstPerson(BlockType type, boolean isBlock, boolean isTool,
+    private void renderHeldItemFirstPerson(ItemType type, ItemRenderProfile profile, boolean isBlock,
+            boolean isSpriteItem,
             Vector3f camPos, Camera camera, float swingProgress, float useProgress,
             float walkDist, float brightness, float slotSwitchOffset) {
 
@@ -492,43 +544,24 @@ public class PlayerRenderer {
         itemMatrix.rotateY((float) Math.toRadians(-camera.getYaw()));
         itemMatrix.rotateX((float) Math.toRadians(-camera.getPitch()));
 
-        // Position item in front of hand (screen space: right/bottom/forward)
-        // Adjusted to match Minecraft positioning - more right, lower, further forward
-        float itemX = 0.70f; // More to the right
-        float itemY = -0.65f - slotSwitchOffset * 1.5f; // Lower on screen
-        float itemZ = -0.95f; // Further forward (away from camera)
-        itemMatrix.translate(itemX, itemY, itemZ);
+        itemMatrix.translate(
+                profile.firstPersonOffsetX(),
+                profile.firstPersonOffsetY() - slotSwitchOffset * profile.firstPersonEquipDrop(),
+                profile.firstPersonOffsetZ());
 
-        // Apply swing animation (swings forward, left, and down like Minecraft)
         if (swingProgress > 0) {
-            float phase = swingProgress;
-            float forwardExtend = (phase < 0.4f) ? (phase / 0.4f) : Math.max(0, 1.0f - (phase - 0.4f) / 0.6f);
-            forwardExtend = (float) Math.sin(forwardExtend * Math.PI * 0.5f);
-            // Move left (-X), UP (+Y toward crosshair), and forward (-Z)
-            itemMatrix.translate(-forwardExtend * 0.3f, forwardExtend * 0.15f, -forwardExtend * 0.2f);
-
-            float downSwing = (phase > 0.3f) ? (float) Math.sin((phase - 0.3f) / 0.7f * Math.PI) : 0;
-            // Add downward motion in second half of swing
-            itemMatrix.translate(0, -downSwing * 0.25f, 0);
-            // Tilt forward (-X rotation) and left (+Z rotation)
-            itemMatrix.rotateX((float) Math.toRadians(-downSwing * 80.0f));
-            itemMatrix.rotateZ((float) Math.toRadians(downSwing * 20.0f));
+            float sinSwing = (float) Math.sin(swingProgress * swingProgress * Math.PI);
+            float sinSqrtSwing = (float) Math.sin(Math.sqrt(swingProgress) * Math.PI);
+            itemMatrix.translate(-sinSqrtSwing * 0.28f, sinSwing * 0.08f, -sinSqrtSwing * 0.18f);
+            itemMatrix.rotateY((float) Math.toRadians(-sinSwing * 20.0f));
+            itemMatrix.rotateZ((float) Math.toRadians(-sinSqrtSwing * 20.0f));
+            itemMatrix.rotateX((float) Math.toRadians(-sinSqrtSwing * 80.0f));
         }
 
-        // Apply use animation (same as swing - forward, left, and down)
         if (useProgress > 0) {
-            float phase = useProgress;
-            float forwardExtend = (phase < 0.4f) ? (phase / 0.4f) : Math.max(0, 1.0f - (phase - 0.4f) / 0.6f);
-            forwardExtend = (float) Math.sin(forwardExtend * Math.PI * 0.5f);
-            // Same motion as swing - up, left, forward toward crosshair
-            itemMatrix.translate(-forwardExtend * 0.3f, forwardExtend * 0.15f, -forwardExtend * 0.2f);
-
-            float downSwing = (phase > 0.3f) ? (float) Math.sin((phase - 0.3f) / 0.7f * Math.PI) : 0;
-            // Add downward motion in second half of swing
-            itemMatrix.translate(0, -downSwing * 0.25f, 0);
-            // Same tilt as swing
-            itemMatrix.rotateX((float) Math.toRadians(-downSwing * 80.0f));
-            itemMatrix.rotateZ((float) Math.toRadians(downSwing * 20.0f));
+            float useSin = (float) Math.sin(useProgress * Math.PI);
+            itemMatrix.translate(-useSin * 0.12f, useSin * 0.05f, -useSin * 0.10f);
+            itemMatrix.rotateX((float) Math.toRadians(-useSin * 25.0f));
         }
 
         // Bobbing
@@ -540,30 +573,26 @@ public class PlayerRenderer {
         if (isBlock) {
             // Block: render as 3D cube (replaces hand entirely)
             // Scale and orientation adjusted to match Minecraft first-person view
-            itemMatrix.scale(0.46f); // Size
-            itemMatrix.rotateY((float) Math.toRadians(42)); // Diamond orientation (corner in front)
-            itemMatrix.rotateX((float) Math.toRadians(18)); // Forward tilt
-            itemMatrix.rotateZ((float) Math.toRadians(10)); // More left tilt for visible top
+            itemMatrix.scale(profile.firstPersonScale());
+            itemMatrix.rotateY((float) Math.toRadians(profile.firstPersonRotY()));
+            itemMatrix.rotateX((float) Math.toRadians(profile.firstPersonRotX()));
+            itemMatrix.rotateZ((float) Math.toRadians(profile.firstPersonRotZ()));
 
             if (atlas != null) {
-                // Update UVs for this specific block type
-                updateBlockUVs(type);
-
                 atlas.bind(0);
+                shader.setUniform("alphaCutoff", 0.0f);
                 shader.setUniform("modelMatrix", itemMatrix);
-
-                glBindVertexArray(blockVao);
-                glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
-                glBindVertexArray(0);
+                renderHeldMesh(getHeldBlockMesh(type.getPlacedBlock()));
             }
-        } else if (isTool) {
+        } else if (isSpriteItem) {
             // Tool: render as flat 2D sprite angled
-            itemMatrix.scale(0.4f); // Slightly smaller as per user request
-            itemMatrix.rotateZ((float) Math.toRadians(-45)); // Diagonal angle like Minecraft
-            itemMatrix.rotateY((float) Math.toRadians(15)); // Slight turn toward camera
+            itemMatrix.scale(profile.firstPersonScale());
+            itemMatrix.rotateX((float) Math.toRadians(profile.firstPersonRotX()));
+            itemMatrix.rotateY((float) Math.toRadians(profile.firstPersonRotY()));
+            itemMatrix.rotateZ((float) Math.toRadians(profile.firstPersonRotZ()));
 
             Texture texToUse = null;
-            if (type.usesItemTexture() && itemsTexture != null) {
+            if (ItemTextureResolver.usesItemsAtlas(type) && itemsTexture != null) {
                 texToUse = itemsTexture;
             } else if (atlas != null) {
                 texToUse = atlas;
@@ -571,11 +600,10 @@ public class PlayerRenderer {
 
             if (texToUse != null) {
                 texToUse.bind(0);
+                shader.setUniform("alphaCutoff", 0.1f);
                 shader.setUniform("modelMatrix", itemMatrix);
-
-                glBindVertexArray(itemVao);
-                glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-                glBindVertexArray(0);
+                renderHeldMesh(getHeldItemMesh(type));
+                shader.setUniform("alphaCutoff", 0.0f);
             }
         }
     }
@@ -589,8 +617,9 @@ public class PlayerRenderer {
             return;
         }
 
-        BlockType type = heldItem.getType();
-        boolean isBlock = !type.isItem();
+        ItemType type = heldItem.getType();
+        ItemRenderProfile profile = type.getRenderProfile();
+        boolean isBlock = profile.modelKind() == ItemRenderProfile.ModelKind.BLOCK;
 
         // Get the arm's world transform and position item at the "hand" end
         // NOTE: "leftArm" in PlayerModel is the VISUAL RIGHT ARM (pivot at X=6).
@@ -602,50 +631,51 @@ public class PlayerRenderer {
         // We translate in MODEL UNITS (pixels).
         // Hand is at Y = -10 (relative to pivot).
         // Refined 2: Slightly more front (Z=-3.0) and tiny bit left (X=-0.6).
-        itemMatrix.translate(-0.6f, -11.5f, -3.0f);
+        itemMatrix.translate(-1.0f, -10.8f, -2.2f);
 
         // Scale correction!
         // The armTransform includes 1/16 scale. Item needs to be ~0.375 blocks large.
         // 0.375 * 16 = 6.0 model units.
-        float itemScale = 0.375f * 16.0f;
+        float itemScale = profile.thirdPersonScale() * 16.0f;
         itemMatrix.scale(itemScale);
 
         if (isBlock) {
             // Block Rendering
             // Rotate so the player holds the corner/edge of the block
-            itemMatrix.rotateY((float) Math.toRadians(-45));
+            itemMatrix.rotateX((float) Math.toRadians(profile.thirdPersonRotX()));
+            itemMatrix.rotateY((float) Math.toRadians(profile.thirdPersonRotY()));
+            itemMatrix.rotateZ((float) Math.toRadians(profile.thirdPersonRotZ()));
 
             // Translate so the hand (origin) is at the side of the block, not center
             // Removed X=0.5f offset to put center in palm as requested.
-            itemMatrix.translate(0.0f, 0.2f, 0.0f);
+            itemMatrix.translate(profile.thirdPersonOffsetX(), profile.thirdPersonOffsetY(),
+                    profile.thirdPersonOffsetZ());
 
             if (atlas != null) {
-                updateBlockUVs(type);
                 atlas.bind(0);
+                shader.setUniform("alphaCutoff", 0.0f);
                 shader.setUniform("modelMatrix", itemMatrix);
-
-                glBindVertexArray(blockVao);
-                glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
-                glBindVertexArray(0);
+                renderHeldMesh(getHeldBlockMesh(type.getPlacedBlock()));
             }
         } else {
             // Item Rendering (Tools, Sticks)
             // Rotate to look like a tool held in hand
-            itemMatrix.rotateX((float) Math.toRadians(180)); // Flip upside down (origin is top-left usually)
-            itemMatrix.rotateZ((float) Math.toRadians(45)); // Angle it forward
+            itemMatrix.rotateX((float) Math.toRadians(profile.thirdPersonRotX()));
+            itemMatrix.rotateY((float) Math.toRadians(profile.thirdPersonRotY()));
+            itemMatrix.rotateZ((float) Math.toRadians(profile.thirdPersonRotZ()));
 
             // Translate to hold by the handle (bottom-right of texture)
             // Adjusted X to 0.0 to match centered grip logic
-            itemMatrix.translate(0.0f, -0.5f, 0.0f);
+            itemMatrix.translate(profile.thirdPersonOffsetX(), profile.thirdPersonOffsetY(),
+                    profile.thirdPersonOffsetZ());
 
-            Texture texToUse = type.usesItemTexture() && itemsTexture != null ? itemsTexture : atlas;
+            Texture texToUse = ItemTextureResolver.usesItemsAtlas(type) && itemsTexture != null ? itemsTexture : atlas;
             if (texToUse != null) {
                 texToUse.bind(0);
+                shader.setUniform("alphaCutoff", 0.1f);
                 shader.setUniform("modelMatrix", itemMatrix);
-
-                glBindVertexArray(itemVao);
-                glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-                glBindVertexArray(0);
+                renderHeldMesh(getHeldItemMesh(type));
+                shader.setUniform("alphaCutoff", 0.0f);
             }
         }
     }
@@ -663,6 +693,22 @@ public class PlayerRenderer {
             glDeleteVertexArrays(blockVao);
             glDeleteBuffers(blockVbo);
             glDeleteBuffers(blockEbo);
+        }
+        for (HeldMesh mesh : heldItemMeshCache.values()) {
+            deleteHeldMesh(mesh);
+        }
+        heldItemMeshCache.clear();
+        for (HeldMesh mesh : heldBlockMeshCache.values()) {
+            deleteHeldMesh(mesh);
+        }
+        heldBlockMeshCache.clear();
+    }
+
+    private void deleteHeldMesh(HeldMesh mesh) {
+        glDeleteVertexArrays(mesh.vao());
+        glDeleteBuffers(mesh.vbo());
+        if (mesh.ebo() != 0) {
+            glDeleteBuffers(mesh.ebo());
         }
     }
 }

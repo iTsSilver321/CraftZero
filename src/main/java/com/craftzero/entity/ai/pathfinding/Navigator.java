@@ -20,7 +20,7 @@ public class Navigator {
     private boolean hasTarget;
 
     // Pathfinding limits
-    private static final int MAX_ITERATIONS = 500; // Max A* iterations
+    private static final int MAX_ITERATIONS = 240; // Max A* iterations
     private static final int MAX_PATH_LENGTH = 32; // Max nodes in path
     private static final int RECALC_INTERVAL = 20; // Ticks between recalculations
 
@@ -38,13 +38,25 @@ public class Navigator {
      * Set a new target to navigate to.
      */
     public void moveTo(float x, float y, float z) {
+        int newGoalX = (int) Math.floor(x);
+        int newGoalY = (int) Math.floor(y);
+        int newGoalZ = (int) Math.floor(z);
+        int oldGoalX = (int) Math.floor(targetX);
+        int oldGoalY = (int) Math.floor(targetY);
+        int oldGoalZ = (int) Math.floor(targetZ);
+        boolean sameBlockTarget = hasTarget
+                && newGoalX == oldGoalX
+                && newGoalY == oldGoalY
+                && newGoalZ == oldGoalZ;
+
         this.targetX = x;
         this.targetY = y;
         this.targetZ = z;
         this.hasTarget = true;
 
-        // Force immediate recalculation
-        recalcCooldown = 0;
+        if (!sameBlockTarget) {
+            recalcCooldown = Math.min(recalcCooldown, 5);
+        }
     }
 
     /**

@@ -1,23 +1,22 @@
 package com.craftzero.entity.mob;
 
 import com.craftzero.entity.ai.*;
-import com.craftzero.world.BlockType;
+import com.craftzero.inventory.ItemType;
 
 /**
  * Pig mob - passive, drops porkchop.
  */
 public class Pig extends Mob {
 
-    private static final float WIDTH = 0.9f;
-    private static final float HEIGHT = 0.9f;
-    private static final float MAX_HEALTH = 10.0f;
+    private static final MobBalance.Spec SPEC = MobBalance.PIG;
 
     public Pig() {
-        super(WIDTH, HEIGHT, MAX_HEALTH);
-        this.hostile = false;
-        this.burnsInSunlight = false;
-        this.moveSpeed = 0.1f;
-        this.experienceValue = 1;
+        super(SPEC.width(), SPEC.height(), SPEC.maxHealth());
+        this.definition = MobDefinition.PIG;
+        this.hostile = SPEC.hostile();
+        this.burnsInSunlight = SPEC.burnsInSunlight();
+        this.moveSpeed = SPEC.moveSpeed();
+        this.experienceValue = SPEC.experienceValue();
 
         setupAI();
     }
@@ -29,9 +28,7 @@ public class Pig extends Mob {
 
     @Override
     public void dropLoot() {
-        // Drop 1-3 raw porkchop
-        // TODO: Add RAW_PORKCHOP to BlockType
-        dropItems(BlockType.DIRT, 1, 3); // Placeholder
+        dropItems(isOnFire() ? ItemType.COOKED_PORKCHOP : ItemType.RAW_PORKCHOP, 1, 3);
     }
 
     @Override

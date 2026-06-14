@@ -101,7 +101,7 @@ public class WanderGoal implements Goal {
                 stuckTime = 0;
             } else {
                 // Can't find any safe target - stop
-                mob.stopMoving();
+                ai.requestStopMoving();
                 hasTarget = false;
             }
             return;
@@ -113,7 +113,7 @@ public class WanderGoal implements Goal {
         float dist = (float) Math.sqrt(dx * dx + dz * dz);
 
         if (dist <= 0.5f) {
-            mob.stopMoving();
+            ai.requestStopMoving();
             return;
         }
 
@@ -129,7 +129,7 @@ public class WanderGoal implements Goal {
             if (safeYaw == targetYaw) {
                 // No safe direction found - pick entirely new target
                 if (!pickSafeTarget()) {
-                    mob.stopMoving();
+                    ai.requestStopMoving();
                     hasTarget = false;
                 }
                 return;
@@ -147,7 +147,7 @@ public class WanderGoal implements Goal {
             if (stuckTime > 30) { // Stuck for 1.5 seconds
                 // Pick new target
                 if (!pickSafeTarget()) {
-                    mob.stopMoving();
+                    ai.requestStopMoving();
                     hasTarget = false;
                 }
                 stuckTime = 0;
@@ -159,14 +159,14 @@ public class WanderGoal implements Goal {
             lastZ = mob.getZ();
         }
 
-        mob.setMoveDirection(targetYaw, speed);
+        ai.requestMoveDirection(targetYaw, speed);
     }
 
     @Override
     public void stop() {
         hasTarget = false;
         wanderCooldown = MIN_COOLDOWN + random.nextInt(MAX_COOLDOWN - MIN_COOLDOWN);
-        mob.stopMoving();
+        ai.requestStopMoving();
     }
 
     /**

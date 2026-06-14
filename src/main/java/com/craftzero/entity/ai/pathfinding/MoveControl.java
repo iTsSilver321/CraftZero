@@ -14,6 +14,9 @@ public class MoveControl {
     private float targetX, targetY, targetZ;
     private float speed;
     private boolean hasTarget;
+    private boolean hasDirection;
+    private float directionYaw;
+    private float directionSpeed;
 
     // Jump control
     private boolean wantsToJump;
@@ -34,6 +37,17 @@ public class MoveControl {
         this.targetZ = z;
         this.speed = speed;
         this.hasTarget = true;
+        this.hasDirection = false;
+    }
+
+    /**
+     * Set direct yaw/speed movement intent for this tick.
+     */
+    public void moveDirection(float yaw, float speed) {
+        this.directionYaw = yaw;
+        this.directionSpeed = speed;
+        this.hasDirection = true;
+        this.hasTarget = false;
     }
 
     /**
@@ -41,6 +55,7 @@ public class MoveControl {
      */
     public void stop() {
         this.hasTarget = false;
+        this.hasDirection = false;
         entity.stopMoving();
     }
 
@@ -61,6 +76,18 @@ public class MoveControl {
             jumpCooldown--;
         }
 
+        if (wantsToJump && entity.isOnGround() && jumpCooldown <= 0) {
+            entity.setJumping(true);
+            jumpCooldown = 10;
+            wantsToJump = false;
+        }
+
+        if (hasDirection) {
+            entity.setMoveDirection(directionYaw, directionSpeed);
+            hasDirection = false;
+            return;
+        }
+
         if (!hasTarget) {
             return;
         }
@@ -74,6 +101,7 @@ public class MoveControl {
         // Check if we've reached the target
         if (horizontalDist < 0.3f) {
             hasTarget = false;
+            entity.stopMoving();
             return;
         }
 
@@ -92,7 +120,7 @@ public class MoveControl {
 
         // Execute jump
         if (wantsToJump && entity.isOnGround() && jumpCooldown <= 0) {
-            entity.addMotion(0, 0.42f, 0); // Standard jump height
+            entity.setJumping(true);
             jumpCooldown = 10; // Cooldown to prevent spam
             wantsToJump = false;
         }

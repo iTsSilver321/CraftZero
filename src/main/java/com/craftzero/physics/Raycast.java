@@ -24,13 +24,20 @@ public class Raycast {
         public final Vector3i previousBlockPos; // For block placement
         public final int face; // 0=top, 1=bottom, 2=north, 3=south, 4=east, 5=west
         public final float distance;
+        public final AABB selectionBox;
 
         public RaycastResult(boolean hit, Vector3i blockPos, Vector3i previousBlockPos, int face, float distance) {
+            this(hit, blockPos, previousBlockPos, face, distance, null);
+        }
+
+        public RaycastResult(boolean hit, Vector3i blockPos, Vector3i previousBlockPos, int face, float distance,
+                AABB selectionBox) {
             this.hit = hit;
             this.blockPos = blockPos;
             this.previousBlockPos = previousBlockPos;
             this.face = face;
             this.distance = distance;
+            this.selectionBox = selectionBox;
         }
 
         public static RaycastResult miss() {
@@ -98,15 +105,16 @@ public class Raycast {
         // March through voxels
         while (distance < maxDistance) {
             // Check current voxel
-            BlockType block = world.getBlock(x, y, z);
-
-            if (block.isSolid()) {
+            BlockHit blockHit = rayIntersectsBlock(world.getSelectionBoxesIfLoaded(x, y, z), origin, direction,
+                    maxDistance);
+            if (blockHit != null) {
                 return new RaycastResult(
                         true,
                         new Vector3i(x, y, z),
                         new Vector3i(prevX, prevY, prevZ),
-                        face,
-                        distance);
+                        blockHit.face,
+                        blockHit.distance,
+                        blockHit.box);
             }
 
             // Save previous position
@@ -143,6 +151,82 @@ public class Raycast {
         }
 
         return RaycastResult.miss();
+    }
+
+    private static BlockHit rayIntersectsBlock(List<AABB> boxes, Vector3f origin, Vector3f direction,
+            float maxDistance) {
+        BlockHit closest = null;
+        for (AABB box : boxes) {
+            BlockHit hit = rayIntersectsAABBWithFace(origin, direction, box);
+            if (hit != null && hit.distance >= 0 && hit.distance <= maxDistance
+                    && (closest == null || hit.distance < closest.distance)) {
+                closest = hit;
+            }
+        }
+        return closest;
+    }
+
+    private static BlockHit rayIntersectsAABBWithFace(Vector3f origin, Vector3f direction, AABB box) {
+        float tMin = 0.0f;
+        float tMax = Float.MAX_VALUE;
+        int hitFace = -1;
+
+        float[] originValues = { origin.x, origin.y, origin.z };
+        float[] directionValues = { direction.x, direction.y, direction.z };
+        float[] mins = { box.getMin().x, box.getMin().y, box.getMin().z };
+        float[] maxs = { box.getMax().x, box.getMax().y, box.getMax().z };
+
+        for (int axis = 0; axis < 3; axis++) {
+            float dir = directionValues[axis];
+            float start = originValues[axis];
+            if (Math.abs(dir) < 0.0001f) {
+                if (start < mins[axis] || start > maxs[axis]) {
+                    return null;
+                }
+                continue;
+            }
+
+            float invD = 1.0f / dir;
+            float t0 = (mins[axis] - start) * invD;
+            float t1 = (maxs[axis] - start) * invD;
+            int nearFace = faceForAxis(axis, dir > 0);
+            if (invD < 0) {
+                float tmp = t0;
+                t0 = t1;
+                t1 = tmp;
+                nearFace = faceForAxis(axis, false);
+            }
+            if (t0 > tMin) {
+                tMin = t0;
+                hitFace = nearFace;
+            }
+            tMax = Math.min(tMax, t1);
+            if (tMin > tMax) {
+                return null;
+            }
+        }
+
+        return new BlockHit(tMin, hitFace, box);
+    }
+
+    private static int faceForAxis(int axis, boolean positiveDirection) {
+        return switch (axis) {
+            case 0 -> positiveDirection ? com.craftzero.world.Block.FACE_WEST : com.craftzero.world.Block.FACE_EAST;
+            case 1 -> positiveDirection ? com.craftzero.world.Block.FACE_BOTTOM : com.craftzero.world.Block.FACE_TOP;
+            default -> positiveDirection ? com.craftzero.world.Block.FACE_NORTH : com.craftzero.world.Block.FACE_SOUTH;
+        };
+    }
+
+    private static class BlockHit {
+        final float distance;
+        final int face;
+        final AABB box;
+
+        BlockHit(float distance, int face, AABB box) {
+            this.distance = distance;
+            this.face = face;
+            this.box = box;
+        }
     }
 
     /**

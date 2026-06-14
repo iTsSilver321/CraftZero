@@ -5,7 +5,8 @@ target/
 *.log
 tools/
 docs/
-src/test/
+saves/
+options.txt
 .gradle/
 build/
 gradle/wrapper/*.zip

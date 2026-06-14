@@ -3,9 +3,14 @@ package com.craftzero.graphics;
 import com.craftzero.engine.Input;
 import com.craftzero.inventory.Inventory;
 import com.craftzero.inventory.ItemStack;
+import com.craftzero.inventory.ItemType;
 import com.craftzero.ui.InventoryScreen;
 import com.craftzero.ui.CraftingTableScreen;
-import com.craftzero.world.BlockType;
+import com.craftzero.ui.ChestScreen;
+import com.craftzero.ui.FurnaceScreen;
+import com.craftzero.ui.SignEditScreen;
+import com.craftzero.ui.menu.CreativeInventoryScreen;
+import com.craftzero.world.tile.FurnaceTileEntity;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryUtil;
 
@@ -137,12 +142,24 @@ public class InventoryRenderer {
 
     // GUI textures for inventory and crafting backgrounds
     private Texture inventoryTexture; // inventory.png
+    private Texture allItemsTexture; // allitems.png
     private Texture craftingTexture; // crafting.png
+    private Texture containerTexture; // container.png
+    private Texture furnaceTexture; // furnace.png
     private Texture itemsTexture; // items.png for sticks and tools
 
     public void setGuiTextures(Texture inventory, Texture crafting) {
         this.inventoryTexture = inventory;
         this.craftingTexture = crafting;
+    }
+
+    public void setCreativeTexture(Texture allItems) {
+        this.allItemsTexture = allItems;
+    }
+
+    public void setContainerTextures(Texture container, Texture furnace) {
+        this.containerTexture = container;
+        this.furnaceTexture = furnace;
     }
 
     public void setItemsTexture(Texture items) {
@@ -296,7 +313,7 @@ public class InventoryRenderer {
         }
 
         // 6. Draw crafting output (slot 40)
-        com.craftzero.world.BlockType[] pattern = inv.getCraftingPattern();
+        ItemType[] pattern = inv.getCraftingPattern();
         com.craftzero.crafting.CraftingRecipe recipe = com.craftzero.crafting.CraftingRegistry.findRecipe(pattern);
         ItemStack outputItem = recipe != null ? recipe.getOutput() : null;
 
@@ -368,16 +385,133 @@ public class InventoryRenderer {
         glEnable(GL_CULL_FACE);
     }
 
+    public void renderCreative(CreativeInventoryScreen screen, int guiScale) {
+        if (screen == null) {
+            return;
+        }
+
+        int scale = Math.max(1, guiScale);
+        int winX = screen.windowX() * scale;
+        int winY = screen.windowY() * scale;
+        int winW = CreativeInventoryScreen.TEX_WIDTH * scale;
+        int winH = CreativeInventoryScreen.TEX_HEIGHT * scale;
+        int itemSize = CreativeInventoryScreen.TEX_ITEM_SIZE * scale;
+        int itemOffset = Math.max(1, scale);
+
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_CULL_FACE);
+
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        shader.bind();
+        shader.setUniform("projection", ortho);
+
+        if (allItemsTexture != null) {
+            shader.unbind();
+            allItemsTexture.bind(0);
+            texturedShader.bind();
+            texturedShader.setUniform("projection", ortho);
+            texturedShader.setUniform("textureSampler", 0);
+            texturedShader.setUniform("brightness", 1.0f);
+            drawTexturedQuad(
+                    winX, winY,
+                    winX + winW, winY,
+                    winX + winW, winY + winH,
+                    winX, winY + winH,
+                    0.0f, 0.0f,
+                    CreativeInventoryScreen.TEX_WIDTH / 256.0f,
+                    CreativeInventoryScreen.TEX_HEIGHT / 256.0f);
+            texturedShader.unbind();
+            allItemsTexture.unbind();
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        } else {
+            drawRect(winX, winY, winW, winH, 0.72f, 0.72f, 0.72f, 1.0f);
+            drawRectOutline(winX, winY, winW, winH, 0.15f, 0.15f, 0.15f, 1.0f);
+        }
+
+        drawCreativeScrollbar(screen, winX, winY, scale);
+
+        for (int slot = 0; slot < CreativeInventoryScreen.GRID_SLOT_COUNT; slot++) {
+            ItemType type = screen.itemAtVisibleSlot(slot);
+            if (type == null) {
+                continue;
+            }
+            int col = slot % CreativeInventoryScreen.GRID_COLS;
+            int row = slot / CreativeInventoryScreen.GRID_COLS;
+            int slotX = winX + (CreativeInventoryScreen.TEX_GRID_X + col * CreativeInventoryScreen.TEX_SLOT_SIZE)
+                    * scale;
+            int slotY = winY + (CreativeInventoryScreen.TEX_GRID_Y + row * CreativeInventoryScreen.TEX_SLOT_SIZE)
+                    * scale;
+            drawItemIconAt(slotX + itemOffset, slotY + itemOffset, itemSize, type);
+            drawHoverIfNeeded(screen.hoveredCreativeSlot(), slot, slotX, slotY,
+                    CreativeInventoryScreen.TEX_SLOT_SIZE * scale);
+        }
+
+        Inventory inventory = screen.inventory();
+        for (int col = 0; col < CreativeInventoryScreen.HOTBAR_COLS; col++) {
+            int slotX = winX + (CreativeInventoryScreen.TEX_HOTBAR_X + col * CreativeInventoryScreen.TEX_SLOT_SIZE)
+                    * scale;
+            int slotY = winY + CreativeInventoryScreen.TEX_HOTBAR_Y * scale;
+            if (col == inventory.getSelectedSlot()) {
+                drawRectOutline(slotX, slotY, CreativeInventoryScreen.TEX_SLOT_SIZE * scale,
+                        CreativeInventoryScreen.TEX_SLOT_SIZE * scale, 1.0f, 1.0f, 0.35f, 1.0f);
+            }
+            drawScreenItem(inventory.getHotbar()[col], slotX + itemOffset, slotY + itemOffset, itemSize);
+            drawHoverIfNeeded(screen.hoveredHotbarSlot(), col, slotX, slotY,
+                    CreativeInventoryScreen.TEX_SLOT_SIZE * scale);
+        }
+
+        if (textRenderer != null) {
+            textRenderer.drawText("Item Selection", winX + 8 * scale, winY + 6 * scale, scale,
+                    new float[] { 0.25f, 0.25f, 0.25f, 1.0f });
+        }
+
+        ItemStack cursorItem = inventory.getCursorItem();
+        if (cursorItem != null && !cursorItem.isEmpty()) {
+            int mx = (int) Input.getMouseX();
+            int my = (int) Input.getMouseY();
+            drawItemIconAt(mx - itemSize / 2, my - itemSize / 2, itemSize, cursorItem.getType());
+            if (cursorItem.getCount() > 1) {
+                drawStackCountAt(mx - itemSize / 2, my - itemSize / 2, itemSize, cursorItem.getCount());
+            }
+        }
+
+        ItemStack hovered = screen.hoveredStack();
+        if (hovered != null && !hovered.isEmpty()) {
+            drawTooltip(hovered, (int) Input.getMouseX(), (int) Input.getMouseY());
+        }
+
+        shader.unbind();
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_CULL_FACE);
+    }
+
+    private void drawCreativeScrollbar(CreativeInventoryScreen screen, int winX, int winY, int scale) {
+        int thumbX = winX + CreativeInventoryScreen.TEX_SCROLL_X * scale;
+        int thumbY = winY + screen.scrollThumbTexY() * scale;
+        int thumbW = 12 * scale;
+        int thumbH = CreativeInventoryScreen.TEX_SCROLL_THUMB_HEIGHT * scale;
+        drawRect(thumbX, thumbY, thumbW, thumbH, 0.66f, 0.66f, 0.66f, 1.0f);
+        drawRect(thumbX, thumbY, thumbW, Math.max(1, scale), 0.95f, 0.95f, 0.95f, 1.0f);
+        drawRect(thumbX, thumbY, Math.max(1, scale), thumbH, 0.92f, 0.92f, 0.92f, 1.0f);
+        drawRect(thumbX, thumbY + thumbH - Math.max(1, scale), thumbW, Math.max(1, scale),
+                0.30f, 0.30f, 0.30f, 1.0f);
+        drawRect(thumbX + thumbW - Math.max(1, scale), thumbY, Math.max(1, scale), thumbH,
+                0.30f, 0.30f, 0.30f, 1.0f);
+    }
+
     /**
      * Draw an item icon at an exact position with specified size.
      */
-    private void drawItemIconAt(int x, int y, int size, com.craftzero.world.BlockType type) {
+    private void drawItemIconAt(int x, int y, int size, ItemType type) {
         if (atlas != null) {
-            if (type.isItem()) {
-                drawItemSprite(x, y, size, type);
-            } else {
+            if (type.isBlockItem() && !type.usesItemTexture()) {
                 // Same as hotbar - use full size
                 drawIsometricBlockIcon(x, y, size, type);
+            } else {
+                drawItemSprite(x, y, size, type);
             }
         }
     }
@@ -611,11 +745,288 @@ public class InventoryRenderer {
         glEnable(GL_CULL_FACE);
     }
 
+    public void renderChest(ChestScreen screen) {
+        if (!screen.isOpen())
+            return;
+
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_CULL_FACE);
+
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        shader.bind();
+        shader.setUniform("projection", ortho);
+
+        int winX = screen.getWindowX();
+        int winY = screen.getWindowY();
+        float scale = ChestScreen.GUI_SCALE;
+        int rows = screen.getContainerRows();
+        int texHeight = 114 + rows * 18;
+
+        drawRect(0, 0, windowWidth, windowHeight, 0.0f, 0.0f, 0.0f, 0.5f);
+        if (containerTexture != null) {
+            shader.unbind();
+            containerTexture.bind(0);
+            texturedShader.bind();
+            texturedShader.setUniform("projection", ortho);
+            texturedShader.setUniform("textureSampler", 0);
+            texturedShader.setUniform("brightness", 1.0f);
+            drawTexturedQuad(winX, winY, winX + ChestScreen.WINDOW_WIDTH, winY,
+                    winX + ChestScreen.WINDOW_WIDTH, winY + screen.getWindowHeight(),
+                    winX, winY + screen.getWindowHeight(),
+                    0.0f, 0.0f, 176.0f / 256.0f, texHeight / 256.0f);
+            texturedShader.unbind();
+            containerTexture.unbind();
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+
+        int itemSize = ChestScreen.ITEM_SIZE;
+        int itemOffset = (int) ((ChestScreen.TEX_SLOT_SIZE - ChestScreen.TEX_ITEM_SIZE) / 2 * scale);
+        for (int slot = 0; slot < screen.getContainerSize(); slot++) {
+            int row = slot / ChestScreen.COLS;
+            int col = slot % ChestScreen.COLS;
+            int x = winX + (int) ((ChestScreen.TEX_CONTAINER_X + col * ChestScreen.TEX_SLOT_SIZE) * scale)
+                    + itemOffset;
+            int y = winY + (int) ((ChestScreen.TEX_CONTAINER_Y + row * ChestScreen.TEX_SLOT_SIZE) * scale)
+                    + itemOffset;
+            drawScreenItem(screen.getItemInSlot(slot), x, y, itemSize);
+            drawHoverIfNeeded(screen.getHoveredSlot(), slot,
+                    winX + (int) ((ChestScreen.TEX_CONTAINER_X + col * ChestScreen.TEX_SLOT_SIZE) * scale),
+                    winY + (int) ((ChestScreen.TEX_CONTAINER_Y + row * ChestScreen.TEX_SLOT_SIZE) * scale),
+                    ChestScreen.SLOT_SIZE);
+        }
+
+        renderPlayerInventorySlotsForChest(screen, winX, winY, itemOffset, itemSize, scale);
+        renderCursorAndTooltip(screen.getInventory(), screen.getHoveredSlot(), i -> screen.getItemInSlot(i), itemSize);
+
+        shader.unbind();
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_CULL_FACE);
+    }
+
+    private void renderPlayerInventorySlotsForChest(ChestScreen screen, int winX, int winY, int itemOffset,
+            int itemSize, float scale) {
+        int base = screen.getContainerSize();
+        for (int row = 0; row < ChestScreen.MAIN_ROWS; row++) {
+            for (int col = 0; col < ChestScreen.COLS; col++) {
+                int slot = base + row * ChestScreen.COLS + col;
+                int x = winX + (int) ((ChestScreen.TEX_MAIN_INV_X + col * ChestScreen.TEX_SLOT_SIZE) * scale)
+                        + itemOffset;
+                int y = winY + (int) ((screen.getTexMainInvY() + row * ChestScreen.TEX_SLOT_SIZE) * scale)
+                        + itemOffset;
+                drawScreenItem(screen.getItemInSlot(slot), x, y, itemSize);
+                drawHoverIfNeeded(screen.getHoveredSlot(), slot,
+                        winX + (int) ((ChestScreen.TEX_MAIN_INV_X + col * ChestScreen.TEX_SLOT_SIZE) * scale),
+                        winY + (int) ((screen.getTexMainInvY() + row * ChestScreen.TEX_SLOT_SIZE) * scale),
+                        ChestScreen.SLOT_SIZE);
+            }
+        }
+        int hotbarBase = base + Inventory.MAIN_SIZE;
+        for (int col = 0; col < ChestScreen.COLS; col++) {
+            int slot = hotbarBase + col;
+            int x = winX + (int) ((ChestScreen.TEX_HOTBAR_X + col * ChestScreen.TEX_SLOT_SIZE) * scale)
+                    + itemOffset;
+            int y = winY + (int) (screen.getTexHotbarY() * scale) + itemOffset;
+            drawScreenItem(screen.getItemInSlot(slot), x, y, itemSize);
+            drawHoverIfNeeded(screen.getHoveredSlot(), slot,
+                    winX + (int) ((ChestScreen.TEX_HOTBAR_X + col * ChestScreen.TEX_SLOT_SIZE) * scale),
+                    winY + (int) (screen.getTexHotbarY() * scale),
+                    ChestScreen.SLOT_SIZE);
+        }
+    }
+
+    public void renderFurnace(FurnaceScreen screen) {
+        if (!screen.isOpen())
+            return;
+
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_CULL_FACE);
+
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        shader.bind();
+        shader.setUniform("projection", ortho);
+
+        int winX = screen.getWindowX();
+        int winY = screen.getWindowY();
+        float scale = FurnaceScreen.GUI_SCALE;
+
+        drawRect(0, 0, windowWidth, windowHeight, 0.0f, 0.0f, 0.0f, 0.5f);
+        if (furnaceTexture != null) {
+            shader.unbind();
+            furnaceTexture.bind(0);
+            texturedShader.bind();
+            texturedShader.setUniform("projection", ortho);
+            texturedShader.setUniform("textureSampler", 0);
+            texturedShader.setUniform("brightness", 1.0f);
+            drawTexturedQuad(winX, winY, winX + FurnaceScreen.WINDOW_WIDTH, winY,
+                    winX + FurnaceScreen.WINDOW_WIDTH, winY + FurnaceScreen.WINDOW_HEIGHT,
+                    winX, winY + FurnaceScreen.WINDOW_HEIGHT,
+                    0.0f, 0.0f, 176.0f / 256.0f, 166.0f / 256.0f);
+            texturedShader.unbind();
+            furnaceTexture.unbind();
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+
+        renderFurnaceProgress(screen, winX, winY, scale);
+
+        int itemSize = FurnaceScreen.ITEM_SIZE;
+        int itemOffset = (int) ((FurnaceScreen.TEX_SLOT_SIZE - FurnaceScreen.TEX_ITEM_SIZE) / 2 * scale);
+        renderFurnaceSlot(screen, FurnaceTileEntity.SLOT_INPUT, FurnaceScreen.TEX_INPUT_X, FurnaceScreen.TEX_INPUT_Y,
+                winX, winY, itemOffset, itemSize, scale);
+        renderFurnaceSlot(screen, FurnaceTileEntity.SLOT_FUEL, FurnaceScreen.TEX_FUEL_X, FurnaceScreen.TEX_FUEL_Y,
+                winX, winY, itemOffset, itemSize, scale);
+        renderFurnaceSlot(screen, FurnaceTileEntity.SLOT_OUTPUT, FurnaceScreen.TEX_OUTPUT_X, FurnaceScreen.TEX_OUTPUT_Y,
+                winX, winY, itemOffset, itemSize, scale);
+
+        for (int row = 0; row < FurnaceScreen.MAIN_ROWS; row++) {
+            for (int col = 0; col < FurnaceScreen.COLS; col++) {
+                int slot = FurnaceTileEntity.SIZE + row * FurnaceScreen.COLS + col;
+                renderFurnaceSlot(screen, slot,
+                        FurnaceScreen.TEX_MAIN_INV_X + col * FurnaceScreen.TEX_SLOT_SIZE,
+                        FurnaceScreen.TEX_MAIN_INV_Y + row * FurnaceScreen.TEX_SLOT_SIZE,
+                        winX, winY, itemOffset, itemSize, scale);
+            }
+        }
+        int hotbarBase = FurnaceTileEntity.SIZE + Inventory.MAIN_SIZE;
+        for (int col = 0; col < FurnaceScreen.COLS; col++) {
+            renderFurnaceSlot(screen, hotbarBase + col,
+                    FurnaceScreen.TEX_HOTBAR_X + col * FurnaceScreen.TEX_SLOT_SIZE,
+                    FurnaceScreen.TEX_HOTBAR_Y,
+                    winX, winY, itemOffset, itemSize, scale);
+        }
+
+        renderCursorAndTooltip(screen.getInventory(), screen.getHoveredSlot(), i -> screen.getItemInSlot(i), itemSize);
+
+        shader.unbind();
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_CULL_FACE);
+    }
+
+    public void renderSignEditor(SignEditScreen screen) {
+        if (screen == null || !screen.isOpen() || screen.getSign() == null || textRenderer == null) {
+            return;
+        }
+
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_CULL_FACE);
+
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        shader.bind();
+        shader.setUniform("projection", ortho);
+
+        drawRect(0, 0, windowWidth, windowHeight, 0.0f, 0.0f, 0.0f, 0.45f);
+
+        int boardWidth = 360;
+        int boardHeight = 190;
+        int x = (windowWidth - boardWidth) / 2;
+        int y = (windowHeight - boardHeight) / 2;
+        drawRect(x, y, boardWidth, boardHeight, 0.55f, 0.36f, 0.18f, 1.0f);
+        drawRectOutline(x, y, boardWidth, boardHeight, 0.22f, 0.13f, 0.06f, 1.0f);
+
+        String[] lines = screen.getSign().getLines();
+        for (int i = 0; i < lines.length; i++) {
+            int lineY = y + 36 + i * 34;
+            if (i == screen.getSelectedLine()) {
+                drawRect(x + 30, lineY - 4, boardWidth - 60, 24, 0.25f, 0.17f, 0.08f, 0.65f);
+            }
+            String text = lines[i].isEmpty() && i == screen.getSelectedLine() ? "_" : lines[i];
+            int textWidth = textRenderer.getStringWidth(text, 2.0f);
+            textRenderer.drawText(text, x + (boardWidth - textWidth) / 2, lineY, 2.0f,
+                    new float[] { 0.05f, 0.03f, 0.02f, 1.0f });
+        }
+
+        textRenderer.drawText("Done: Esc", x + 8, y + boardHeight + 10, 1.2f,
+                new float[] { 1.0f, 1.0f, 1.0f, 0.9f });
+
+        shader.unbind();
+        glDisable(GL_BLEND);
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_CULL_FACE);
+    }
+
+    private void renderFurnaceSlot(FurnaceScreen screen, int slot, int texX, int texY,
+            int winX, int winY, int itemOffset, int itemSize, float scale) {
+        int x = winX + (int) (texX * scale) + itemOffset;
+        int y = winY + (int) (texY * scale) + itemOffset;
+        drawScreenItem(screen.getItemInSlot(slot), x, y, itemSize);
+        drawHoverIfNeeded(screen.getHoveredSlot(), slot,
+                winX + (int) (texX * scale), winY + (int) (texY * scale), FurnaceScreen.SLOT_SIZE);
+    }
+
+    private void renderFurnaceProgress(FurnaceScreen screen, int winX, int winY, float scale) {
+        FurnaceTileEntity furnace = screen.getFurnace();
+        if (furnace == null) {
+            return;
+        }
+        if (furnace.getCurrentFuelBurnTime() > 0) {
+            int flameHeight = Math.round(14.0f * furnace.getBurnTime() / furnace.getCurrentFuelBurnTime());
+            if (flameHeight > 0) {
+                drawRect(winX + (int) (FurnaceScreen.TEX_FLAME_X * scale),
+                        winY + (int) ((FurnaceScreen.TEX_FLAME_Y + 14 - flameHeight) * scale),
+                        (int) (14 * scale), (int) (flameHeight * scale),
+                        1.0f, 0.45f, 0.05f, 1.0f);
+            }
+        }
+        int arrowWidth = Math.round(24.0f * furnace.getCookTime() / FurnaceTileEntity.COOK_TIME_TOTAL);
+        if (arrowWidth > 0) {
+            drawRect(winX + (int) (FurnaceScreen.TEX_ARROW_X * scale),
+                    winY + (int) (FurnaceScreen.TEX_ARROW_Y * scale),
+                    (int) (arrowWidth * scale), (int) (17 * scale),
+                    0.75f, 0.75f, 0.75f, 1.0f);
+        }
+    }
+
+    private void drawScreenItem(ItemStack item, int x, int y, int itemSize) {
+        if (item != null && !item.isEmpty()) {
+            drawItemIconAt(x, y, itemSize, item.getType());
+            if (item.getCount() > 1) {
+                drawStackCountAt(x, y, itemSize, item.getCount());
+            }
+        }
+    }
+
+    private void drawHoverIfNeeded(int hoveredSlot, int slot, int slotX, int slotY, int size) {
+        if (hoveredSlot == slot) {
+            drawRect(slotX + 1, slotY + 1, size - 2, size - 2,
+                    HOVER_OVERLAY[0], HOVER_OVERLAY[1], HOVER_OVERLAY[2], HOVER_OVERLAY[3]);
+        }
+    }
+
+    private interface SlotLookup {
+        ItemStack get(int slot);
+    }
+
+    private void renderCursorAndTooltip(Inventory inventory, int hoveredSlot, SlotLookup slotLookup, int itemSize) {
+        ItemStack cursorItem = inventory.getCursorItem();
+        if (cursorItem != null && !cursorItem.isEmpty()) {
+            int mx = (int) Input.getMouseX();
+            int my = (int) Input.getMouseY();
+            drawItemIconAt(mx - itemSize / 2, my - itemSize / 2, itemSize, cursorItem.getType());
+            if (cursorItem.getCount() > 1) {
+                drawStackCountAt(mx - itemSize / 2, my - itemSize / 2, itemSize, cursorItem.getCount());
+            }
+        }
+
+        if (hoveredSlot != -1) {
+            ItemStack item = slotLookup.get(hoveredSlot);
+            if (item != null && !item.isEmpty()) {
+                drawTooltip(item, (int) Input.getMouseX(), (int) Input.getMouseY());
+            }
+        }
+    }
+
     /**
      * Helper to get crafting pattern from grid.
      */
-    private BlockType[] getCraftingPattern(ItemStack[] grid) {
-        BlockType[] pattern = new BlockType[9];
+    private ItemType[] getCraftingPattern(ItemStack[] grid) {
+        ItemType[] pattern = new ItemType[9];
         for (int i = 0; i < 9; i++) {
             pattern[i] = (grid[i] != null && !grid[i].isEmpty()) ? grid[i].getType() : null;
         }
@@ -780,16 +1191,16 @@ public class InventoryRenderer {
             drawRect(x, y + h - t, w, t, r, g, b, 1.0f); // Bottom
     }
 
-    private void drawItemIcon(int x, int y, BlockType type) {
+    private void drawItemIcon(int x, int y, ItemType type) {
         // If atlas is available, draw textured icon
         if (atlas != null) {
             int size = SLOT_SIZE - 8;
-            if (type.isItem()) {
-                // Items render as flat 2D sprites (like stick)
-                drawItemSprite(x + 4, y + 4, size, type);
-            } else {
+            if (type.isBlockItem() && !type.usesItemTexture()) {
                 // Blocks render as isometric 3D cubes
                 drawIsometricBlockIcon(x + 4, y + 4, size, type);
+            } else {
+                // Items render as flat 2D sprites (like stick)
+                drawItemSprite(x + 4, y + 4, size, type);
             }
             return;
         }
@@ -824,18 +1235,15 @@ public class InventoryRenderer {
      * Draw an item as a flat 2D sprite (for sticks, tools, etc).
      * Uses items.png for items that have defined texture positions there.
      */
-    private void drawItemSprite(int x, int y, int size, BlockType type) {
+    private void drawItemSprite(int x, int y, int size, ItemType type) {
         float[] uv;
         Texture texToUse;
 
-        // Check if this item uses items.png
-        if (type.usesItemTexture() && itemsTexture != null) {
-            int[] pos = type.getItemTexturePos();
-            uv = GuiTexture.getItemUV(pos[0], pos[1]);
+        if (ItemTextureResolver.usesItemsAtlas(type) && itemsTexture != null) {
+            uv = ItemTextureResolver.getUv(type);
             texToUse = itemsTexture;
         } else {
-            // Fallback to terrain atlas
-            uv = type.getTextureCoords(2);
+            uv = ItemTextureResolver.getUv(type);
             texToUse = atlas;
         }
 
@@ -863,7 +1271,7 @@ public class InventoryRenderer {
      * Draw an isometric 3D block icon using textures from the atlas.
      * Orientation: top corner pointing straight up at 45 degrees.
      */
-    private void drawIsometricBlockIcon(int x, int y, int size, BlockType type) {
+    private void drawIsometricBlockIcon(int x, int y, int size, ItemType type) {
         float[] topUV = type.getTextureCoords(0);
         float[] sideUV = type.getTextureCoords(2);
 

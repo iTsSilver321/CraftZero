@@ -1,12 +1,12 @@
 package com.craftzero.crafting;
 
-import com.craftzero.world.BlockType;
+import com.craftzero.inventory.ItemType;
+
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Registry of all crafting recipes.
- * Provides recipe lookup for 2x2 (inventory) and 3x3 (crafting table) grids.
+ * Registry of crafting recipes for the player inventory and crafting table.
  */
 public class CraftingRegistry {
 
@@ -19,169 +19,261 @@ public class CraftingRegistry {
         }
 
         private static void register2x2Recipes() {
-                // Log -> 4 Planks (shapeless - any slot)
                 recipes2x2.add(new CraftingRecipe(
-                                new BlockType[] { BlockType.OAK_LOG, null, null, null },
-                                BlockType.OAK_PLANKS, 4, true));
+                                new ItemType[] { ItemType.OAK_LOG, null, null, null },
+                                ItemType.OAK_PLANKS, 4, true));
 
-                // 2 Planks (vertical) -> 4 Sticks
                 recipes2x2.add(new CraftingRecipe(
-                                new BlockType[] { BlockType.OAK_PLANKS, null, BlockType.OAK_PLANKS, null },
-                                BlockType.STICK, 4));
+                                new ItemType[] { ItemType.OAK_PLANKS, null, ItemType.OAK_PLANKS, null },
+                                ItemType.STICK, 4));
                 recipes2x2.add(new CraftingRecipe(
-                                new BlockType[] { null, BlockType.OAK_PLANKS, null, BlockType.OAK_PLANKS },
-                                BlockType.STICK, 4));
+                                new ItemType[] { null, ItemType.OAK_PLANKS, null, ItemType.OAK_PLANKS },
+                                ItemType.STICK, 4));
 
-                // 4 Planks -> Crafting Table
                 recipes2x2.add(new CraftingRecipe(
-                                new BlockType[] { BlockType.OAK_PLANKS, BlockType.OAK_PLANKS,
-                                                BlockType.OAK_PLANKS, BlockType.OAK_PLANKS },
-                                BlockType.CRAFTING_TABLE, 1));
+                                new ItemType[] { ItemType.OAK_PLANKS, ItemType.OAK_PLANKS,
+                                                ItemType.OAK_PLANKS, ItemType.OAK_PLANKS },
+                                ItemType.CRAFTING_TABLE, 1));
+
+                recipes2x2.add(new CraftingRecipe(
+                                new ItemType[] { ItemType.COAL, null, ItemType.STICK, null },
+                                ItemType.TORCH, 4));
+                recipes2x2.add(new CraftingRecipe(
+                                new ItemType[] { null, ItemType.COAL, null, ItemType.STICK },
+                                ItemType.TORCH, 4));
+                recipes2x2.add(new CraftingRecipe(
+                                new ItemType[] { ItemType.CHARCOAL, null, ItemType.STICK, null },
+                                ItemType.TORCH, 4));
+                recipes2x2.add(new CraftingRecipe(
+                                new ItemType[] { null, ItemType.CHARCOAL, null, ItemType.STICK },
+                                ItemType.TORCH, 4));
         }
 
         private static void register3x3Recipes() {
-                BlockType P = BlockType.OAK_PLANKS; // Planks
-                BlockType S = BlockType.STICK; // Stick
-                BlockType C = BlockType.COBBLESTONE; // Cobblestone
-                BlockType I = BlockType.IRON_ORE; // Iron (ore for now, ingots later)
-                BlockType D = BlockType.DIAMOND_ORE; // Diamond (ore for now)
+                ItemType P = ItemType.OAK_PLANKS;
+                ItemType S = ItemType.STICK;
+                ItemType C = ItemType.COBBLESTONE;
+                ItemType I = ItemType.IRON_INGOT;
+                ItemType D = ItemType.DIAMOND;
 
-                // ===== PICKAXES =====
-                // Pattern: [M][M][M]
-                // [ ][S][ ]
-                // [ ][S][ ]
+                addToolSet(P, S, ItemType.WOODEN_PICKAXE, ItemType.WOODEN_SHOVEL,
+                                ItemType.WOODEN_AXE, ItemType.WOODEN_SWORD);
+                addToolSet(C, S, ItemType.STONE_PICKAXE, ItemType.STONE_SHOVEL,
+                                ItemType.STONE_AXE, ItemType.STONE_SWORD);
+                addToolSet(I, S, ItemType.IRON_PICKAXE, ItemType.IRON_SHOVEL,
+                                ItemType.IRON_AXE, ItemType.IRON_SWORD);
+                addToolSet(D, S, ItemType.DIAMOND_PICKAXE, ItemType.DIAMOND_SHOVEL,
+                                ItemType.DIAMOND_AXE, ItemType.DIAMOND_SWORD);
 
-                // Wooden Pickaxe
-                recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { P, P, P, null, S, null, null, S, null },
-                                BlockType.WOODEN_PICKAXE, 1));
-
-                // Stone Pickaxe
-                recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { C, C, C, null, S, null, null, S, null },
-                                BlockType.STONE_PICKAXE, 1));
-
-                // Iron Pickaxe
-                recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { I, I, I, null, S, null, null, S, null },
-                                BlockType.IRON_PICKAXE, 1));
-
-                // Diamond Pickaxe
-                recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { D, D, D, null, S, null, null, S, null },
-                                BlockType.DIAMOND_PICKAXE, 1));
-
-                // ===== SHOVELS =====
-                // Pattern: [ ][M][ ]
-                // [ ][S][ ]
-                // [ ][S][ ]
-
-                // Wooden Shovel
-                recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { null, P, null, null, S, null, null, S, null },
-                                BlockType.WOODEN_SHOVEL, 1));
-
-                // Stone Shovel
-                recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { null, C, null, null, S, null, null, S, null },
-                                BlockType.STONE_SHOVEL, 1));
-
-                // Iron Shovel
-                recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { null, I, null, null, S, null, null, S, null },
-                                BlockType.IRON_SHOVEL, 1));
-
-                // Diamond Shovel
-                recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { null, D, null, null, S, null, null, S, null },
-                                BlockType.DIAMOND_SHOVEL, 1));
-
-                // ===== AXES =====
-                // Pattern: [M][M][ ]
-                // [M][S][ ]
-                // [ ][S][ ]
-
-                // Wooden Axe
-                recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { P, P, null, P, S, null, null, S, null },
-                                BlockType.WOODEN_AXE, 1));
-
-                // Stone Axe
-                recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { C, C, null, C, S, null, null, S, null },
-                                BlockType.STONE_AXE, 1));
-
-                // Iron Axe
-                recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { I, I, null, I, S, null, null, S, null },
-                                BlockType.IRON_AXE, 1));
-
-                // Diamond Axe
-                recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { D, D, null, D, S, null, null, S, null },
-                                BlockType.DIAMOND_AXE, 1));
-
-                // ===== BASIC RECIPES (also work in 3x3) =====
-
-                // Log -> 4 Planks (shapeless, works anywhere in grid)
-                // We add multiple positions for single-item shapeless
                 for (int i = 0; i < 9; i++) {
-                        BlockType[] pattern = new BlockType[9];
-                        pattern[i] = BlockType.OAK_LOG;
-                        recipes3x3.add(new CraftingRecipe(pattern, BlockType.OAK_PLANKS, 4, true, 3));
+                        ItemType[] pattern = new ItemType[9];
+                        pattern[i] = ItemType.OAK_LOG;
+                        recipes3x3.add(new CraftingRecipe(pattern, ItemType.OAK_PLANKS, 4, true, 3));
                 }
 
-                // 2 Planks vertical -> 4 Sticks (multiple column positions)
-                // Column 0
                 recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { P, null, null, P, null, null, null, null, null },
-                                BlockType.STICK, 4));
-                // Column 1
+                                new ItemType[] { P, null, null, P, null, null, null, null, null },
+                                ItemType.STICK, 4));
                 recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { null, P, null, null, P, null, null, null, null },
-                                BlockType.STICK, 4));
-                // Column 2
+                                new ItemType[] { null, P, null, null, P, null, null, null, null },
+                                ItemType.STICK, 4));
                 recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { null, null, P, null, null, P, null, null, null },
-                                BlockType.STICK, 4));
-                // Middle rows
+                                new ItemType[] { null, null, P, null, null, P, null, null, null },
+                                ItemType.STICK, 4));
                 recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { null, null, null, P, null, null, P, null, null },
-                                BlockType.STICK, 4));
+                                new ItemType[] { null, null, null, P, null, null, P, null, null },
+                                ItemType.STICK, 4));
                 recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { null, null, null, null, P, null, null, P, null },
-                                BlockType.STICK, 4));
+                                new ItemType[] { null, null, null, null, P, null, null, P, null },
+                                ItemType.STICK, 4));
                 recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { null, null, null, null, null, P, null, null, P },
-                                BlockType.STICK, 4));
+                                new ItemType[] { null, null, null, null, null, P, null, null, P },
+                                ItemType.STICK, 4));
 
-                // 4 Planks (2x2) -> Crafting Table (multiple positions in 3x3)
-                // Top-left
                 recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { P, P, null, P, P, null, null, null, null },
-                                BlockType.CRAFTING_TABLE, 1));
-                // Top-right
+                                new ItemType[] { P, P, null, P, P, null, null, null, null },
+                                ItemType.CRAFTING_TABLE, 1));
                 recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { null, P, P, null, P, P, null, null, null },
-                                BlockType.CRAFTING_TABLE, 1));
-                // Bottom-left
+                                new ItemType[] { null, P, P, null, P, P, null, null, null },
+                                ItemType.CRAFTING_TABLE, 1));
                 recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { null, null, null, P, P, null, P, P, null },
-                                BlockType.CRAFTING_TABLE, 1));
-                // Bottom-right
+                                new ItemType[] { null, null, null, P, P, null, P, P, null },
+                                ItemType.CRAFTING_TABLE, 1));
                 recipes3x3.add(CraftingRecipe.create3x3(
-                                new BlockType[] { null, null, null, null, P, P, null, P, P },
-                                BlockType.CRAFTING_TABLE, 1));
+                                new ItemType[] { null, null, null, null, P, P, null, P, P },
+                                ItemType.CRAFTING_TABLE, 1));
+
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { P, P, P, P, null, P, P, P, P },
+                                ItemType.CHEST, 1));
+
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { C, C, C, C, null, C, C, C, C },
+                                ItemType.FURNACE, 1));
+
+                addTorch3x3(ItemType.COAL);
+                addTorch3x3(ItemType.CHARCOAL);
+
+                addBowRecipes(S, ItemType.STRING);
+                addArrowRecipes(ItemType.FLINT, S, ItemType.FEATHER);
+
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { I, null, I, null, I, null, null, null, null },
+                                ItemType.BUCKET, 1));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, null, null, I, null, I, null, I, null },
+                                ItemType.BUCKET, 1));
+
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { S, null, S, S, S, S, S, null, S },
+                                ItemType.LADDER, 2));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { S, S, null, S, S, null, S, S, null },
+                                ItemType.LADDER, 2));
+
+                addDoorRecipes(P, ItemType.WOODEN_DOOR);
+                addDoorRecipes(I, ItemType.IRON_DOOR);
+
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { P, P, P, P, P, P, null, null, null },
+                                ItemType.TRAPDOOR, 2));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, null, null, P, P, P, P, P, P },
+                                ItemType.TRAPDOOR, 2));
+
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { P, P, P, P, P, P, null, S, null },
+                                ItemType.SIGN, 1));
+
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { ItemType.WHITE_WOOL, ItemType.WHITE_WOOL, ItemType.WHITE_WOOL,
+                                                P, P, P, null, null, null },
+                                ItemType.BED, 1));
+
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { S, S, S, S, S, S, null, null, null },
+                                ItemType.FENCE, 2));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, null, null, S, S, S, S, S, S },
+                                ItemType.FENCE, 2));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { S, P, S, S, P, S, null, null, null },
+                                ItemType.FENCE_GATE, 1));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, null, null, S, P, S, S, P, S },
+                                ItemType.FENCE_GATE, 1));
+
+                addSlabRecipe(ItemType.STONE, ItemType.STONE_SLAB);
+                addSlabRecipe(ItemType.SANDSTONE, ItemType.STONE_SLAB);
+                addSlabRecipe(P, ItemType.STONE_SLAB);
+                addSlabRecipe(C, ItemType.STONE_SLAB);
+                addSlabRecipe(ItemType.BRICK, ItemType.STONE_SLAB);
+                addSlabRecipe(ItemType.STONE_BRICK, ItemType.STONE_SLAB);
+
+                addStairsRecipe(P, ItemType.OAK_STAIRS);
+                addStairsRecipe(C, ItemType.COBBLESTONE_STAIRS);
+                addStairsRecipe(ItemType.BRICK, ItemType.BRICK_STAIRS);
+                addStairsRecipe(ItemType.STONE_BRICK, ItemType.STONE_BRICK_STAIRS);
+                addStairsRecipe(ItemType.NETHER_BRICK, ItemType.NETHER_BRICK_STAIRS);
         }
 
-        /**
-         * Find a 2x2 recipe that matches the given grid.
-         */
-        public static CraftingRecipe findRecipe(BlockType[] grid) {
+        private static void addTorch3x3(ItemType fuel) {
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { fuel, null, null, ItemType.STICK, null, null, null, null, null },
+                                ItemType.TORCH, 4));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, fuel, null, null, ItemType.STICK, null, null, null, null },
+                                ItemType.TORCH, 4));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, null, fuel, null, null, ItemType.STICK, null, null, null },
+                                ItemType.TORCH, 4));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, null, null, fuel, null, null, ItemType.STICK, null, null },
+                                ItemType.TORCH, 4));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, null, null, null, fuel, null, null, ItemType.STICK, null },
+                                ItemType.TORCH, 4));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, null, null, null, null, fuel, null, null, ItemType.STICK },
+                                ItemType.TORCH, 4));
+        }
+
+        private static void addBowRecipes(ItemType stick, ItemType string) {
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, stick, string, stick, null, string, null, stick, string },
+                                ItemType.BOW, 1));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { string, stick, null, string, null, stick, string, stick, null },
+                                ItemType.BOW, 1));
+        }
+
+        private static void addArrowRecipes(ItemType flint, ItemType stick, ItemType feather) {
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { flint, null, null, stick, null, null, feather, null, null },
+                                ItemType.ARROW, 4));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, flint, null, null, stick, null, null, feather, null },
+                                ItemType.ARROW, 4));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, null, flint, null, null, stick, null, null, feather },
+                                ItemType.ARROW, 4));
+        }
+
+        private static void addDoorRecipes(ItemType material, ItemType output) {
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { material, material, null, material, material, null, material,
+                                                material, null },
+                                output, 1));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, material, material, null, material, material, null, material,
+                                                material },
+                                output, 1));
+        }
+
+        private static void addSlabRecipe(ItemType material, ItemType output) {
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { material, material, material, null, null, null, null, null, null },
+                                output, 3));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, null, null, material, material, material, null, null, null },
+                                output, 3));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, null, null, null, null, null, material, material, material },
+                                output, 3));
+        }
+
+        private static void addStairsRecipe(ItemType material, ItemType output) {
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { material, null, null, material, material, null, material, material,
+                                                material },
+                                output, 4));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, null, material, null, material, material, material, material,
+                                                material },
+                                output, 4));
+        }
+
+        private static void addToolSet(ItemType material, ItemType stick, ItemType pickaxe, ItemType shovel,
+                        ItemType axe, ItemType sword) {
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { material, material, material, null, stick, null, null, stick, null },
+                                pickaxe, 1));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, material, null, null, stick, null, null, stick, null },
+                                shovel, 1));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { material, material, null, material, stick, null, null, stick, null },
+                                axe, 1));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, material, null, null, material, null, null, stick, null },
+                                sword, 1));
+        }
+
+        public static CraftingRecipe findRecipe(ItemType[] grid) {
                 return findRecipe2x2(grid);
         }
 
-        public static CraftingRecipe findRecipe2x2(BlockType[] grid) {
+        public static CraftingRecipe findRecipe2x2(ItemType[] grid) {
                 for (CraftingRecipe recipe : recipes2x2) {
                         if (recipe.matches(grid)) {
                                 return recipe;
@@ -190,10 +282,7 @@ public class CraftingRegistry {
                 return null;
         }
 
-        /**
-         * Find a 3x3 recipe that matches the given grid.
-         */
-        public static CraftingRecipe findRecipe3x3(BlockType[] grid) {
+        public static CraftingRecipe findRecipe3x3(ItemType[] grid) {
                 for (CraftingRecipe recipe : recipes3x3) {
                         if (recipe.matches(grid)) {
                                 return recipe;

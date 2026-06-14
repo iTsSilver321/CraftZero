@@ -33,6 +33,13 @@ public class MobAI {
     private LivingEntity target;
     private float targetX, targetY, targetZ;
     private boolean hasTarget;
+    private int lastNavigationBlockX = Integer.MIN_VALUE;
+    private int lastNavigationBlockZ = Integer.MIN_VALUE;
+    private boolean pendingDirectMove;
+    private float pendingMoveYaw;
+    private float pendingMoveSpeed;
+    private boolean pendingStop;
+    private boolean pendingJump;
 
     public MobAI(LivingEntity mob) {
         this.mob = mob;
@@ -74,6 +81,9 @@ public class MobAI {
     public void tick() {
         // Ensure navigation is initialized (lazy init when world becomes available)
         ensureNavigationInitialized();
+        pendingDirectMove = false;
+        pendingStop = false;
+        pendingJump = false;
 
         // Evaluate which goals should be running
         // Use iterator to safely remove while iterating
@@ -91,6 +101,11 @@ public class MobAI {
             if (!activeGoals.contains(goal) && goal.canUse()) {
                 // Check if this goal conflicts with active goals
                 if (goal.isExclusive()) {
+                    boolean blockedByActiveExclusive = activeGoals.stream()
+                            .anyMatch(active -> active.isExclusive() && active.getPriority() <= goal.getPriority());
+                    if (blockedByActiveExclusive) {
+                        continue;
+                    }
                     // Stop lower priority goals
                     activeGoals.removeIf(active -> {
                         if (active.getPriority() > goal.getPriority()) {
@@ -112,16 +127,34 @@ public class MobAI {
 
         // Update navigation and movement
         if (navigator != null && moveControl != null) {
-            PathNode nextNode = navigator.tick();
-            if (nextNode != null) {
-                // Move toward next path node
-                moveControl.moveTo(
-                        nextNode.getCenterX(),
-                        nextNode.getCenterY(),
-                        nextNode.getCenterZ(),
-                        getMovementSpeed());
+            boolean hasMovementIntent = false;
+            if (pendingJump) {
+                moveControl.jump();
             }
-            moveControl.tick();
+            if (pendingStop) {
+                navigator.stop();
+                moveControl.stop();
+                hasMovementIntent = true;
+            } else if (pendingDirectMove) {
+                moveControl.moveDirection(pendingMoveYaw, pendingMoveSpeed);
+                hasMovementIntent = true;
+            } else {
+                PathNode nextNode = navigator.tick();
+                if (nextNode != null) {
+                    // Move toward next path node
+                    moveControl.moveTo(
+                            nextNode.getCenterX(),
+                            nextNode.getCenterY(),
+                            nextNode.getCenterZ(),
+                            getMovementSpeed());
+                    hasMovementIntent = true;
+                }
+            }
+            if (hasMovementIntent) {
+                moveControl.tick();
+            } else if (!isNavigating()) {
+                moveControl.stop();
+            }
         }
     }
 
@@ -136,8 +169,12 @@ public class MobAI {
         this.targetZ = z;
         this.hasTarget = true;
 
-        if (navigator != null) {
+        int blockX = (int) Math.floor(x);
+        int blockZ = (int) Math.floor(z);
+        if (navigator != null && shouldRetargetNavigation(blockX, blockZ)) {
             navigator.moveTo(x, y, z);
+            lastNavigationBlockX = blockX;
+            lastNavigationBlockZ = blockZ;
         }
     }
 
@@ -146,6 +183,8 @@ public class MobAI {
      */
     public void stopNavigation() {
         this.hasTarget = false;
+        this.lastNavigationBlockX = Integer.MIN_VALUE;
+        this.lastNavigationBlockZ = Integer.MIN_VALUE;
         if (navigator != null) {
             navigator.stop();
         }
@@ -180,6 +219,26 @@ public class MobAI {
      */
     public MoveControl getMoveControl() {
         return moveControl;
+    }
+
+    /**
+     * Request direct movement for this AI tick. Goals should use this instead of
+     * mutating entity motion directly.
+     */
+    public void requestMoveDirection(float yaw, float speed) {
+        this.pendingMoveYaw = yaw;
+        this.pendingMoveSpeed = speed;
+        this.pendingDirectMove = true;
+        this.pendingStop = false;
+    }
+
+    public void requestStopMoving() {
+        this.pendingStop = true;
+        this.pendingDirectMove = false;
+    }
+
+    public void requestJump() {
+        this.pendingJump = true;
     }
 
     // ==================== Target Management ====================
@@ -224,9 +283,24 @@ public class MobAI {
         this.hasTarget = true;
 
         // Also trigger navigation
-        if (navigator != null) {
+        int blockX = (int) Math.floor(x);
+        int blockZ = (int) Math.floor(z);
+        if (navigator != null && shouldRetargetNavigation(blockX, blockZ)) {
             navigator.moveTo(x, mob.getY(), z);
+            lastNavigationBlockX = blockX;
+            lastNavigationBlockZ = blockZ;
         }
+    }
+
+    private boolean shouldRetargetNavigation(int blockX, int blockZ) {
+        if (blockX == lastNavigationBlockX && blockZ == lastNavigationBlockZ) {
+            return false;
+        }
+        int dx = blockX - lastNavigationBlockX;
+        int dz = blockZ - lastNavigationBlockZ;
+        return lastNavigationBlockX == Integer.MIN_VALUE
+                || dx * dx + dz * dz >= 2
+                || !isNavigating();
     }
 
     /**

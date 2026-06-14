@@ -1,5 +1,7 @@
 package com.craftzero.entity;
 
+import com.craftzero.inventory.ItemType;
+import com.craftzero.inventory.ItemStack;
 import com.craftzero.world.BlockType;
 import com.craftzero.world.World;
 
@@ -17,8 +19,10 @@ public class DroppedItem {
     private boolean onGround;
 
     // Item data
-    private BlockType blockType;
+    private ItemType itemType;
     private int count;
+    private int durability;
+    private ItemStack stackData;
 
     // Animation state
     private float age; // Seconds since spawn
@@ -40,20 +44,40 @@ public class DroppedItem {
     // Visual
     private static final float SCALE = 0.25f; // Size relative to full block
 
-    public DroppedItem(float x, float y, float z, BlockType blockType, int count) {
-        this(x, y, z, blockType, count, 0, 4.0f, 0); // Default: slight upward pop
+    public DroppedItem(float x, float y, float z, ItemType itemType, int count) {
+        this(x, y, z, itemType, count, defaultDurability(itemType), 0, 4.0f, 0); // Default: slight upward pop
+    }
+
+    public DroppedItem(float x, float y, float z, ItemStack stack) {
+        this(x, y, z, stack, 0, 4.0f, 0);
     }
 
     /**
      * Constructor with initial velocity (for thrown items).
      */
-    public DroppedItem(float x, float y, float z, BlockType blockType, int count,
+    public DroppedItem(float x, float y, float z, ItemType itemType, int count,
             float velX, float velY, float velZ) {
+        this(x, y, z, itemType, count, defaultDurability(itemType), velX, velY, velZ);
+    }
+
+    public DroppedItem(float x, float y, float z, ItemStack stack, float velX, float velY, float velZ) {
+        this(x, y, z, stack, velX, velY, velZ, true);
+    }
+
+    private DroppedItem(float x, float y, float z, ItemType itemType, int count, int durability,
+            float velX, float velY, float velZ) {
+        this(x, y, z, new ItemStack(itemType, count, durability), velX, velY, velZ, false);
+    }
+
+    private DroppedItem(float x, float y, float z, ItemStack stack,
+            float velX, float velY, float velZ, boolean copyStack) {
         this.x = x;
         this.y = y;
         this.z = z;
-        this.blockType = blockType;
-        this.count = count;
+        this.stackData = copyStack ? stack.copy() : stack;
+        this.itemType = this.stackData.getType();
+        this.count = this.stackData.getCount();
+        this.durability = this.stackData.getDurability();
 
         // Initial velocity
         this.velocityX = velX;
@@ -65,6 +89,10 @@ public class DroppedItem {
         this.rotation = (float) (Math.random() * 360.0);
         this.bobPhase = (float) (Math.random() * Math.PI * 2);
         this.age = 0;
+    }
+
+    private static int defaultDurability(ItemType type) {
+        return type != null && type.isDamageable() ? type.getMaxDurability() : -1;
     }
 
     /**
@@ -99,7 +127,7 @@ public class DroppedItem {
 
             // Check block at feet level
             if (blockY >= 0) {
-                BlockType below = world.getBlock(blockX, blockY, blockZ);
+                BlockType below = world.getBlockIfLoaded(blockX, blockY, blockZ, BlockType.AIR);
                 if (below.isSolid()) {
                     // Land on top of this block
                     y = blockY + 1.0f + 0.1f; // Slight offset above ground
@@ -123,7 +151,7 @@ public class DroppedItem {
             int blockY = (int) Math.floor(y - 0.2f);
 
             if (blockY >= 0) {
-                BlockType below = world.getBlock(blockX, blockY, blockZ);
+                BlockType below = world.getBlockIfLoaded(blockX, blockY, blockZ, BlockType.AIR);
                 if (!below.isSolid()) {
                     onGround = false; // Start falling again
                 }
@@ -218,34 +246,58 @@ public class DroppedItem {
         return SCALE;
     }
 
-    public BlockType getBlockType() {
-        return blockType;
+    public ItemType getItemType() {
+        return itemType;
     }
 
     public int getCount() {
         return count;
     }
 
+    public int getDurability() {
+        return durability;
+    }
+
     public float getAge() {
         return age;
     }
 
+    public void setAge(float age) {
+        this.age = Math.max(0, age);
+    }
+
     public void setCount(int count) {
         this.count = count;
+        if (stackData != null) {
+            stackData.setCount(count);
+        }
+    }
+
+    public ItemStack toItemStack() {
+        if (stackData == null) {
+            stackData = new ItemStack(itemType, count, durability);
+        }
+        stackData.setCount(count);
+        stackData.setDurability(durability);
+        return stackData.copy();
+    }
+
+    public ItemStack getStack() {
+        return toItemStack();
     }
 
     /**
      * Check if this item can merge with another of the same type.
      */
     public boolean canMergeWith(DroppedItem other) {
-        return this.blockType == other.blockType &&
-                this.count + other.count <= 64;
+        return this.toItemStack().canMergeWith(other.toItemStack()) &&
+                this.count + other.count <= itemType.getMaxStackSize();
     }
 
     /**
      * Merge another item into this one.
      */
     public void mergeWith(DroppedItem other) {
-        this.count += other.count;
+        setCount(this.count + other.count);
     }
 }

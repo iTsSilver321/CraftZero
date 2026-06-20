@@ -10,9 +10,6 @@ public class Chicken extends Mob {
 
     private static final MobBalance.Spec SPEC = MobBalance.CHICKEN;
 
-    // Slow falling
-    private static final float CHICKEN_GRAVITY = -10.0f; // Much slower than normal
-
     // Egg laying
     private int eggTimer;
     private static final int EGG_INTERVAL = 6000; // 5 minutes
@@ -51,38 +48,15 @@ public class Chicken extends Mob {
 
     @Override
     public void updatePhysics(float deltaTime) {
-        if (world == null)
-            return;
-
-        // Slow falling instead of normal gravity
-        if (!onGround) {
-            motionY += CHICKEN_GRAVITY * deltaTime;
-            // Cap fall speed
-            if (motionY < -2.0f) {
-                motionY = -2.0f;
-            }
+        super.updatePhysics(deltaTime);
+        if (!onGround && motionY < -0.6f) {
+            motionY = -0.6f;
         }
+    }
 
-        // Apply air resistance
-        motionX *= AIR_RESISTANCE;
-        motionZ *= AIR_RESISTANCE;
-
-        // Move with collision
-        moveWithCollision(motionX * deltaTime, motionY * deltaTime, motionZ * deltaTime);
-
-        // Ground friction
-        if (onGround) {
-            motionX *= GROUND_FRICTION;
-            motionZ *= GROUND_FRICTION;
-        }
-
-        // Track distance walked
-        float dx = x - prevX;
-        float dz = z - prevZ;
-        float horizontalDist = (float) Math.sqrt(dx * dx + dz * dz);
-        distanceWalked += horizontalDist;
-
-        updateInWater();
+    @Override
+    protected float getGravityPerTick() {
+        return 0.03f;
     }
 
     private void layEgg() {

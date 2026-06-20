@@ -9,10 +9,13 @@ import com.craftzero.main.Player;
 import com.craftzero.progression.ArmorMaterial;
 import com.craftzero.progression.ArmorSlot;
 import com.craftzero.world.BlockType;
+import com.craftzero.world.World;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.lwjgl.opengl.GL11.*;
@@ -53,6 +56,8 @@ public class PlayerRenderer {
     private final Map<ItemType, HeldMesh> heldItemMeshCache = new HashMap<>();
     private final Map<BlockType, HeldMesh> heldBlockMeshCache = new HashMap<>();
     private static final int HELD_VERTEX_FLOATS = 11;
+    private static final int HELD_ITEM_SPRITE_PIXELS = 16;
+    private static final float HELD_ITEM_THICKNESS = 1.0f / 16.0f;
 
     private record HeldMesh(int vao, int vbo, int ebo, int drawCount, boolean indexed) {
     }
@@ -188,14 +193,109 @@ public class PlayerRenderer {
 
     private HeldMesh createHeldItemMesh(ItemType type) {
         float[] uv = ItemTextureResolver.getUv(type);
-        float[] vertices = {
-                -0.5f, -0.5f, 0.0f, uv[0], uv[3], 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
-                0.5f, -0.5f, 0.0f, uv[2], uv[3], 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
-                0.5f, 0.5f, 0.0f, uv[2], uv[1], 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
-                -0.5f, 0.5f, 0.0f, uv[0], uv[1], 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
-        };
-        int[] indices = { 0, 1, 2, 0, 2, 3 };
+        List<Float> vertexList = new ArrayList<>();
+        List<Integer> indexList = new ArrayList<>();
+        float frontZ = HELD_ITEM_THICKNESS * 0.5f;
+        float backZ = -HELD_ITEM_THICKNESS * 0.5f;
+
+        addHeldQuad(vertexList, indexList,
+                -0.5f, -0.5f, frontZ, uv[0], uv[3],
+                0.5f, -0.5f, frontZ, uv[2], uv[3],
+                0.5f, 0.5f, frontZ, uv[2], uv[1],
+                -0.5f, 0.5f, frontZ, uv[0], uv[1],
+                0.0f, 0.0f, 1.0f);
+        addHeldQuad(vertexList, indexList,
+                -0.5f, 0.5f, backZ, uv[0], uv[1],
+                0.5f, 0.5f, backZ, uv[2], uv[1],
+                0.5f, -0.5f, backZ, uv[2], uv[3],
+                -0.5f, -0.5f, backZ, uv[0], uv[3],
+                0.0f, 0.0f, -1.0f);
+
+        for (int pixel = 0; pixel < HELD_ITEM_SPRITE_PIXELS; pixel++) {
+            float t0 = pixel / (float) HELD_ITEM_SPRITE_PIXELS;
+            float t1 = (pixel + 1) / (float) HELD_ITEM_SPRITE_PIXELS;
+            float x0 = -0.5f + t0;
+            float x1 = -0.5f + t1;
+            float y0 = -0.5f + t0;
+            float y1 = -0.5f + t1;
+            float u0 = lerp(uv[0], uv[2], t0);
+            float u1 = lerp(uv[0], uv[2], t1);
+            float v0 = lerp(uv[3], uv[1], t0);
+            float v1 = lerp(uv[3], uv[1], t1);
+
+            addHeldQuad(vertexList, indexList,
+                    x0, -0.5f, backZ, u0, uv[3],
+                    x0, -0.5f, frontZ, u0, uv[3],
+                    x0, 0.5f, frontZ, u0, uv[1],
+                    x0, 0.5f, backZ, u0, uv[1],
+                    -1.0f, 0.0f, 0.0f);
+            addHeldQuad(vertexList, indexList,
+                    x1, -0.5f, frontZ, u1, uv[3],
+                    x1, -0.5f, backZ, u1, uv[3],
+                    x1, 0.5f, backZ, u1, uv[1],
+                    x1, 0.5f, frontZ, u1, uv[1],
+                    1.0f, 0.0f, 0.0f);
+            addHeldQuad(vertexList, indexList,
+                    -0.5f, y0, frontZ, uv[0], v0,
+                    -0.5f, y0, backZ, uv[0], v0,
+                    0.5f, y0, backZ, uv[2], v0,
+                    0.5f, y0, frontZ, uv[2], v0,
+                    0.0f, -1.0f, 0.0f);
+            addHeldQuad(vertexList, indexList,
+                    -0.5f, y1, backZ, uv[0], v1,
+                    -0.5f, y1, frontZ, uv[0], v1,
+                    0.5f, y1, frontZ, uv[2], v1,
+                    0.5f, y1, backZ, uv[2], v1,
+                    0.0f, 1.0f, 0.0f);
+        }
+
+        float[] vertices = new float[vertexList.size()];
+        for (int i = 0; i < vertexList.size(); i++) {
+            vertices[i] = vertexList.get(i);
+        }
+        int[] indices = new int[indexList.size()];
+        for (int i = 0; i < indexList.size(); i++) {
+            indices[i] = indexList.get(i);
+        }
         return uploadHeldMesh(vertices, indices);
+    }
+
+    private void addHeldQuad(List<Float> vertices, List<Integer> indices,
+            float x0, float y0, float z0, float u0, float v0,
+            float x1, float y1, float z1, float u1, float v1,
+            float x2, float y2, float z2, float u2, float v2,
+            float x3, float y3, float z3, float u3, float v3,
+            float nx, float ny, float nz) {
+        int base = vertices.size() / HELD_VERTEX_FLOATS;
+        addHeldVertex(vertices, x0, y0, z0, u0, v0, nx, ny, nz);
+        addHeldVertex(vertices, x1, y1, z1, u1, v1, nx, ny, nz);
+        addHeldVertex(vertices, x2, y2, z2, u2, v2, nx, ny, nz);
+        addHeldVertex(vertices, x3, y3, z3, u3, v3, nx, ny, nz);
+        indices.add(base);
+        indices.add(base + 1);
+        indices.add(base + 2);
+        indices.add(base);
+        indices.add(base + 2);
+        indices.add(base + 3);
+    }
+
+    private void addHeldVertex(List<Float> vertices, float x, float y, float z,
+            float u, float v, float nx, float ny, float nz) {
+        vertices.add(x);
+        vertices.add(y);
+        vertices.add(z);
+        vertices.add(u);
+        vertices.add(v);
+        vertices.add(nx);
+        vertices.add(ny);
+        vertices.add(nz);
+        vertices.add(1.0f);
+        vertices.add(1.0f);
+        vertices.add(1.0f);
+    }
+
+    private float lerp(float a, float b, float t) {
+        return a + (b - a) * t;
     }
 
     private HeldMesh createHeldBlockMesh(BlockType type) {
@@ -309,17 +409,7 @@ public class PlayerRenderer {
         float renderY = prevPos.y + (pos.y - prevPos.y) * partialTick;
         float renderZ = prevPos.z + (pos.z - prevPos.z) * partialTick;
 
-        // Get world light at player position for entity lighting
-        float entityBrightness = 1.0f;
-        if (player.getWorld() != null) {
-            int lightLevel = player.getWorld().getSkyLight(
-                    (int) Math.floor(pos.x),
-                    (int) Math.floor(pos.y + 1), // Sample at eye level
-                    (int) Math.floor(pos.z));
-            // Convert light level (0-15) to brightness (0.08-1.0)
-            float f = Math.max(0, Math.min(15, lightLevel)) / 15.0f;
-            entityBrightness = Math.max(0.08f, f / (3.0f - 2.0f * f));
-        }
+        float entityBrightness = computeEntityBrightness(player, pos.x, pos.y + 1.0f, pos.z);
         renderer.setEntityBrightness(entityBrightness);
 
         float bodyYaw = player.getRenderYawOffset(partialTick);
@@ -486,15 +576,7 @@ public class PlayerRenderer {
             return;
 
         Vector3f pos = player.getPosition();
-        float entityBrightness = 1.0f;
-        if (player.getWorld() != null) {
-            int lightLevel = player.getWorld().getSkyLight(
-                    (int) Math.floor(pos.x),
-                    (int) Math.floor(pos.y + 1),
-                    (int) Math.floor(pos.z));
-            float f = Math.max(0, Math.min(15, lightLevel)) / 15.0f;
-            entityBrightness = Math.max(0.08f, f / (3.0f - 2.0f * f));
-        }
+        float entityBrightness = computeEntityBrightness(player, pos.x, pos.y + 1.0f, pos.z);
         renderer.setEntityBrightness(entityBrightness);
 
         glClear(GL_DEPTH_BUFFER_BIT);
@@ -512,6 +594,8 @@ public class PlayerRenderer {
         ItemRenderProfile heldProfile = holdingItem && heldType != null ? heldType.getRenderProfile() : null;
         boolean holdingBlock = heldProfile != null && heldProfile.modelKind() == ItemRenderProfile.ModelKind.BLOCK;
         boolean holdingSpriteItem = heldProfile != null && heldProfile.modelKind() == ItemRenderProfile.ModelKind.SPRITE;
+        boolean blocking = player.isBlockingItem();
+        boolean eating = holdingItem && heldType != null && player.isEatingOrDrinkingItem();
 
         // Get slot switch animation progress (0 = retracted, 1 = visible)
         float slotSwitchProgress = player.getSlotSwitchProgress(partialTick);
@@ -593,7 +677,7 @@ public class PlayerRenderer {
         // Render held item (block or tool)
         if (holdingItem && (atlas != null || itemsTexture != null)) {
             renderHeldItemFirstPerson(heldType, heldProfile, holdingBlock, holdingSpriteItem, camPos, camera,
-                    swingProgress, useProgress, walkDist, entityBrightness, switchOffset);
+                    swingProgress, useProgress, walkDist, entityBrightness, switchOffset, blocking, eating);
         }
 
         playerModel.leftArm.setPivot(origPX, origPY, origPZ);
@@ -607,7 +691,7 @@ public class PlayerRenderer {
     private void renderHeldItemFirstPerson(ItemType type, ItemRenderProfile profile, boolean isBlock,
             boolean isSpriteItem,
             Vector3f camPos, Camera camera, float swingProgress, float useProgress,
-            float walkDist, float brightness, float slotSwitchOffset) {
+            float walkDist, float brightness, float slotSwitchOffset, boolean blocking, boolean eating) {
 
         // Set up item model matrix
         Matrix4f itemMatrix = new Matrix4f();
@@ -616,25 +700,19 @@ public class PlayerRenderer {
         itemMatrix.rotateY((float) Math.toRadians(-camera.getYaw()));
         itemMatrix.rotateX((float) Math.toRadians(-camera.getPitch()));
 
+        if (isSpriteItem) {
+            renderHeldSpriteFirstPerson(type, profile, itemMatrix, swingProgress, useProgress,
+                    walkDist, slotSwitchOffset, blocking, eating);
+            return;
+        }
+
         itemMatrix.translate(
                 profile.firstPersonOffsetX(),
                 profile.firstPersonOffsetY() - slotSwitchOffset * profile.firstPersonEquipDrop(),
                 profile.firstPersonOffsetZ());
 
-        if (swingProgress > 0) {
-            float sinSwing = (float) Math.sin(swingProgress * swingProgress * Math.PI);
-            float sinSqrtSwing = (float) Math.sin(Math.sqrt(swingProgress) * Math.PI);
-            itemMatrix.translate(-sinSqrtSwing * 0.28f, sinSwing * 0.08f, -sinSqrtSwing * 0.18f);
-            itemMatrix.rotateY((float) Math.toRadians(-sinSwing * 20.0f));
-            itemMatrix.rotateZ((float) Math.toRadians(-sinSqrtSwing * 20.0f));
-            itemMatrix.rotateX((float) Math.toRadians(-sinSqrtSwing * 80.0f));
-        }
-
-        if (useProgress > 0) {
-            float useSin = (float) Math.sin(useProgress * Math.PI);
-            itemMatrix.translate(-useSin * 0.12f, useSin * 0.05f, -useSin * 0.10f);
-            itemMatrix.rotateX((float) Math.toRadians(-useSin * 25.0f));
-        }
+        applyFirstPersonHeldSwing(itemMatrix, swingProgress);
+        applyFirstPersonHeldUse(itemMatrix, useProgress, blocking, false);
 
         // Bobbing
         float bobX = (float) Math.sin(walkDist * 0.6662f) * 0.015f;
@@ -656,30 +734,103 @@ public class PlayerRenderer {
                 shader.setUniform("modelMatrix", itemMatrix);
                 renderHeldMesh(getHeldBlockMesh(type.getPlacedBlock()));
             }
-        } else if (isSpriteItem) {
-            // Sprite items stay upright in screen-space first, then cant slightly inward
-            // toward the player. Keeping pitch near zero prevents tools from pointing
-            // forward into the world.
-            itemMatrix.scale(profile.firstPersonScale());
-            itemMatrix.rotateZ((float) Math.toRadians(profile.firstPersonRotZ()));
-            itemMatrix.rotateY((float) Math.toRadians(profile.firstPersonRotY()));
-            itemMatrix.rotateX((float) Math.toRadians(profile.firstPersonRotX()));
-
-            Texture texToUse = null;
-            if (ItemTextureResolver.usesItemsAtlas(type) && itemsTexture != null) {
-                texToUse = itemsTexture;
-            } else if (atlas != null) {
-                texToUse = atlas;
-            }
-
-            if (texToUse != null) {
-                texToUse.bind(0);
-                shader.setUniform("alphaCutoff", 0.1f);
-                shader.setUniform("modelMatrix", itemMatrix);
-                renderHeldMesh(getHeldItemMesh(type));
-                shader.setUniform("alphaCutoff", 0.0f);
-            }
         }
+    }
+
+    private void renderHeldSpriteFirstPerson(ItemType type, ItemRenderProfile profile, Matrix4f itemMatrix,
+            float swingProgress, float useProgress, float walkDist, float slotSwitchOffset,
+            boolean blocking, boolean eating) {
+        itemMatrix.translate(
+                profile.firstPersonOffsetX(),
+                profile.firstPersonOffsetY() - slotSwitchOffset * profile.firstPersonEquipDrop(),
+                profile.firstPersonOffsetZ());
+
+        applyFirstPersonHeldSwing(itemMatrix, swingProgress);
+        applyFirstPersonHeldUse(itemMatrix, useProgress, blocking, eating);
+
+        float bobX = (float) Math.sin(walkDist * 0.6662f) * 0.012f;
+        float bobY = (float) Math.cos(walkDist * 1.3324f) * 0.008f;
+        itemMatrix.translate(bobX, bobY, 0.0f);
+
+        // Our item quad is authored face-forward already. Old Minecraft applies a
+        // 45 degree yaw because its item renderer basis differs; here that turns the
+        // mesh edge-on, so profiles use only a small inward cant.
+        itemMatrix.rotateY((float) Math.toRadians(profile.firstPersonRotY()));
+
+        itemMatrix.scale(profile.firstPersonScale());
+        if (shouldMirrorHeldSprite(type)) {
+            itemMatrix.scale(-1.0f, 1.0f, 1.0f);
+        }
+        itemMatrix.rotateZ((float) Math.toRadians(profile.firstPersonRotZ()));
+        itemMatrix.rotateX((float) Math.toRadians(profile.firstPersonRotX()));
+
+        Texture texToUse = ItemTextureResolver.usesItemsAtlas(type) && itemsTexture != null ? itemsTexture : atlas;
+        if (texToUse != null) {
+            texToUse.bind(0);
+            shader.setUniform("alphaCutoff", 0.1f);
+            shader.setUniform("modelMatrix", itemMatrix);
+            renderHeldMesh(getHeldItemMesh(type));
+            shader.setUniform("alphaCutoff", 0.0f);
+        }
+    }
+
+    private void applyFirstPersonHeldSwing(Matrix4f itemMatrix, float swingProgress) {
+        if (swingProgress <= 0) {
+            return;
+        }
+        float sinSwing = (float) Math.sin(swingProgress * swingProgress * Math.PI);
+        float sinSqrtSwing = (float) Math.sin(Math.sqrt(swingProgress) * Math.PI);
+        itemMatrix.translate(-sinSqrtSwing * 0.28f, sinSwing * 0.08f, -sinSqrtSwing * 0.18f);
+        itemMatrix.rotateY((float) Math.toRadians(-sinSwing * 20.0f));
+        itemMatrix.rotateZ((float) Math.toRadians(-sinSqrtSwing * 20.0f));
+        itemMatrix.rotateX((float) Math.toRadians(-sinSqrtSwing * 80.0f));
+    }
+
+    private void applyFirstPersonHeldUse(Matrix4f itemMatrix, float useProgress, boolean blocking, boolean eating) {
+        if (blocking) {
+            itemMatrix.translate(-0.16f, 0.16f, -0.08f);
+            itemMatrix.rotateY((float) Math.toRadians(-28.0f));
+            itemMatrix.rotateX((float) Math.toRadians(-36.0f));
+            itemMatrix.rotateZ((float) Math.toRadians(18.0f));
+        } else if (eating && useProgress > 0) {
+            float useSin = (float) Math.sin(useProgress * Math.PI);
+            float bite = (float) Math.sin(useProgress * 34.0f) * 0.018f;
+            itemMatrix.translate(-useSin * 0.12f, useSin * 0.12f + bite, -useSin * 0.10f);
+            itemMatrix.rotateX((float) Math.toRadians(-useSin * 25.0f));
+        } else if (useProgress > 0) {
+            float useSin = (float) Math.sin(useProgress * Math.PI);
+            itemMatrix.translate(-useSin * 0.12f, useSin * 0.05f, -useSin * 0.10f);
+            itemMatrix.rotateX((float) Math.toRadians(-useSin * 25.0f));
+        }
+    }
+
+    private float computeEntityBrightness(Player player, float x, float y, float z) {
+        World world = player.getWorld();
+        if (world == null) {
+            return 1.0f;
+        }
+        int blockX = (int) Math.floor(x);
+        int blockY = (int) Math.floor(y);
+        int blockZ = (int) Math.floor(z);
+        int sky = world.getSkyLight(blockX, blockY, blockZ);
+        if (world.getDayCycleManager() != null) {
+            sky = Math.round(sky * world.getDayCycleManager().getSunBrightness());
+        }
+        int block = world.getBlockLightIfLoaded(blockX, blockY, blockZ, 0);
+        int lightLevel = Math.max(block, sky);
+        float f = Math.max(0, Math.min(15, lightLevel)) / 15.0f;
+        return Math.max(0.08f, f / (3.0f - 2.0f * f));
+    }
+
+    private boolean shouldMirrorHeldSprite(ItemType type) {
+        if (type == null) {
+            return false;
+        }
+        return type == ItemType.BOW
+                || type == ItemType.STICK
+                || type == ItemType.ARROW
+                || type == ItemType.BONE
+                || type == ItemType.FEATHER;
     }
 
     /**

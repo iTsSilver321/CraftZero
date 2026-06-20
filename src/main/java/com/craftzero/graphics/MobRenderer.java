@@ -4,6 +4,7 @@ import com.craftzero.entity.Entity;
 import com.craftzero.entity.mob.*;
 import com.craftzero.graphics.model.*; // Import all models
 import com.craftzero.world.BlockType;
+import com.craftzero.world.World;
 import org.joml.Matrix4f;
 
 import static org.lwjgl.opengl.GL11.*;
@@ -115,6 +116,7 @@ public class MobRenderer {
         Texture texture = MobTexture.get(mob.getTexturePath());
         if (texture == null)
             return;
+        renderer.setEntityBrightness(computeEntityBrightness(mob));
 
         // Calculate hurt flash intensity (1.0 = just hit, fades to 0)
         float hurtFlash = 0.0f;
@@ -183,6 +185,26 @@ public class MobRenderer {
         if (mob.isOnFire() && terrainAtlas != null) {
             renderFireOverlay(mob, terrainAtlas, renderX, renderY, renderZ, renderBodyYaw);
         }
+        shader.setUniform("hurtFlash", 0.0f);
+        renderer.setEntityBrightness(0.0f);
+    }
+
+    private float computeEntityBrightness(Mob mob) {
+        World world = mob.getWorld();
+        if (world == null) {
+            return 1.0f;
+        }
+        int x = (int) Math.floor(mob.getX());
+        int y = (int) Math.floor(mob.getY() + mob.getHeight() * 0.85f);
+        int z = (int) Math.floor(mob.getZ());
+        int sky = world.getSkyLight(x, y, z);
+        if (world.getDayCycleManager() != null) {
+            sky = Math.round(sky * world.getDayCycleManager().getSunBrightness());
+        }
+        int block = world.getBlockLightIfLoaded(x, y, z, 0);
+        int lightLevel = Math.max(block, sky);
+        float f = Math.max(0, Math.min(15, lightLevel)) / 15.0f;
+        return Math.max(0.08f, f / (3.0f - 2.0f * f));
     }
 
     private void renderSpider(Mob mob, Texture texture,

@@ -38,23 +38,23 @@ public record ItemRenderProfile(
     }
 
     public static ItemRenderProfile toolSprite() {
-        return sprite(0.54f, 0.40f, 0.0f, -10.0f, -46.0f, 0.72f, -0.58f, -0.82f);
+        return sprite(0.48f, 0.40f, 0.0f, -80.0f, 30.0f, 0.62f, -0.50f, -0.82f);
     }
 
     public static ItemRenderProfile materialSprite() {
-        return sprite(0.38f, 0.32f, -6.0f, 28.0f, -26.0f);
+        return sprite(0.46f, 0.32f, 0.0f, 45.0f, 0.0f);
     }
 
     public static ItemRenderProfile skinnySprite() {
-        return sprite(0.42f, 0.34f, 0.0f, -8.0f, -42.0f);
+        return sprite(0.42f, 0.34f, 0.0f, -56.0f, 30.0f, 0.60f, -0.50f, -0.82f);
     }
 
     public static ItemRenderProfile largeSprite() {
-        return sprite(0.45f, 0.36f, -6.0f, 30.0f, -28.0f);
+        return sprite(0.50f, 0.36f, 0.0f, 12.0f, 0.0f, 0.52f, -0.46f, -0.74f);
     }
 
     public static ItemRenderProfile terrainSprite() {
-        return sprite(0.44f, 0.34f, -6.0f, 30.0f, -28.0f);
+        return sprite(0.48f, 0.34f, 0.0f, 12.0f, 0.0f, 0.52f, -0.46f, -0.74f);
     }
 
     private static ItemRenderProfile sprite(float firstScale, float thirdScale,

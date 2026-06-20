@@ -1471,6 +1471,64 @@ public class World implements GeneratedStructureSink {
         setBlockInternal(x, y, z, type, metadata, true);
     }
 
+    public void rebuildBlockMeshesNow(int x, int y, int z) {
+        if (y < 0 || y >= Chunk.HEIGHT) {
+            return;
+        }
+        int chunkX = Math.floorDiv(x, Chunk.WIDTH);
+        int chunkZ = Math.floorDiv(z, Chunk.DEPTH);
+        int localX = Math.floorMod(x, Chunk.WIDTH);
+        int localZ = Math.floorMod(z, Chunk.DEPTH);
+
+        rebuildChunkMeshNow(chunkX, chunkZ);
+        if (localX == 0) {
+            rebuildChunkMeshNow(chunkX - 1, chunkZ);
+        } else if (localX == Chunk.WIDTH - 1) {
+            rebuildChunkMeshNow(chunkX + 1, chunkZ);
+        }
+        if (localZ == 0) {
+            rebuildChunkMeshNow(chunkX, chunkZ - 1);
+        } else if (localZ == Chunk.DEPTH - 1) {
+            rebuildChunkMeshNow(chunkX, chunkZ + 1);
+        }
+    }
+
+    private void rebuildChunkMeshNow(int chunkX, int chunkZ) {
+        long key = chunkKey(chunkX, chunkZ);
+        Chunk chunk = chunks.get(key);
+        if (chunk == null) {
+            return;
+        }
+        if (chunksBeingBuilt.contains(key)
+                || chunk.getState().ordinal() < Chunk.ChunkState.LIGHTED.ordinal()
+                || !chunk.hasAllNeighborsAtLeast(Chunk.ChunkState.LIGHTED)) {
+            chunk.setDirty(true);
+            return;
+        }
+
+        Chunk.ChunkState previousState = chunk.getState();
+        long expectedVersion = chunk.getModificationVersion();
+        chunksBeingBuilt.add(key);
+        chunk.setState(Chunk.ChunkState.MESHING);
+        try {
+            chunk.calculateSkyLight();
+            ChunkMeshData meshData = ChunkMeshBuilder.buildMeshData(chunk);
+            if (chunk.getModificationVersion() == expectedVersion) {
+                chunk.applyMeshData(meshData);
+                chunk.setState(Chunk.ChunkState.READY);
+            } else {
+                chunk.setState(previousState);
+                chunk.setDirty(true);
+            }
+        } catch (Exception e) {
+            System.err.println("Error rebuilding edited chunk mesh: " + e.getMessage());
+            chunk.setState(previousState);
+            chunk.setDirty(true);
+        } finally {
+            chunksBeingBuilt.remove(key);
+        }
+    }
+
     private void setBlockInternal(int x, int y, int z, BlockType type, int metadata, boolean preserveTile) {
         if (y < 0 || y >= Chunk.HEIGHT) {
             return;

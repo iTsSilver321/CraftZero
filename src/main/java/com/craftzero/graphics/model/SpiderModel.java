@@ -84,14 +84,14 @@ public class SpiderModel {
         float quarterPi = (float) Math.PI / 4.0f;
         float eighthPi = (float) Math.PI / 8.0f;
 
-        leg1.setRotation(0, eighthPi * 2.0f, -quarterPi);
-        leg2.setRotation(0, -eighthPi * 2.0f, quarterPi);
-        leg3.setRotation(0, eighthPi, -quarterPi * 0.74f);
-        leg4.setRotation(0, -eighthPi, quarterPi * 0.74f);
-        leg5.setRotation(0, -eighthPi, -quarterPi * 0.74f);
-        leg6.setRotation(0, eighthPi, quarterPi * 0.74f);
-        leg7.setRotation(0, -eighthPi * 2.0f, -quarterPi);
-        leg8.setRotation(0, eighthPi * 2.0f, quarterPi);
+        leg1.setRotation(0, eighthPi * 2.0f, quarterPi);
+        leg2.setRotation(0, -eighthPi * 2.0f, -quarterPi);
+        leg3.setRotation(0, eighthPi, quarterPi * 0.74f);
+        leg4.setRotation(0, -eighthPi, -quarterPi * 0.74f);
+        leg5.setRotation(0, -eighthPi, quarterPi * 0.74f);
+        leg6.setRotation(0, eighthPi, -quarterPi * 0.74f);
+        leg7.setRotation(0, -eighthPi * 2.0f, quarterPi);
+        leg8.setRotation(0, eighthPi * 2.0f, -quarterPi);
 
         float phase = limbSwing * 0.6662f;
         float yaw1 = -(float) Math.cos(phase * 2.0f) * 0.4f * limbSwingAmount;
@@ -103,14 +103,14 @@ public class SpiderModel {
         float roll3 = Math.abs((float) Math.sin(phase + Math.PI / 2.0f) * 0.4f) * limbSwingAmount;
         float roll4 = Math.abs((float) Math.sin(phase + Math.PI * 1.5f) * 0.4f) * limbSwingAmount;
 
-        addLegRotation(leg1, 0, yaw1, roll1);
-        addLegRotation(leg2, 0, -yaw1, -roll1);
-        addLegRotation(leg3, 0, yaw2, roll2);
-        addLegRotation(leg4, 0, -yaw2, -roll2);
-        addLegRotation(leg5, 0, yaw3, roll3);
-        addLegRotation(leg6, 0, -yaw3, -roll3);
-        addLegRotation(leg7, 0, yaw4, roll4);
-        addLegRotation(leg8, 0, -yaw4, -roll4);
+        addLegRotation(leg1, 0, yaw1, -roll1);
+        addLegRotation(leg2, 0, -yaw1, roll1);
+        addLegRotation(leg3, 0, yaw2, -roll2);
+        addLegRotation(leg4, 0, -yaw2, roll2);
+        addLegRotation(leg5, 0, yaw3, -roll3);
+        addLegRotation(leg6, 0, -yaw3, roll3);
+        addLegRotation(leg7, 0, yaw4, -roll4);
+        addLegRotation(leg8, 0, -yaw4, roll4);
     }
 
     private void addLegRotation(ModelPart leg, float x, float y, float z) {

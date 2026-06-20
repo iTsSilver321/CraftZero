@@ -189,6 +189,12 @@ public class PlayerStats {
         return true;
     }
 
+    public void grantInvincibility(float seconds) {
+        invincibilityTimer = Math.max(invincibilityTimer, seconds);
+        hurtInvulnerabilityTimer = 0.0f;
+        lastDamageAmount = 0.0f;
+    }
+
     private void tickEffects(float deltaTime) {
         int ticks = Math.max(1, Math.round(deltaTime * 20.0f));
         for (int step = 0; step < ticks; step++) {

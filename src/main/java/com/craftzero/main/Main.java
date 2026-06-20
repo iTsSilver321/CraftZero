@@ -730,6 +730,7 @@ public class Main implements Runnable {
         gameState = GameState.PLAYING;
         Input.setCursorLocked(true);
         player.getCamera().setAspectRatio(window.getWidth(), window.getHeight());
+        player.prepareForWorldJoin();
         if (hostAfterTerrainLoad) {
             hostAfterTerrainLoad = false;
             startMultiplayerHost();

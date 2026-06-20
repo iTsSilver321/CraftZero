@@ -31,6 +31,8 @@ class MobModelParityTest {
         assertEquals(-model.leg2.getRotationZ(), model.leg1.getRotationZ(), 0.001f);
         assertEquals(-model.leg4.getRotationY(), model.leg3.getRotationY(), 0.001f);
         assertEquals(-model.leg4.getRotationZ(), model.leg3.getRotationZ(), 0.001f);
+        assertTrue(model.leg1.getRotationZ() > 0.0f);
+        assertTrue(model.leg2.getRotationZ() < 0.0f);
     }
 
     @Test

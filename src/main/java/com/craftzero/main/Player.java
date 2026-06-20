@@ -10,6 +10,7 @@ import com.craftzero.graphics.Camera;
 import com.craftzero.inventory.ItemStack;
 import com.craftzero.inventory.ItemStackOps;
 import com.craftzero.inventory.ItemType;
+import com.craftzero.inventory.ToolType;
 import com.craftzero.physics.AABB;
 import com.craftzero.physics.Raycast;
 import com.craftzero.progression.ArmorMaterial;
@@ -165,6 +166,7 @@ public class Player {
     private float prevUseProgress;
     private float useCooldown;
     private boolean isDrawingBow;
+    private boolean isBlockingItem;
     private float bowDrawTime;
 
     // Slot switch animation state (for smooth item change)
@@ -545,7 +547,9 @@ public class Player {
                                 || (toolType.isEffectiveAgainst(targetType.getPreferredTool())
                                         && toolType.getMiningLevel() >= targetType.getHarvestLevel());
 
-                        world.breakBlock(currentTarget.x, currentTarget.y, currentTarget.z, canHarvest);
+                        if (world.breakBlock(currentTarget.x, currentTarget.y, currentTarget.z, canHarvest)) {
+                            world.rebuildBlockMeshesNow(currentTarget.x, currentTarget.y, currentTarget.z);
+                        }
 
                         // Consume tool durability
                         if (!isCreative() && heldItem != null && heldItem.isTool()) {
@@ -585,9 +589,10 @@ public class Player {
         requestedBedUsePos = null;
 
         boolean bowHandled = handleBowUse(world, deltaTime, rayDirection);
+        boolean swordBlockingHandled = !bowHandled && handleSwordBlocking();
 
         // Use item / place block (right click)
-        if (!bowHandled && isActionPressed(GameSettings.KeyBinding.USE) && placeCooldown <= 0) {
+        if (!bowHandled && !swordBlockingHandled && isActionPressed(GameSettings.KeyBinding.USE) && placeCooldown <= 0) {
             com.craftzero.inventory.ItemStack stack = inventory.getItemInHand();
             if (targetBlock.hit) {
                 // Check if clicking on a crafting table - open it instead of placing
@@ -615,6 +620,7 @@ public class Player {
                     requestedBedUsePos = new Vector3i(targetBlock.blockPos);
                     placeCooldown = PLACE_COOLDOWN;
                 } else if (world.toggleBlock(targetBlock.blockPos.x, targetBlock.blockPos.y, targetBlock.blockPos.z)) {
+                    world.rebuildBlockMeshesNow(targetBlock.blockPos.x, targetBlock.blockPos.y, targetBlock.blockPos.z);
                     placeCooldown = PLACE_COOLDOWN;
                 } else {
                     if (handleImmediateItemUse(world, stack)) {
@@ -665,6 +671,24 @@ public class Player {
         }
 
         return isDrawingBow;
+    }
+
+    private boolean handleSwordBlocking() {
+        com.craftzero.inventory.ItemStack held = inventory.getItemInHand();
+        boolean holdingSword = isSwordStack(held);
+        if (!holdingSword || !isActionDown(GameSettings.KeyBinding.USE)) {
+            if (isBlockingItem) {
+                isUsingItem = false;
+                useProgress = 0.0f;
+                prevUseProgress = 0.0f;
+            }
+            isBlockingItem = false;
+            return false;
+        }
+
+        isBlockingItem = true;
+        isUsingItem = true;
+        return true;
     }
 
     private void fireBow(World world, com.craftzero.inventory.ItemStack bow, Vector3f direction, float drawTime) {
@@ -777,6 +801,7 @@ public class Player {
         if (itemType == ItemType.STONE_SLAB && clickedBlock == BlockType.STONE_SLAB
                 && world.tryMergeSlab(targetBlock.blockPos.x, targetBlock.blockPos.y, targetBlock.blockPos.z)) {
             consumePlacedStack(stack);
+            world.rebuildBlockMeshesNow(targetBlock.blockPos.x, targetBlock.blockPos.y, targetBlock.blockPos.z);
             return true;
         }
 
@@ -807,6 +832,7 @@ public class Player {
 
         if (placed) {
             consumePlacedStack(stack);
+            world.rebuildBlockMeshesNow(placePos.x, placePos.y, placePos.z);
         }
         return placed;
     }
@@ -2148,6 +2174,9 @@ public class Player {
             return false;
         }
         float scaledAmount = difficulty.scaleIncomingDamage(amount);
+        if (isBlockingItem && isSwordStack(inventory.getItemInHand())) {
+            scaledAmount *= 0.5f;
+        }
         float protectedAmount = applyArmorProtection(scaledAmount, source);
         boolean applied = stats.damage(protectedAmount);
         if (!applied) {
@@ -2577,6 +2606,11 @@ public class Player {
             return;
         }
 
+        if (isBlockingItem) {
+            useProgress = Math.min(1.0f, useProgress + deltaTime * 8.0f);
+            return;
+        }
+
         // Update use cooldown
         if (useCooldown > 0) {
             useCooldown -= deltaTime;
@@ -2623,6 +2657,47 @@ public class Player {
      */
     public boolean isUsingItem() {
         return isUsingItem;
+    }
+
+    public boolean isBlockingItem() {
+        return isBlockingItem;
+    }
+
+    public boolean isEatingOrDrinkingItem() {
+        com.craftzero.inventory.ItemStack held = inventory.getItemInHand();
+        if (held == null || held.isEmpty()) {
+            return false;
+        }
+        ItemType type = held.getType();
+        return foodValue(type) != null || type == ItemType.MILK_BUCKET || type == ItemType.POTION;
+    }
+
+    private boolean isSwordStack(com.craftzero.inventory.ItemStack stack) {
+        return stack != null
+                && !stack.isEmpty()
+                && stack.getType().isTool()
+                && stack.getType().getToolType().getCategory() == ToolType.Category.SWORD;
+    }
+
+    public void prepareForWorldJoin() {
+        velocity.set(0, 0, 0);
+        prevPosition.set(position);
+        fallStartY = position.y;
+        wasFalling = false;
+        onGround = false;
+        breakingBlockPos = null;
+        breakProgress = 0.0f;
+        currentBreakingBlock = null;
+        isSwinging = false;
+        isUsingItem = false;
+        isDrawingBow = false;
+        isBlockingItem = false;
+        useProgress = 0.0f;
+        prevUseProgress = 0.0f;
+        bowDrawTime = 0.0f;
+        stats.grantInvincibility(3.0f);
+        boundingBox = createBoundingBox();
+        camera.setPosition(position.x, position.y + EYE_HEIGHT, position.z);
     }
 
     // ============== Death State ==============

@@ -2,6 +2,12 @@ package com.craftzero.entity;
 
 import com.craftzero.combat.DamageSource;
 import com.craftzero.main.CombatRules;
+import com.craftzero.progression.StatusEffectInstance;
+import com.craftzero.progression.StatusEffectType;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Base class for all living entities (mobs, players).
@@ -26,6 +32,7 @@ public abstract class LivingEntity extends Entity {
     protected int maxInvulnerableTime = 20; // 1 second of invulnerability
     protected Entity lastDamageSource;
     protected float lastDamageAmount; // Amount of last damage for invuln frame comparison
+    protected int recentPlayerHitTicks;
 
     // Death state
     protected int deathTime; // Ticks since death (for death animation)
@@ -38,6 +45,7 @@ public abstract class LivingEntity extends Entity {
     // Fire
     protected int fireTicks; // Ticks remaining on fire
     protected int lastFireDamage; // Tick counter for fire damage
+    protected final List<StatusEffectInstance> activeEffects = new ArrayList<>();
 
     // Movement AI
     // moveSpeed is in BLOCKS PER TICK (Minecraft-style per-tick physics)
@@ -112,12 +120,15 @@ public abstract class LivingEntity extends Entity {
             attackCooldown--;
         if (knockbackControlTicks > 0)
             knockbackControlTicks--;
+        if (recentPlayerHitTicks > 0)
+            recentPlayerHitTicks--;
+        tickStatusEffects();
 
         // Fire damage
         if (fireTicks > 0) {
             fireTicks--;
             // Deal fire damage every 20 ticks (1 second)
-            if (ticksExisted - lastFireDamage >= 20) {
+            if (!hasEffect(StatusEffectType.FIRE_RESISTANCE) && ticksExisted - lastFireDamage >= 20) {
                 damage(1.0f, DamageSource.point(DamageSource.Type.FIRE, x, y, z, 0.0f, 0.0f));
                 lastFireDamage = ticksExisted;
             }
@@ -163,7 +174,7 @@ public abstract class LivingEntity extends Entity {
             }
         }
         // === NORMAL MOVEMENT: Jump, Veer, or Trap ===
-        else if (onGround && wantsToMove) {
+        else if (onGround && wantsToMove && !inWater) {
             float yawRad = (float) Math.toRadians(bodyYaw);
             float dx = (float) Math.sin(yawRad);
             float dz = -(float) Math.cos(yawRad);
@@ -599,6 +610,14 @@ public abstract class LivingEntity extends Entity {
         if (source == null) {
             source = DamageSource.generic();
         }
+        if (source.type() == DamageSource.Type.FIRE && hasEffect(StatusEffectType.FIRE_RESISTANCE)) {
+            return false;
+        }
+        if (source.type() == DamageSource.Type.PLAYER_ATTACK
+                || (source.type() == DamageSource.Type.ARROW
+                        && source.entity() instanceof ArrowEntity arrow && arrow.isPlayerOwned())) {
+            recentPlayerHitTicks = 100;
+        }
 
         // Invulnerability frame logic (Minecraft style)
         if (invulnerableTime > 0) {
@@ -667,6 +686,75 @@ public abstract class LivingEntity extends Entity {
         fireTicks = 0;
     }
 
+    private void tickStatusEffects() {
+        for (int i = activeEffects.size() - 1; i >= 0; i--) {
+            StatusEffectInstance effect = activeEffects.get(i);
+            applyStatusEffectTick(effect);
+            StatusEffectInstance next = effect.ticked();
+            if (next.expired()) {
+                activeEffects.remove(i);
+            } else {
+                activeEffects.set(i, next);
+            }
+        }
+    }
+
+    private void applyStatusEffectTick(StatusEffectInstance effect) {
+        if (effect.type() == StatusEffectType.REGENERATION && effect.durationTicks() % 50 == 0) {
+            heal(1.0f + effect.amplifier());
+        } else if (effect.type() == StatusEffectType.POISON && effect.durationTicks() % 25 == 0 && health > 1.0f) {
+            health = Math.max(1.0f, health - (1.0f + effect.amplifier()));
+        }
+    }
+
+    public void addEffect(StatusEffectInstance effect) {
+        if (effect == null || effect.expired()) {
+            return;
+        }
+        for (int i = 0; i < activeEffects.size(); i++) {
+            StatusEffectInstance existing = activeEffects.get(i);
+            if (existing.type() == effect.type()) {
+                if (effect.amplifier() > existing.amplifier()
+                        || effect.durationTicks() > existing.durationTicks()) {
+                    activeEffects.set(i, effect);
+                }
+                return;
+            }
+        }
+        activeEffects.add(effect);
+    }
+
+    public void clearEffects() {
+        activeEffects.clear();
+    }
+
+    public List<StatusEffectInstance> getActiveEffects() {
+        return Collections.unmodifiableList(activeEffects);
+    }
+
+    public void setActiveEffects(List<StatusEffectInstance> effects) {
+        activeEffects.clear();
+        if (effects != null) {
+            for (StatusEffectInstance effect : effects) {
+                if (effect != null && !effect.expired()) {
+                    activeEffects.add(effect);
+                }
+            }
+        }
+    }
+
+    public boolean hasEffect(StatusEffectType type) {
+        if (type == null) {
+            return false;
+        }
+        for (StatusEffectInstance effect : activeEffects) {
+            if (effect.type() == type && !effect.expired()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Check if entity can attack (cooldown elapsed).
      */
@@ -693,6 +781,10 @@ public abstract class LivingEntity extends Entity {
      */
     protected void onDeath() {
         // Override in subclasses for drops, effects, etc.
+    }
+
+    public boolean hasRecentPlayerDamage() {
+        return recentPlayerHitTicks > 0;
     }
 
     /**

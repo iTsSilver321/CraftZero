@@ -339,6 +339,49 @@ public class PlayerStats {
         activeEffects.clear();
     }
 
+    public boolean hasEffect(StatusEffectType type) {
+        return getEffectAmplifier(type) >= 0;
+    }
+
+    public int getEffectAmplifier(StatusEffectType type) {
+        if (type == null) {
+            return -1;
+        }
+        int best = -1;
+        for (StatusEffectInstance effect : activeEffects) {
+            if (effect.type() == type && !effect.expired()) {
+                best = Math.max(best, effect.amplifier());
+            }
+        }
+        return best;
+    }
+
+    public float getMovementSpeedMultiplier() {
+        float multiplier = 1.0f;
+        int speed = getEffectAmplifier(StatusEffectType.SPEED);
+        if (speed >= 0) {
+            multiplier += 0.2f * (speed + 1);
+        }
+        int slowness = getEffectAmplifier(StatusEffectType.SLOWNESS);
+        if (slowness >= 0) {
+            multiplier -= 0.15f * (slowness + 1);
+        }
+        return Math.max(0.1f, multiplier);
+    }
+
+    public float getAttackDamageBonus() {
+        float bonus = 0.0f;
+        int strength = getEffectAmplifier(StatusEffectType.STRENGTH);
+        if (strength >= 0) {
+            bonus += 3.0f * (strength + 1);
+        }
+        int weakness = getEffectAmplifier(StatusEffectType.WEAKNESS);
+        if (weakness >= 0) {
+            bonus -= 0.5f * (weakness + 1);
+        }
+        return bonus;
+    }
+
     // Getters
 
     public float getHealth() {

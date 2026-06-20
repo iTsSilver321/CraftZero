@@ -291,8 +291,14 @@ public enum BlockType {
         return solid && !isTransparent() && BlockShape.isFullCube(this, 0);
     }
 
+    public boolean blocksAmbientOcclusion() {
+        return occludesFace() && this != GLASS && this != ICE && !isFluid();
+    }
+
     public boolean hasTileEntity() {
-        return this == CHEST || this == FURNACE || this == LIT_FURNACE || this == MOB_SPAWNER || isSign();
+        return this == CHEST || this == FURNACE || this == LIT_FURNACE || this == MOB_SPAWNER
+                || this == BREWING_STAND || this == DISPENSER || this == NOTE_BLOCK || this == JUKEBOX
+                || isSign();
     }
 
     public boolean isFurnace() {
@@ -300,7 +306,8 @@ public enum BlockType {
     }
 
     public boolean isContainerBlock() {
-        return this == CHEST || isFurnace() || this == CRAFTING_TABLE;
+        return this == CHEST || isFurnace() || this == CRAFTING_TABLE
+                || this == BREWING_STAND || this == ENCHANTING_TABLE;
     }
 
     public boolean isDoor() {
@@ -396,7 +403,7 @@ public enum BlockType {
 
     public int getLightEmission() {
         return switch (this) {
-            case TORCH -> 14;
+            case TORCH, REDSTONE_TORCH_ON -> 14;
             case FIRE -> 15;
             case LIT_FURNACE -> 13;
             case FLOWING_LAVA, LAVA -> 15;

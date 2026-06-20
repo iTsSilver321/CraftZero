@@ -369,13 +369,20 @@ public enum ItemType {
         return toolType != ToolType.NONE;
     }
 
+    public boolean isRecord() {
+        return id >= 2256 && id <= 2266;
+    }
+
     public ToolType getToolType() {
         return toolType;
     }
 
     public ItemRenderProfile getRenderProfile() {
-        if (isBlockItem() && !usesItemTexture()) {
+        if (isFullCubeBlockItem()) {
             return ItemRenderProfile.block();
+        }
+        if (isBlockItem() && !usesItemTexture()) {
+            return ItemRenderProfile.terrainSprite();
         }
         if (isTool() || this == BOW) {
             return ItemRenderProfile.toolSprite();
@@ -386,6 +393,26 @@ public enum ItemType {
                     MINECART, CHEST_MINECART, FURNACE_MINECART, BOAT, CAKE, BREWING_STAND, CAULDRON ->
                 ItemRenderProfile.largeSprite();
             default -> ItemRenderProfile.materialSprite();
+        };
+    }
+
+    public boolean isFullCubeBlockItem() {
+        if (!isBlockItem() || usesItemTexture()) {
+            return false;
+        }
+        return switch (placedBlock) {
+            case SAPLING, POWERED_RAIL, DETECTOR_RAIL, COBWEB, TALL_GRASS, DEAD_BUSH,
+                    YELLOW_FLOWER, RED_ROSE, BROWN_MUSHROOM, RED_MUSHROOM, TORCH, FIRE,
+                    MOB_SPAWNER, REDSTONE_WIRE, CROPS, FARMLAND, LADDER, RAIL, LEVER,
+                    STONE_PRESSURE_PLATE, WOODEN_PRESSURE_PLATE, REDSTONE_TORCH_OFF,
+                    REDSTONE_TORCH_ON, STONE_BUTTON, CACTUS, SUGAR_CANE, CAKE,
+                    REDSTONE_REPEATER_OFF, REDSTONE_REPEATER_ON, TRAPDOOR, IRON_BARS,
+                    GLASS_PANE, VINES, LILY_PAD, NETHER_WART, BREWING_STAND, CAULDRON,
+                    STANDING_SIGN, WALL_SIGN, WOODEN_DOOR, IRON_DOOR, BED, STONE_SLAB,
+                    DOUBLE_STONE_SLAB, OAK_STAIRS, COBBLESTONE_STAIRS, BRICK_STAIRS,
+                    STONE_BRICK_STAIRS, FENCE, NETHER_BRICK_FENCE, FENCE_GATE,
+                    ENCHANTING_TABLE, END_PORTAL_FRAME, DRAGON_EGG -> false;
+            default -> placedBlock.isSolid() && !placedBlock.isTransparent();
         };
     }
 

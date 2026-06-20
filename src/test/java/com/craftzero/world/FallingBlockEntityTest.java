@@ -45,6 +45,27 @@ class FallingBlockEntityTest {
     }
 
     @Test
+    @DisplayName("Falling sand should sink through water and settle submerged on solid ground")
+    void fallingSandSettlesSubmergedInWater() {
+        World world = new World(43L);
+        try {
+            world.setBlock(0, 68, 0, BlockType.STONE);
+            world.setBlock(0, 69, 0, BlockType.WATER, 0);
+            world.setBlock(0, 70, 0, BlockType.FLOWING_WATER, 8);
+            world.setBlock(0, 72, 0, BlockType.SAND);
+
+            world.advanceBlockTicks(3);
+            runEntities(world, 120);
+
+            assertSame(BlockType.SAND, world.getBlock(0, 69, 0));
+            assertSame(BlockType.FLOWING_WATER, world.getBlock(0, 70, 0));
+            assertTrue(world.getDroppedItems().isEmpty());
+        } finally {
+            world.cleanup();
+        }
+    }
+
+    @Test
     @DisplayName("Falling gravel should keep contextual flint drops for normal block breaking")
     void gravelDropResolverStillProducesFlint() {
         assertSame(ItemType.FLINT, BlockDropResolver.getDrop(BlockType.GRAVEL, new java.util.Random() {

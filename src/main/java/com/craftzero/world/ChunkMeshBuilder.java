@@ -88,6 +88,18 @@ public class ChunkMeshBuilder {
 
                     int metadata = chunk.getBlockMetadata(x, y, z);
                     BlockShape.BlockContext context = contextFor(chunk, x, y, z);
+                    if (type.isFluid()) {
+                        BlockRenderLayer layer = type.getRenderLayer();
+                        addFluidBlock(type, metadata, worldX, y, worldZ, blockColor,
+                                positionsFor(layer, opaquePositions, cutoutPositions, transPositions),
+                                positionsFor(layer, opaqueTexCoords, cutoutTexCoords, transTexCoords),
+                                positionsFor(layer, opaqueNormals, cutoutNormals, transNormals),
+                                positionsFor(layer, opaqueColors, cutoutColors, transColors),
+                                indicesFor(layer, opaqueIndices, cutoutIndices, transIndices),
+                                vertexCountFor(layer, opaqueVertexCount, cutoutVertexCount, transVertexCount),
+                                chunk, x, y, z);
+                        continue;
+                    }
                     if (BlockShape.usesCrossedSprite(type)) {
                         BlockRenderLayer layer = type.getRenderLayer();
                         addCrossedSprite(type, metadata, worldX, y, worldZ, blockColor,
@@ -100,8 +112,8 @@ public class ChunkMeshBuilder {
                                 chunk, x, y, z);
                         continue;
                     }
-                    List<BlockShape.Cuboid> boxes = BlockShape.getRenderBoxes(type, metadata, context);
-                    for (BlockShape.Cuboid box : boxes) {
+                    VoxelShape shape = BlockShape.renderShape(new BlockState(type, metadata), context);
+                    for (BlockShape.Cuboid box : shape.boxes()) {
                         for (int face = 0; face < 6; face++) {
                             if (shouldRenderCuboidFace(chunk, x, y, z, face, type, box)) {
                                 BlockRenderLayer layer = type.getRenderLayer();
@@ -182,6 +194,186 @@ public class ChunkMeshBuilder {
             }
             vertexCount[0] += 4;
         }
+    }
+
+    private static void addFluidBlock(BlockType type, int metadata, int worldX, int y, int worldZ,
+            float[] blockColor,
+            List<Float> positions, List<Float> texCoords, List<Float> normals, List<Float> colors,
+            List<Integer> indices, int[] vertexCount, Chunk chunk, int x, int localY, int z) {
+        boolean sameAbove = isSameFluid(chunk.getBlockWithNeighbors(x, localY + 1, z), type);
+        float nw = sameAbove ? 1.0f : cornerFluidHeight(chunk, x, localY, z, type, -1, -1);
+        float sw = sameAbove ? 1.0f : cornerFluidHeight(chunk, x, localY, z, type, -1, 1);
+        float se = sameAbove ? 1.0f : cornerFluidHeight(chunk, x, localY, z, type, 1, 1);
+        float ne = sameAbove ? 1.0f : cornerFluidHeight(chunk, x, localY, z, type, 1, -1);
+
+        float x0 = worldX;
+        float x1 = worldX + 1.0f;
+        float y0 = y;
+        float z0 = worldZ;
+        float z1 = worldZ + 1.0f;
+
+        if (!sameAbove) {
+            addCustomFace(type, metadata, Block.FACE_TOP, new float[] {
+                    x0, y0 + nw, z0,
+                    x0, y0 + sw, z1,
+                    x1, y0 + se, z1,
+                    x1, y0 + ne, z0
+            }, blockColor, positions, texCoords, normals, colors, indices, vertexCount, chunk, x, localY, z);
+        }
+
+        if (!isSameFluid(chunk.getBlockWithNeighbors(x, localY - 1, z), type)
+                && shouldRenderFace(chunk, x, localY, z, Block.FACE_BOTTOM, type)) {
+            addCustomFace(type, metadata, Block.FACE_BOTTOM, new float[] {
+                    x0, y0, z1,
+                    x0, y0, z0,
+                    x1, y0, z0,
+                    x1, y0, z1
+            }, blockColor, positions, texCoords, normals, colors, indices, vertexCount, chunk, x, localY, z);
+        }
+
+        if (shouldRenderFluidSide(chunk, x, localY, z, Block.FACE_NORTH, type)) {
+            addCustomFace(type, metadata, Block.FACE_NORTH, new float[] {
+                    x1, y0 + ne, z0,
+                    x1, y0, z0,
+                    x0, y0, z0,
+                    x0, y0 + nw, z0
+            }, blockColor, positions, texCoords, normals, colors, indices, vertexCount, chunk, x, localY, z);
+        }
+        if (shouldRenderFluidSide(chunk, x, localY, z, Block.FACE_SOUTH, type)) {
+            addCustomFace(type, metadata, Block.FACE_SOUTH, new float[] {
+                    x0, y0 + sw, z1,
+                    x0, y0, z1,
+                    x1, y0, z1,
+                    x1, y0 + se, z1
+            }, blockColor, positions, texCoords, normals, colors, indices, vertexCount, chunk, x, localY, z);
+        }
+        if (shouldRenderFluidSide(chunk, x, localY, z, Block.FACE_EAST, type)) {
+            addCustomFace(type, metadata, Block.FACE_EAST, new float[] {
+                    x1, y0 + se, z1,
+                    x1, y0, z1,
+                    x1, y0, z0,
+                    x1, y0 + ne, z0
+            }, blockColor, positions, texCoords, normals, colors, indices, vertexCount, chunk, x, localY, z);
+        }
+        if (shouldRenderFluidSide(chunk, x, localY, z, Block.FACE_WEST, type)) {
+            addCustomFace(type, metadata, Block.FACE_WEST, new float[] {
+                    x0, y0 + nw, z0,
+                    x0, y0, z0,
+                    x0, y0, z1,
+                    x0, y0 + sw, z1
+            }, blockColor, positions, texCoords, normals, colors, indices, vertexCount, chunk, x, localY, z);
+        }
+    }
+
+    private static boolean shouldRenderFluidSide(Chunk chunk, int x, int y, int z, int face, BlockType fluid) {
+        int nx = x;
+        int nz = z;
+        switch (face) {
+            case Block.FACE_NORTH -> nz--;
+            case Block.FACE_SOUTH -> nz++;
+            case Block.FACE_EAST -> nx++;
+            case Block.FACE_WEST -> nx--;
+            default -> {
+            }
+        }
+
+        BlockType neighbor = chunk.getBlockWithNeighbors(nx, y, nz);
+        if (isSameFluid(neighbor, fluid)) {
+            return false;
+        }
+        if (neighbor.isAir()) {
+            return true;
+        }
+        return neighbor.isTransparent() && !neighbor.occludesFace();
+    }
+
+    private static float cornerFluidHeight(Chunk chunk, int x, int y, int z, BlockType fluid, int dx, int dz) {
+        float total = 0.0f;
+        int count = 0;
+        float center = fluidHeightAt(chunk, x, y, z, fluid);
+        if (center > 0.0f) {
+            total += center;
+            count++;
+        }
+        float sideX = fluidHeightAt(chunk, x + dx, y, z, fluid);
+        if (sideX > 0.0f) {
+            total += sideX;
+            count++;
+        }
+        float sideZ = fluidHeightAt(chunk, x, y, z + dz, fluid);
+        if (sideZ > 0.0f) {
+            total += sideZ;
+            count++;
+        }
+        float diagonal = fluidHeightAt(chunk, x + dx, y, z + dz, fluid);
+        if (diagonal > 0.0f) {
+            total += diagonal;
+            count++;
+        }
+        return count == 0 ? FluidState.height(0) : total / count;
+    }
+
+    private static float fluidHeightAt(Chunk chunk, int x, int y, int z, BlockType fluid) {
+        BlockType type = chunk.getBlockWithNeighbors(x, y, z);
+        if (!isSameFluid(type, fluid)) {
+            return 0.0f;
+        }
+        if (isSameFluid(chunk.getBlockWithNeighbors(x, y + 1, z), fluid)) {
+            return 1.0f;
+        }
+        return FluidState.height(chunk.getBlockMetadataWithNeighbors(x, y, z));
+    }
+
+    private static boolean isSameFluid(BlockType a, BlockType b) {
+        return (a.isWater() && b.isWater()) || (a.isLava() && b.isLava());
+    }
+
+    private static void addCustomFace(BlockType type, int metadata, int face, float[] faceVerts,
+            float[] blockColor,
+            List<Float> positions, List<Float> texCoords, List<Float> normals, List<Float> colors,
+            List<Integer> indices, int[] vertexCount, Chunk chunk, int x, int localY, int z) {
+        for (float v : faceVerts) {
+            positions.add(v);
+        }
+
+        float[] faceTexCoords = Block.getFaceTexCoords(type, face, metadata);
+        for (float t : faceTexCoords) {
+            texCoords.add(t);
+        }
+
+        float[] faceNormals = Block.getFaceNormals(face);
+        for (float n : faceNormals) {
+            normals.add(n);
+        }
+
+        int lx = x;
+        int ly = localY;
+        int lz = z;
+        switch (face) {
+            case Block.FACE_TOP -> ly++;
+            case Block.FACE_BOTTOM -> ly--;
+            case Block.FACE_NORTH -> lz--;
+            case Block.FACE_SOUTH -> lz++;
+            case Block.FACE_EAST -> lx++;
+            case Block.FACE_WEST -> lx--;
+            default -> {
+            }
+        }
+
+        float faceShade = getFaceShade(face);
+        for (int v = 0; v < 4; v++) {
+            int vertexLight = getVertexLight(chunk, lx, ly, lz, face, v);
+            float brightness = faceShade * getLightBrightness(vertexLight);
+            colors.add(blockColor[0] * brightness);
+            colors.add(blockColor[1] * brightness);
+            colors.add(blockColor[2] * brightness);
+        }
+
+        int[] faceIndices = Block.getFaceIndices(vertexCount[0]);
+        for (int idx : faceIndices) {
+            indices.add(idx);
+        }
+        vertexCount[0] += 4;
     }
 
     private static <T> List<T> positionsFor(BlockRenderLayer layer, List<T> opaque, List<T> cutout, List<T> trans) {
@@ -368,7 +560,7 @@ public class ChunkMeshBuilder {
             int sz = lz + offset[2];
 
             BlockType block = chunk.getBlockWithNeighbors(sx, sy, sz);
-            if (block.isAir() || block.isTransparent() || !block.occludesFace()) {
+            if (!block.blocksAmbientOcclusion()) {
                 totalLight += chunk.getCombinedLightWithNeighbors(sx, sy, sz);
                 count++;
             }

@@ -21,6 +21,8 @@ public class GuiTexture {
     private static Texture craftingTexture;
     private static Texture containerTexture;
     private static Texture furnaceTexture;
+    private static Texture enchantTexture;
+    private static Texture alchemyTexture;
     private static Texture chestTexture;
     private static Texture largeChestTexture;
     private static Texture itemsTexture; // Items atlas (stick, tools, etc.)
@@ -41,6 +43,8 @@ public class GuiTexture {
         craftingTexture = new Texture("/textures/gui/crafting.png");
         containerTexture = new Texture("/textures/gui/container.png");
         furnaceTexture = new Texture("/textures/gui/furnace.png");
+        enchantTexture = new Texture("/textures/gui/enchant.png");
+        alchemyTexture = new Texture("/textures/gui/alchemy.png");
         chestTexture = new Texture("/textures/item/chest.png");
         largeChestTexture = new Texture("/textures/item/largechest.png");
         itemsTexture = new Texture("/textures/item/items.png");
@@ -75,6 +79,14 @@ public class GuiTexture {
 
     public static Texture getFurnaceTexture() {
         return furnaceTexture;
+    }
+
+    public static Texture getEnchantTexture() {
+        return enchantTexture;
+    }
+
+    public static Texture getAlchemyTexture() {
+        return alchemyTexture;
     }
 
     public static Texture getChestTexture() {
@@ -124,6 +136,26 @@ public class GuiTexture {
     // Hunger container (empty background) - (16, 27)
     public static float[] getHungerContainerUV() {
         return getUV(16, 27, 9, 9, ICONS_SIZE);
+    }
+
+    public static float[] getArmorContainerUV() {
+        return getUV(16, 9, 9, 9, ICONS_SIZE);
+    }
+
+    public static float[] getHalfArmorUV() {
+        return getUV(25, 9, 9, 9, ICONS_SIZE);
+    }
+
+    public static float[] getFullArmorUV() {
+        return getUV(34, 9, 9, 9, ICONS_SIZE);
+    }
+
+    public static float[] getXpBarBackgroundUV() {
+        return getUV(0, 64, 182, 5, ICONS_SIZE);
+    }
+
+    public static float[] getXpBarFillUV(int width) {
+        return getUV(0, 69, Math.max(0, Math.min(182, width)), 5, ICONS_SIZE);
     }
 
     // ========== gui.png UV coordinates (256x256) ==========
@@ -196,6 +228,10 @@ public class GuiTexture {
             containerTexture.cleanup();
         if (furnaceTexture != null)
             furnaceTexture.cleanup();
+        if (enchantTexture != null)
+            enchantTexture.cleanup();
+        if (alchemyTexture != null)
+            alchemyTexture.cleanup();
         if (chestTexture != null)
             chestTexture.cleanup();
         if (largeChestTexture != null)

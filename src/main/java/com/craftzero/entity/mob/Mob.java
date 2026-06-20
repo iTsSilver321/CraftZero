@@ -86,6 +86,26 @@ public abstract class Mob extends LivingEntity {
         checkDespawn();
     }
 
+    protected void tickWithoutAi() {
+        if (dead) {
+            prevX = x;
+            prevY = y;
+            prevZ = z;
+            deathTime++;
+            if (deathTime >= 20) {
+                remove();
+            }
+            return;
+        }
+
+        super.tick();
+
+        if (burnsInSunlight) {
+            checkSunlightBurn();
+        }
+        checkDespawn();
+    }
+
     /**
      * Check if mob should burn in sunlight.
      */
@@ -162,6 +182,9 @@ public abstract class Mob extends LivingEntity {
     protected void onDeath() {
         super.onDeath();
         dropLoot();
+        if (world != null && experienceValue > 0 && hasRecentPlayerDamage()) {
+            world.spawnExperience(x, y + height * 0.5f, z, experienceValue);
+        }
     }
 
     /**
@@ -244,6 +267,7 @@ public abstract class Mob extends LivingEntity {
         ENDERMAN,
         SILVERFISH,
         GHAST,
-        BLAZE
+        BLAZE,
+        DRAGON
     }
 }

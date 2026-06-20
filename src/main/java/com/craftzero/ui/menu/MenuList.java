@@ -24,6 +24,10 @@ public final class MenuList<T> implements MenuComponent {
     private int scrollOffset;
     private boolean visible = true;
     private boolean enabled = true;
+    private boolean mouseWasDown;
+    private int lastClickIndex = -1;
+    private long lastClickNanos;
+    private static final long DOUBLE_CLICK_NANOS = 350_000_000L;
 
     public MenuList(String id, Rect bounds, int rowHeight, Collection<T> items, Function<T, String> labelProvider) {
         if (rowHeight <= 0) {
@@ -239,7 +243,18 @@ public final class MenuList<T> implements MenuComponent {
         if (index.isEmpty()) {
             return false;
         }
-        setSelectedIndex(index.get());
+        int clickedIndex = index.get();
+        long now = System.nanoTime();
+        boolean doubleClick = clickedIndex == lastClickIndex && now - lastClickNanos <= DOUBLE_CLICK_NANOS;
+        setSelectedIndex(clickedIndex);
+        if (doubleClick) {
+            selectedItem().ifPresent(onActivated);
+            lastClickIndex = -1;
+            lastClickNanos = 0L;
+        } else {
+            lastClickIndex = clickedIndex;
+            lastClickNanos = now;
+        }
         return true;
     }
 
@@ -276,8 +291,11 @@ public final class MenuList<T> implements MenuComponent {
             scroll(1);
         }
         if (input.leftPressed()) {
-            mousePressed(mouseX, mouseY, MouseButton.LEFT);
+            if (!mouseWasDown) {
+                mousePressed(mouseX, mouseY, MouseButton.LEFT);
+            }
         }
+        mouseWasDown = input.leftPressed();
         if (input.pressedKeys() != null) {
             for (int key : input.pressedKeys()) {
                 keyPressed(key);

@@ -72,6 +72,39 @@ class OverworldGenerationSprintTest {
     }
 
     @Test
+    @DisplayName("Ice should generate only on frozen biome sea-level water")
+    void iceOnlyGeneratesInFrozenWaterBiomes() {
+        ReleaseOneWorldGenerator generator = new ReleaseOneWorldGenerator(86420L, Dimension.OVERWORLD);
+        int checkedNonFrozenWater = 0;
+        int checkedFrozenWater = 0;
+
+        for (int x = -768; x <= 768; x += 8) {
+            for (int z = -768; z <= 768; z += 8) {
+                BiomeType biome = generator.getBiome(x, z);
+                if (generator.terrainTopY(x, z) >= ReleaseOneWorldGenerator.SEA_LEVEL - 2) {
+                    continue;
+                }
+                BlockType seaBlock = generator.baseBlockAt(x, ReleaseOneWorldGenerator.SEA_LEVEL, z);
+                if (biome.canFreezeWater()) {
+                    checkedFrozenWater++;
+                    assertSame(BlockType.ICE, seaBlock);
+                } else {
+                    checkedNonFrozenWater++;
+                    assertSame(BlockType.WATER, seaBlock,
+                            "Non-frozen biome " + biome + " should not create sea-level ice");
+                }
+            }
+        }
+
+        assertTrue(checkedNonFrozenWater > 0, "Expected at least one ordinary water column");
+        assertTrue(checkedFrozenWater > 0, "Expected at least one frozen water column");
+        assertFalse(BiomeType.OCEAN.canFreezeWater());
+        assertFalse(BiomeType.RIVER.canFreezeWater());
+        assertFalse(BiomeType.TAIGA.canFreezeWater());
+        assertFalse(BiomeType.PLAINS.canFreezeWater());
+    }
+
+    @Test
     @DisplayName("Generated ocean columns should keep solid seafloors below water")
     void cavesDoNotPunctureOceanSeafloor() {
         ReleaseOneWorldGenerator generator = new ReleaseOneWorldGenerator(13579L, Dimension.OVERWORLD);

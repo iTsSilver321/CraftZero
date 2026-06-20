@@ -135,11 +135,22 @@ public class RavineGenerator {
             return true;
         }
         if (y <= SEA_LEVEL) {
-            for (int dy = 1; dy <= 3 && y + dy < Chunk.HEIGHT; dy++) {
-                BlockType above = chunk.getBlock(localX, y + dy, localZ);
-                if (above.isWater() || above == BlockType.ICE) {
-                    return true;
-                }
+            if (hasWaterAbove(chunk, localX, y, localZ)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasWaterAbove(Chunk chunk, int localX, int y, int localZ) {
+        int maxY = Math.min(Chunk.HEIGHT - 1, SEA_LEVEL + 4);
+        for (int checkY = y + 1; checkY <= maxY; checkY++) {
+            BlockType above = chunk.getBlock(localX, checkY, localZ);
+            if (above.isWater() || above == BlockType.ICE) {
+                return true;
+            }
+            if (above.isSolid() && checkY > SEA_LEVEL) {
+                return false;
             }
         }
         return false;

@@ -57,6 +57,9 @@ public class DroppedItemRenderer {
         shader.createUniform("textureSampler");
         shader.createUniform("fogEnabled");
         shader.createUniform("fogDensity");
+        shader.createUniform("fogMode");
+        shader.createUniform("fogStart");
+        shader.createUniform("fogEnd");
         shader.createUniform("fogColor");
         shader.createUniform("ambientLight");
         shader.createUniform("lightDirection");
@@ -149,6 +152,10 @@ public class DroppedItemRenderer {
         // Fog settings from day cycle
         shader.setUniform("fogEnabled", true);
         shader.setUniform("fogDensity", 0.007f);
+        shader.setUniform("fogMode", 1);
+        float fogEnd = Math.max(32.0f, world.getRenderDistanceChunks() * 16.0f);
+        shader.setUniform("fogStart", fogEnd * 0.70f);
+        shader.setUniform("fogEnd", fogEnd);
         shader.setUniform("fogColor", dayCycle.getFogColor());
 
         // Base lighting from day cycle

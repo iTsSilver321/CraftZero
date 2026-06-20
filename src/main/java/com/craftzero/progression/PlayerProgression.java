@@ -57,6 +57,10 @@ public class PlayerProgression {
         this.score = Math.max(0, score);
     }
 
+    public void clearExperience() {
+        this.totalExperience = 0;
+    }
+
     public int deathDropExperience() {
         return Math.min(100, getLevel() * 7);
     }

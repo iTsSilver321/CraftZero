@@ -17,6 +17,9 @@ uniform mat4 modelMatrix;
 
 uniform bool fogEnabled;
 uniform float fogDensity;
+uniform int fogMode;
+uniform float fogStart;
+uniform float fogEnd;
 
 void main() {
     vec4 worldPosition = modelMatrix * vec4(aPos, 1.0);
@@ -31,7 +34,11 @@ void main() {
     // Calculate fog visibility
     if (fogEnabled) {
         float distance = length(positionRelativeToCam.xyz);
-        visibility = exp(-pow(distance * fogDensity, 2.0));
+        if (fogMode == 1) {
+            visibility = (fogEnd - distance) / max(fogEnd - fogStart, 0.001);
+        } else {
+            visibility = exp(-pow(distance * fogDensity, 2.0));
+        }
         visibility = clamp(visibility, 0.0, 1.0);
     } else {
         visibility = 1.0;

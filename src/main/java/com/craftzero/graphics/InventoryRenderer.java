@@ -4,12 +4,17 @@ import com.craftzero.engine.Input;
 import com.craftzero.inventory.Inventory;
 import com.craftzero.inventory.ItemStack;
 import com.craftzero.inventory.ItemType;
+import com.craftzero.progression.EnchantmentInstance;
+import com.craftzero.progression.PotionEffectResolver;
 import com.craftzero.ui.InventoryScreen;
 import com.craftzero.ui.CraftingTableScreen;
 import com.craftzero.ui.ChestScreen;
+import com.craftzero.ui.BrewingStandScreen;
+import com.craftzero.ui.EnchantingTableScreen;
 import com.craftzero.ui.FurnaceScreen;
 import com.craftzero.ui.SignEditScreen;
 import com.craftzero.ui.menu.CreativeInventoryScreen;
+import com.craftzero.world.tile.BrewingStandTileEntity;
 import com.craftzero.world.tile.FurnaceTileEntity;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryUtil;
@@ -146,6 +151,8 @@ public class InventoryRenderer {
     private Texture craftingTexture; // crafting.png
     private Texture containerTexture; // container.png
     private Texture furnaceTexture; // furnace.png
+    private Texture enchantTexture; // enchant.png
+    private Texture alchemyTexture; // alchemy.png
     private Texture itemsTexture; // items.png for sticks and tools
 
     public void setGuiTextures(Texture inventory, Texture crafting) {
@@ -160,6 +167,11 @@ public class InventoryRenderer {
     public void setContainerTextures(Texture container, Texture furnace) {
         this.containerTexture = container;
         this.furnaceTexture = furnace;
+    }
+
+    public void setProgressionTextures(Texture enchant, Texture alchemy) {
+        this.enchantTexture = enchant;
+        this.alchemyTexture = alchemy;
     }
 
     public void setItemsTexture(Texture items) {
@@ -434,8 +446,8 @@ public class InventoryRenderer {
         drawCreativeScrollbar(screen, winX, winY, scale);
 
         for (int slot = 0; slot < CreativeInventoryScreen.GRID_SLOT_COUNT; slot++) {
-            ItemType type = screen.itemAtVisibleSlot(slot);
-            if (type == null) {
+            ItemStack stack = screen.stackAtVisibleSlot(slot);
+            if (stack == null) {
                 continue;
             }
             int col = slot % CreativeInventoryScreen.GRID_COLS;
@@ -444,7 +456,7 @@ public class InventoryRenderer {
                     * scale;
             int slotY = winY + (CreativeInventoryScreen.TEX_GRID_Y + row * CreativeInventoryScreen.TEX_SLOT_SIZE)
                     * scale;
-            drawItemIconAt(slotX + itemOffset, slotY + itemOffset, itemSize, type);
+            drawScreenItem(stack, slotX + itemOffset, slotY + itemOffset, itemSize);
             drawHoverIfNeeded(screen.hoveredCreativeSlot(), slot, slotX, slotY,
                     CreativeInventoryScreen.TEX_SLOT_SIZE * scale);
         }
@@ -472,10 +484,7 @@ public class InventoryRenderer {
         if (cursorItem != null && !cursorItem.isEmpty()) {
             int mx = (int) Input.getMouseX();
             int my = (int) Input.getMouseY();
-            drawItemIconAt(mx - itemSize / 2, my - itemSize / 2, itemSize, cursorItem.getType());
-            if (cursorItem.getCount() > 1) {
-                drawStackCountAt(mx - itemSize / 2, my - itemSize / 2, itemSize, cursorItem.getCount());
-            }
+            drawScreenItem(cursorItem, mx - itemSize / 2, my - itemSize / 2, itemSize);
         }
 
         ItemStack hovered = screen.hoveredStack();
@@ -507,7 +516,7 @@ public class InventoryRenderer {
      */
     private void drawItemIconAt(int x, int y, int size, ItemType type) {
         if (atlas != null) {
-            if (type.isBlockItem() && !type.usesItemTexture()) {
+            if (type.getRenderProfile().modelKind() == com.craftzero.inventory.ItemRenderProfile.ModelKind.BLOCK) {
                 // Same as hotbar - use full size
                 drawIsometricBlockIcon(x, y, size, type);
             } else {
@@ -983,6 +992,193 @@ public class InventoryRenderer {
         }
     }
 
+    public void renderBrewingStand(BrewingStandScreen screen) {
+        if (screen == null || !screen.isOpen()) {
+            return;
+        }
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_CULL_FACE);
+
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        shader.bind();
+        shader.setUniform("projection", ortho);
+
+        int winX = screen.getWindowX();
+        int winY = screen.getWindowY();
+        float scale = BrewingStandScreen.GUI_SCALE;
+        drawRect(0, 0, windowWidth, windowHeight, 0.0f, 0.0f, 0.0f, 0.5f);
+        if (alchemyTexture != null) {
+            shader.unbind();
+            alchemyTexture.bind(0);
+            texturedShader.bind();
+            texturedShader.setUniform("projection", ortho);
+            texturedShader.setUniform("textureSampler", 0);
+            texturedShader.setUniform("brightness", 1.0f);
+            drawTexturedQuad(winX, winY, winX + BrewingStandScreen.WINDOW_WIDTH, winY,
+                    winX + BrewingStandScreen.WINDOW_WIDTH, winY + BrewingStandScreen.WINDOW_HEIGHT,
+                    winX, winY + BrewingStandScreen.WINDOW_HEIGHT,
+                    0.0f, 0.0f, 176.0f / 256.0f, 166.0f / 256.0f);
+            texturedShader.unbind();
+            alchemyTexture.unbind();
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+
+        renderBrewingProgress(screen, winX, winY, scale);
+        int itemSize = BrewingStandScreen.ITEM_SIZE;
+        int itemOffset = (int) ((BrewingStandScreen.TEX_SLOT_SIZE - BrewingStandScreen.TEX_ITEM_SIZE) / 2 * scale);
+        renderBrewingSlot(screen, BrewingStandTileEntity.SLOT_INGREDIENT,
+                BrewingStandScreen.TEX_INGREDIENT_X, BrewingStandScreen.TEX_INGREDIENT_Y,
+                winX, winY, itemOffset, itemSize, scale);
+        renderBrewingSlot(screen, BrewingStandTileEntity.SLOT_BOTTLE_0,
+                BrewingStandScreen.TEX_BOTTLE_0_X, BrewingStandScreen.TEX_BOTTLE_0_Y,
+                winX, winY, itemOffset, itemSize, scale);
+        renderBrewingSlot(screen, BrewingStandTileEntity.SLOT_BOTTLE_1,
+                BrewingStandScreen.TEX_BOTTLE_1_X, BrewingStandScreen.TEX_BOTTLE_1_Y,
+                winX, winY, itemOffset, itemSize, scale);
+        renderBrewingSlot(screen, BrewingStandTileEntity.SLOT_BOTTLE_2,
+                BrewingStandScreen.TEX_BOTTLE_2_X, BrewingStandScreen.TEX_BOTTLE_2_Y,
+                winX, winY, itemOffset, itemSize, scale);
+        for (int row = 0; row < BrewingStandScreen.MAIN_ROWS; row++) {
+            for (int col = 0; col < BrewingStandScreen.COLS; col++) {
+                int slot = BrewingStandTileEntity.SIZE + row * BrewingStandScreen.COLS + col;
+                renderBrewingSlot(screen, slot,
+                        BrewingStandScreen.TEX_MAIN_INV_X + col * BrewingStandScreen.TEX_SLOT_SIZE,
+                        BrewingStandScreen.TEX_MAIN_INV_Y + row * BrewingStandScreen.TEX_SLOT_SIZE,
+                        winX, winY, itemOffset, itemSize, scale);
+            }
+        }
+        int hotbarBase = BrewingStandTileEntity.SIZE + Inventory.MAIN_SIZE;
+        for (int col = 0; col < BrewingStandScreen.COLS; col++) {
+            renderBrewingSlot(screen, hotbarBase + col,
+                    BrewingStandScreen.TEX_HOTBAR_X + col * BrewingStandScreen.TEX_SLOT_SIZE,
+                    BrewingStandScreen.TEX_HOTBAR_Y,
+                    winX, winY, itemOffset, itemSize, scale);
+        }
+        renderCursorAndTooltip(screen.getInventory(), screen.getHoveredSlot(), i -> screen.getItemInSlot(i), itemSize);
+
+        shader.unbind();
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_CULL_FACE);
+    }
+
+    private void renderBrewingSlot(BrewingStandScreen screen, int slot, int texX, int texY,
+            int winX, int winY, int itemOffset, int itemSize, float scale) {
+        int x = winX + (int) (texX * scale) + itemOffset;
+        int y = winY + (int) (texY * scale) + itemOffset;
+        drawScreenItem(screen.getItemInSlot(slot), x, y, itemSize);
+        drawHoverIfNeeded(screen.getHoveredSlot(), slot,
+                winX + (int) (texX * scale), winY + (int) (texY * scale), BrewingStandScreen.SLOT_SIZE);
+    }
+
+    private void renderBrewingProgress(BrewingStandScreen screen, int winX, int winY, float scale) {
+        BrewingStandTileEntity brewingStand = screen.getBrewingStand();
+        if (brewingStand == null || brewingStand.getBrewTime() <= 0) {
+            return;
+        }
+        int height = Math.round(28.0f * brewingStand.getBrewTime() / BrewingStandTileEntity.BREW_TIME_TOTAL);
+        drawRect(winX + (int) (97 * scale), winY + (int) ((16 + 28 - height) * scale),
+                (int) (9 * scale), (int) (height * scale),
+                0.45f, 0.28f, 0.95f, 1.0f);
+    }
+
+    public void renderEnchantingTable(EnchantingTableScreen screen) {
+        if (screen == null || !screen.isOpen()) {
+            return;
+        }
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_CULL_FACE);
+
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        shader.bind();
+        shader.setUniform("projection", ortho);
+
+        int winX = screen.getWindowX();
+        int winY = screen.getWindowY();
+        float scale = EnchantingTableScreen.GUI_SCALE;
+        drawRect(0, 0, windowWidth, windowHeight, 0.0f, 0.0f, 0.0f, 0.5f);
+        if (enchantTexture != null) {
+            shader.unbind();
+            enchantTexture.bind(0);
+            texturedShader.bind();
+            texturedShader.setUniform("projection", ortho);
+            texturedShader.setUniform("textureSampler", 0);
+            texturedShader.setUniform("brightness", 1.0f);
+            drawTexturedQuad(winX, winY, winX + EnchantingTableScreen.WINDOW_WIDTH, winY,
+                    winX + EnchantingTableScreen.WINDOW_WIDTH, winY + EnchantingTableScreen.WINDOW_HEIGHT,
+                    winX, winY + EnchantingTableScreen.WINDOW_HEIGHT,
+                    0.0f, 0.0f, 176.0f / 256.0f, 166.0f / 256.0f);
+            texturedShader.unbind();
+            enchantTexture.unbind();
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+
+        renderEnchantOffers(screen, winX, winY, scale);
+        int itemSize = EnchantingTableScreen.ITEM_SIZE;
+        int itemOffset = (int) ((EnchantingTableScreen.TEX_SLOT_SIZE - EnchantingTableScreen.TEX_ITEM_SIZE) / 2 * scale);
+        renderEnchantSlot(screen, 0, EnchantingTableScreen.TEX_TABLE_SLOT_X, EnchantingTableScreen.TEX_TABLE_SLOT_Y,
+                winX, winY, itemOffset, itemSize, scale);
+        for (int row = 0; row < EnchantingTableScreen.MAIN_ROWS; row++) {
+            for (int col = 0; col < EnchantingTableScreen.COLS; col++) {
+                int slot = 1 + row * EnchantingTableScreen.COLS + col;
+                renderEnchantSlot(screen, slot,
+                        EnchantingTableScreen.TEX_MAIN_INV_X + col * EnchantingTableScreen.TEX_SLOT_SIZE,
+                        EnchantingTableScreen.TEX_MAIN_INV_Y + row * EnchantingTableScreen.TEX_SLOT_SIZE,
+                        winX, winY, itemOffset, itemSize, scale);
+            }
+        }
+        int hotbarBase = 1 + Inventory.MAIN_SIZE;
+        for (int col = 0; col < EnchantingTableScreen.COLS; col++) {
+            renderEnchantSlot(screen, hotbarBase + col,
+                    EnchantingTableScreen.TEX_HOTBAR_X + col * EnchantingTableScreen.TEX_SLOT_SIZE,
+                    EnchantingTableScreen.TEX_HOTBAR_Y,
+                    winX, winY, itemOffset, itemSize, scale);
+        }
+        renderCursorAndTooltip(screen.getInventory(), screen.getHoveredSlot(), i -> screen.getItemInSlot(i), itemSize);
+
+        shader.unbind();
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_CULL_FACE);
+    }
+
+    private void renderEnchantOffers(EnchantingTableScreen screen, int winX, int winY, float scale) {
+        int[] offers = screen.getOffers();
+        int level = screen.getProgression() == null ? 0 : screen.getProgression().getLevel();
+        for (int i = 0; i < offers.length; i++) {
+            int x = winX + (int) (EnchantingTableScreen.TEX_OFFER_X * scale);
+            int y = winY + (int) ((EnchantingTableScreen.TEX_OFFER_Y + i * EnchantingTableScreen.TEX_OFFER_H) * scale);
+            int w = (int) (EnchantingTableScreen.TEX_OFFER_W * scale);
+            int h = (int) (EnchantingTableScreen.TEX_OFFER_H * scale);
+            boolean enabled = offers[i] > 0 && level >= offers[i];
+            float shade = enabled ? 0.78f : 0.36f;
+            drawRect(x, y, w, h, shade * 0.35f, shade * 0.28f, shade * 0.12f, 0.78f);
+            if (screen.getHoveredOffer() == i) {
+                drawRect(x + 1, y + 1, w - 2, h - 2, 1.0f, 1.0f, 1.0f, 0.18f);
+            }
+            if (textRenderer != null && offers[i] > 0) {
+                String text = String.valueOf(offers[i]);
+                float textScale = Math.max(1.0f, scale * 0.55f);
+                float[] color = enabled ? new float[] { 0.25f, 1.0f, 0.25f, 1.0f }
+                        : new float[] { 0.9f, 0.2f, 0.2f, 1.0f };
+                textRenderer.drawText(text, x + w - 18 * (int) scale, y + 5 * (int) scale, textScale, color);
+            }
+        }
+    }
+
+    private void renderEnchantSlot(EnchantingTableScreen screen, int slot, int texX, int texY,
+            int winX, int winY, int itemOffset, int itemSize, float scale) {
+        int x = winX + (int) (texX * scale) + itemOffset;
+        int y = winY + (int) (texY * scale) + itemOffset;
+        drawScreenItem(screen.getItemInSlot(slot), x, y, itemSize);
+        drawHoverIfNeeded(screen.getHoveredSlot(), slot,
+                winX + (int) (texX * scale), winY + (int) (texY * scale), EnchantingTableScreen.SLOT_SIZE);
+    }
+
     private void drawScreenItem(ItemStack item, int x, int y, int itemSize) {
         if (item != null && !item.isEmpty()) {
             drawItemIconAt(x, y, itemSize, item.getType());
@@ -1085,23 +1281,21 @@ public class InventoryRenderer {
         if (textRenderer == null)
             return;
 
-        String rawName = item.getType().toString();
-        // Format name
-        String[] words = rawName.split("_");
-        StringBuilder sb = new StringBuilder();
-        for (String word : words) {
-            if (sb.length() > 0)
-                sb.append(" ");
-            sb.append(word.charAt(0)).append(word.substring(1).toLowerCase());
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        lines.add(displayName(item));
+        for (EnchantmentInstance enchantment : item.getEnchantments()) {
+            lines.add(formatEnchantment(enchantment));
         }
-        String name = sb.toString();
 
         float scale = 1.5f; // Larger for Minecraft bitmap font
-        int textWidth = textRenderer.getStringWidth(name, scale);
+        int textWidth = 0;
+        for (String line : lines) {
+            textWidth = Math.max(textWidth, textRenderer.getStringWidth(line, scale));
+        }
         int padding = 4;
 
         // Use taller box for comfort (Size 32 scaled to 16px)
-        int boxHeight = 24;
+        int boxHeight = 10 + lines.size() * 16;
         int boxWidth = textWidth + padding * 2;
 
         int boxX = mouseX + 10;
@@ -1113,9 +1307,45 @@ public class InventoryRenderer {
         // Draw Border
         drawRectOutline(boxX, boxY, boxWidth, boxHeight, 0.3f, 0.0f, 0.8f, 1.0f);
 
-        // Draw Text - align vertically inside the box
-        // Position text inside the box (positive offset moves it down)
-        textRenderer.drawText(name, boxX + padding, boxY + 4, scale, new float[] { 1f, 1f, 1f, 1f });
+        for (int i = 0; i < lines.size(); i++) {
+            float[] color = i == 0 ? new float[] { 1f, 1f, 1f, 1f }
+                    : new float[] { 0.65f, 0.55f, 1.0f, 1f };
+            textRenderer.drawText(lines.get(i), boxX + padding, boxY + 4 + i * 16, scale, color);
+        }
+    }
+
+    private String displayName(ItemStack item) {
+        if (item.getCustomName() != null && !item.getCustomName().isBlank()) {
+            return item.getCustomName();
+        }
+        if (item.getType() == ItemType.POTION) {
+            return PotionEffectResolver.displayName(item.getPotionData());
+        }
+        return item.getType().getDisplayName();
+    }
+
+    private String formatEnchantment(EnchantmentInstance enchantment) {
+        String[] words = enchantment.type().name().split("_");
+        StringBuilder sb = new StringBuilder();
+        for (String word : words) {
+            if (sb.length() > 0) {
+                sb.append(' ');
+            }
+            sb.append(word.charAt(0)).append(word.substring(1).toLowerCase());
+        }
+        sb.append(' ').append(roman(enchantment.level()));
+        return sb.toString();
+    }
+
+    private String roman(int value) {
+        return switch (value) {
+            case 1 -> "I";
+            case 2 -> "II";
+            case 3 -> "III";
+            case 4 -> "IV";
+            case 5 -> "V";
+            default -> String.valueOf(value);
+        };
     }
 
     /**
@@ -1195,7 +1425,7 @@ public class InventoryRenderer {
         // If atlas is available, draw textured icon
         if (atlas != null) {
             int size = SLOT_SIZE - 8;
-            if (type.isBlockItem() && !type.usesItemTexture()) {
+            if (type.getRenderProfile().modelKind() == com.craftzero.inventory.ItemRenderProfile.ModelKind.BLOCK) {
                 // Blocks render as isometric 3D cubes
                 drawIsometricBlockIcon(x + 4, y + 4, size, type);
             } else {

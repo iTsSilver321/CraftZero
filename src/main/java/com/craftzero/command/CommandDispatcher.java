@@ -34,6 +34,7 @@ public final class CommandDispatcher {
         register("msg", "Sends a private message.", this::tell, "tell", "w");
         register("say", "Broadcasts a server-style message.", this::say);
         register("seed", "Prints the world seed.", this::seed);
+        register("locate", "Finds the nearest generated structure.", this::locate);
         register("time", "Changes or queries world time.", this::time);
         register("gamemode", "Changes the current game mode.", this::gamemode);
         register("difficulty", "Changes the current difficulty.", this::difficulty);
@@ -48,6 +49,7 @@ public final class CommandDispatcher {
         register("save-all", "Saves the world.", this::saveAll, "save");
         register("save-on", "Enables autosaving.", this::saveOn);
         register("save-off", "Disables autosaving.", this::saveOff);
+        register("regenchunks", "Regenerates unmodified chunks around you.", this::regenChunks);
         register("stop", "Stops the local host.", this::stop);
         for (String name : ADMIN_PLACEHOLDERS) {
             register(name, "Manages server administration state.",
@@ -124,10 +126,12 @@ public final class CommandDispatcher {
             case "difficulty" -> matching(optionNames(Difficulty.values()), current);
             case "time" -> timeSuggestions(tokens, argIndex, current);
             case "weather" -> matching(List.of("clear", "rain", "thunder"), current);
+            case "locate" -> matching(List.of("stronghold", "fortress", "nether_fortress"), current);
             case "give" -> giveSuggestions(context, argIndex, current);
             case "tp", "kill", "clear", "spawnpoint", "msg" -> context == null ? List.of()
                     : matching(context.playerNames(), current);
             case "xp" -> matching(List.of("1", "5", "10", "30", "100", "1000"), current);
+            case "regenchunks" -> matching(List.of("0", "1", "2", "3", "4"), current);
             case "whitelist" -> matching(List.of("on", "off", "list", "add", "remove", "reload"), current);
             case "banlist" -> matching(List.of("players", "ips"), current);
             default -> List.of();
@@ -202,6 +206,22 @@ public final class CommandDispatcher {
 
     private void seed(List<String> args, Context context) {
         context.feedback("Seed: " + context.seed());
+    }
+
+    private void locate(List<String> args, Context context) {
+        require(args, 1, "Usage: /locate <stronghold|fortress>");
+        String type = args.get(0).toLowerCase(Locale.ROOT);
+        String canonical = switch (type) {
+            case "stronghold" -> "stronghold";
+            case "fortress", "nether_fortress" -> "nether_fortress";
+            default -> throw usage("Unknown structure: " + args.get(0));
+        };
+        StructureResult result = context.locateStructure(canonical);
+        if (result == null) {
+            context.feedback("Could not locate " + canonical + " in this dimension.");
+            return;
+        }
+        context.feedback("Nearest " + canonical + " is at " + result.x() + ", " + result.y() + ", " + result.z());
     }
 
     private void time(List<String> args, Context context) {
@@ -349,6 +369,13 @@ public final class CommandDispatcher {
     private void saveOff(List<String> args, Context context) {
         context.setSavingEnabled(false);
         context.feedback("Disabled autosaving.");
+    }
+
+    private void regenChunks(List<String> args, Context context) {
+        int radius = args.isEmpty() ? 1 : parseInt(args.get(0), 1);
+        int regenerated = context.regenerateUnmodifiedChunks(Math.max(0, Math.min(4, radius)));
+        context.feedback("Regenerated " + regenerated + " unmodified chunk"
+                + (regenerated == 1 ? "" : "s") + " within radius " + Math.max(0, Math.min(4, radius)) + ".");
     }
 
     private void stop(List<String> args, Context context) {
@@ -600,5 +627,16 @@ public final class CommandDispatcher {
         void broadcast(String message);
 
         String runServerAdminCommand(String command, List<String> args);
+
+        default int regenerateUnmodifiedChunks(int radiusChunks) {
+            return 0;
+        }
+
+        default StructureResult locateStructure(String type) {
+            return null;
+        }
+    }
+
+    public record StructureResult(int x, int y, int z) {
     }
 }

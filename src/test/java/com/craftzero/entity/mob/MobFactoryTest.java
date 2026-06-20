@@ -39,11 +39,11 @@ class MobFactoryTest {
         assertTrue(implemented.contains(MobDefinition.ZOMBIE_PIGMAN));
         assertTrue(implemented.contains(MobDefinition.BLAZE));
         assertTrue(implemented.contains(MobDefinition.MAGMA_CUBE));
+        assertTrue(implemented.contains(MobDefinition.ENDER_DRAGON));
 
         assertNull(MobFactory.create(MobDefinition.WOLF));
         assertNull(MobFactory.create(MobDefinition.MOOSHROOM));
         assertNull(MobFactory.create(MobDefinition.VILLAGER));
         assertNull(MobFactory.create(MobDefinition.SNOW_GOLEM));
-        assertNull(MobFactory.create(MobDefinition.ENDER_DRAGON));
     }
 }

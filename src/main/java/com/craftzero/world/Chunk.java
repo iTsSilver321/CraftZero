@@ -117,8 +117,12 @@ public class Chunk {
             return;
         }
         int index = getIndex(x, y, z);
+        int clampedMetadata = Math.max(0, Math.min(255, metadataValue));
+        if (blocks[index] == (short) type.getId() && (metadata[index] & 0xFF) == clampedMetadata) {
+            return;
+        }
         blocks[index] = (short) type.getId();
-        metadata[index] = (byte) Math.max(0, Math.min(255, metadataValue));
+        metadata[index] = (byte) clampedMetadata;
         dirty = true;
         modified = true;
         modificationVersion++;

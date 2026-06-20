@@ -18,7 +18,7 @@ public class SquidModel {
             tentacles[i] = new ModelPart()
                     .setTextureOffset(48, 0)
                     .setPivot(px, 4, pz)
-                    .addBox(-1, -16, -1, 2, 16, 2);
+                    .addBox(-1, 0, -1, 2, 16, 2);
             root.addChild(tentacles[i]);
         }
     }
@@ -28,9 +28,14 @@ public class SquidModel {
     }
 
     public void animate(float ageInTicks) {
+        animate(ageInTicks, (float) Math.sin(ageInTicks * 0.18f) * 0.45f + 0.35f);
+    }
+
+    public void animate(float ageInTicks, float tentacleAngle) {
         for (int i = 0; i < tentacles.length; i++) {
-            float wave = (float) Math.sin(ageInTicks * 0.2f + i * 0.7f) * 0.35f;
-            tentacles[i].setRotation(wave, 0, 0);
+            double angle = Math.PI * 2.0 * i / tentacles.length;
+            float wave = tentacleAngle + (float) Math.sin(ageInTicks * 0.14f + i * 0.7f) * 0.12f;
+            tentacles[i].setRotation(wave, (float) angle, 0);
         }
     }
 

@@ -75,6 +75,9 @@ class MenuPrimitivesTest {
         assertTrue(list.mousePressed(10, 10, MouseButton.LEFT));
         assertEquals(1, list.selectedIndex());
         assertEquals("two", selected.get());
+        assertTrue(list.mousePressed(10, 10, MouseButton.LEFT));
+        assertEquals("two", activated.get());
+        activated.set(null);
 
         assertTrue(list.keyPressed(MenuKeys.DOWN));
         assertEquals(2, list.selectedIndex());

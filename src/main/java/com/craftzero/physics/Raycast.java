@@ -25,6 +25,7 @@ public class Raycast {
         public final int face; // 0=top, 1=bottom, 2=north, 3=south, 4=east, 5=west
         public final float distance;
         public final AABB selectionBox;
+        public final Vector3f hitPoint;
 
         public RaycastResult(boolean hit, Vector3i blockPos, Vector3i previousBlockPos, int face, float distance) {
             this(hit, blockPos, previousBlockPos, face, distance, null);
@@ -32,12 +33,18 @@ public class Raycast {
 
         public RaycastResult(boolean hit, Vector3i blockPos, Vector3i previousBlockPos, int face, float distance,
                 AABB selectionBox) {
+            this(hit, blockPos, previousBlockPos, face, distance, selectionBox, null);
+        }
+
+        public RaycastResult(boolean hit, Vector3i blockPos, Vector3i previousBlockPos, int face, float distance,
+                AABB selectionBox, Vector3f hitPoint) {
             this.hit = hit;
             this.blockPos = blockPos;
             this.previousBlockPos = previousBlockPos;
             this.face = face;
             this.distance = distance;
             this.selectionBox = selectionBox;
+            this.hitPoint = hitPoint;
         }
 
         public static RaycastResult miss() {
@@ -114,7 +121,11 @@ public class Raycast {
                         new Vector3i(prevX, prevY, prevZ),
                         blockHit.face,
                         blockHit.distance,
-                        blockHit.box);
+                        blockHit.box,
+                        new Vector3f(
+                                origin.x + direction.x * blockHit.distance,
+                                origin.y + direction.y * blockHit.distance,
+                                origin.z + direction.z * blockHit.distance));
             }
 
             // Save previous position

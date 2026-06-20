@@ -2,7 +2,9 @@ package com.craftzero.main;
 
 import com.craftzero.engine.Input;
 import com.craftzero.combat.DamageSource;
+import com.craftzero.entity.ArrowEntity;
 import com.craftzero.entity.DroppedItem;
+import com.craftzero.entity.EyeOfEnderEntity;
 import com.craftzero.entity.LivingEntity;
 import com.craftzero.graphics.Camera;
 import com.craftzero.inventory.ItemStack;
@@ -12,19 +14,29 @@ import com.craftzero.physics.AABB;
 import com.craftzero.physics.Raycast;
 import com.craftzero.progression.ArmorMaterial;
 import com.craftzero.progression.ArmorSlot;
+import com.craftzero.progression.ArmorCalculator;
+import com.craftzero.progression.EnchantmentResolver;
+import com.craftzero.progression.EnchantmentType;
+import com.craftzero.progression.PotionData;
+import com.craftzero.progression.PotionEffectResolver;
 import com.craftzero.progression.StatusEffectInstance;
 import com.craftzero.progression.StatusEffectType;
 import com.craftzero.world.Block;
 import com.craftzero.world.BlockType;
 import com.craftzero.world.BlockShape;
+import com.craftzero.world.StructureGenerator;
+import com.craftzero.world.StructureType;
 
 import com.craftzero.world.World;
 import com.craftzero.world.tile.BlockPos;
+import com.craftzero.world.tile.JukeboxTileEntity;
+import com.craftzero.world.tile.TileEntity;
 import org.joml.Vector3f;
 import org.joml.Vector3i;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 import static org.lwjgl.glfw.GLFW.*;
 
@@ -111,6 +123,8 @@ public class Player {
     private boolean wantsCraftingTable; // Flag for opening crafting table
     private Vector3i requestedChestPos;
     private Vector3i requestedFurnacePos;
+    private Vector3i requestedBrewingStandPos;
+    private Vector3i requestedEnchantingTablePos;
     private Vector3i requestedSignEditPos;
     private Vector3i requestedBedUsePos;
 
@@ -159,6 +173,7 @@ public class Player {
     private float prevSlotSwitchProgress = 1.0f;
     private boolean isRetracting = false; // true = going down, false = coming up
     private ItemType lastHeldItemType = null; // Track for inventory changes
+    private final Random random = new Random();
 
     // Death state
     private int deathTime = 0; // Ticks since death (for death animation)
@@ -318,6 +333,7 @@ public class Player {
         } else {
             speed = WALK_SPEED;
         }
+        speed *= stats.getMovementSpeedMultiplier();
 
         // Get camera direction for movement
         // In Mode 2 (Front View), we want Standard Control (W=Away, A=Left)
@@ -403,9 +419,9 @@ public class Player {
 
         // Update cooldowns
         if (breakCooldown > 0)
-            breakCooldown -= deltaTime;
+            breakCooldown = Math.max(0.0f, breakCooldown - deltaTime);
         if (placeCooldown > 0)
-            placeCooldown -= deltaTime;
+            placeCooldown = Math.max(0.0f, placeCooldown - deltaTime);
     }
 
     /**
@@ -464,7 +480,10 @@ public class Player {
         }
 
         // Continuous left-click for mining (only if NOT attacking an entity)
-        if (isActionDown(GameSettings.KeyBinding.ATTACK)) {
+        boolean miningInput = isCreative()
+                ? isActionPressed(GameSettings.KeyBinding.ATTACK)
+                : isActionDown(GameSettings.KeyBinding.ATTACK);
+        if (miningInput) {
             // Only mine blocks if we didn't hit an entity
             if (!entityHit.hit && targetBlock.hit && breakCooldown <= 0) {
                 // We are actively mining - keep the arm swinging
@@ -502,6 +521,7 @@ public class Player {
                         // Check if tool is effective against this block
                         if (toolType.isEffectiveAgainst(targetType.getPreferredTool())) {
                             speedMultiplier = toolType.getSpeedMultiplier();
+                            speedMultiplier += EnchantmentResolver.miningSpeedBonus(heldItem);
                         }
                     }
 
@@ -529,7 +549,7 @@ public class Player {
 
                         // Consume tool durability
                         if (!isCreative() && heldItem != null && heldItem.isTool()) {
-                            boolean toolBroke = heldItem.useDurability();
+                            boolean toolBroke = useDurabilityWithEnchantments(heldItem);
                             if (toolBroke) {
                                 // Tool broke - remove from inventory
                                 inventory.getHotbar()[inventory.getSelectedSlot()] = null;
@@ -555,14 +575,12 @@ public class Player {
         }
 
         // Update break cooldown
-        if (breakCooldown > 0) {
-            breakCooldown -= deltaTime;
-        }
-
         // Flag for opening crafting table
         wantsCraftingTable = false;
         requestedChestPos = null;
         requestedFurnacePos = null;
+        requestedBrewingStandPos = null;
+        requestedEnchantingTablePos = null;
         requestedSignEditPos = null;
         requestedBedUsePos = null;
 
@@ -587,6 +605,12 @@ public class Player {
                 } else if (clickedBlock.isFurnace()) {
                     requestedFurnacePos = new Vector3i(targetBlock.blockPos);
                     placeCooldown = PLACE_COOLDOWN;
+                } else if (clickedBlock == BlockType.BREWING_STAND) {
+                    requestedBrewingStandPos = new Vector3i(targetBlock.blockPos);
+                    placeCooldown = PLACE_COOLDOWN;
+                } else if (clickedBlock == BlockType.ENCHANTING_TABLE) {
+                    requestedEnchantingTablePos = new Vector3i(targetBlock.blockPos);
+                    placeCooldown = PLACE_COOLDOWN;
                 } else if (clickedBlock.isBed()) {
                     requestedBedUsePos = new Vector3i(targetBlock.blockPos);
                     placeCooldown = PLACE_COOLDOWN;
@@ -608,10 +632,6 @@ public class Player {
             }
         }
 
-        // Update place cooldown
-        if (placeCooldown > 0) {
-            placeCooldown -= deltaTime;
-        }
     }
 
     private boolean handleBowUse(World world, float deltaTime, Vector3f rayDirection) {
@@ -657,7 +677,8 @@ public class Player {
         if (power < 0.1f) {
             return;
         }
-        if (!consumeArrow()) {
+        boolean infinity = bow != null && EnchantmentResolver.has(bow, EnchantmentType.INFINITY);
+        if (!infinity && !consumeArrow()) {
             return;
         }
 
@@ -665,17 +686,29 @@ public class Player {
                 .add(new Vector3f(direction).mul(0.6f));
         float speed = 3.0f * power;
         float damage = 2.0f + 4.0f * power;
-        world.spawnArrow(spawn.x, spawn.y, spawn.z,
+        int powerLevel = EnchantmentResolver.getLevel(bow, EnchantmentType.POWER);
+        if (powerLevel > 0) {
+            damage += 0.5f * powerLevel + 0.5f;
+        }
+        ArrowEntity arrow = world.spawnArrow(spawn.x, spawn.y, spawn.z,
                 direction.x * speed,
                 direction.y * speed,
                 direction.z * speed,
                 null,
                 true,
                 damage);
+        int punch = EnchantmentResolver.getLevel(bow, EnchantmentType.PUNCH);
+        if (punch > 0) {
+            arrow.setKnockback(CombatRules.ARROW_HORIZONTAL_KNOCKBACK + punch * 0.25f,
+                    CombatRules.ARROW_VERTICAL_KNOCKBACK);
+        }
+        if (EnchantmentResolver.has(bow, EnchantmentType.FLAME)) {
+            arrow.setFireTicksOnHit(100);
+        }
 
         swingArm();
         if (!isCreative() && bow != null && bow.isDamageable()) {
-            boolean broke = bow.useDurability();
+            boolean broke = useDurabilityWithEnchantments(bow);
             if (broke) {
                 inventory.getHotbar()[inventory.getSelectedSlot()] = null;
             }
@@ -807,7 +840,67 @@ public class Player {
             }
             return true;
         }
+        if (stack.getType() == ItemType.POTION) {
+            return usePotion(world, stack);
+        }
+        if (stack.getType() == ItemType.EYE_OF_ENDER
+                && (targetBlock == null || !targetBlock.hit
+                        || world.getBlockIfLoaded(targetBlock.blockPos.x, targetBlock.blockPos.y,
+                                targetBlock.blockPos.z, BlockType.AIR) != BlockType.END_PORTAL_FRAME)) {
+            return throwEyeOfEnder(world, stack);
+        }
         return false;
+    }
+
+    private boolean usePotion(World world, com.craftzero.inventory.ItemStack stack) {
+        PotionData potion = stack.getPotionData();
+        if (potion == null) {
+            potion = PotionData.water();
+        }
+        if (potion.splash()) {
+            Vector3f direction = camera.getForward();
+            Vector3f spawn = new Vector3f(position.x, position.y + EYE_HEIGHT - 0.1f, position.z)
+                    .add(new Vector3f(direction).mul(0.35f));
+            world.spawnSplashPotion(spawn.x, spawn.y, spawn.z,
+                    direction.x * 0.5f,
+                    direction.y * 0.5f + 0.1f,
+                    direction.z * 0.5f,
+                    null,
+                    potion);
+            if (!isCreative()) {
+                stack.remove(1);
+                if (stack.isEmpty()) {
+                    inventory.getHotbar()[inventory.getSelectedSlot()] = null;
+                }
+            }
+            startUseAnimation();
+            return true;
+        }
+
+        PotionEffectResolver.applyToPlayer(this, potion, 1.0f);
+        if (!isCreative()) {
+            replaceHeldItemAfterPotionUse(world, stack);
+        } else {
+            startUseAnimation();
+        }
+        return true;
+    }
+
+    private void replaceHeldItemAfterPotionUse(World world, com.craftzero.inventory.ItemStack stack) {
+        com.craftzero.inventory.ItemStack[] hotbar = inventory.getHotbar();
+        int selected = inventory.getSelectedSlot();
+        if (stack.getCount() <= 1) {
+            hotbar[selected] = new com.craftzero.inventory.ItemStack(ItemType.GLASS_BOTTLE, 1);
+        } else {
+            stack.remove(1);
+            com.craftzero.inventory.ItemStack bottle = new com.craftzero.inventory.ItemStack(ItemType.GLASS_BOTTLE, 1);
+            if (!inventory.addItem(bottle) && !bottle.isEmpty()) {
+                Vector3f forward = camera.getForward();
+                world.spawnThrownStack(position.x + forward.x * 0.5f, position.y + EYE_HEIGHT, position.z + forward.z * 0.5f,
+                        bottle, forward.x * 0.2f, 0.2f, forward.z * 0.2f);
+            }
+        }
+        startUseAnimation();
     }
 
     private boolean handleTargetedItemUse(World world, com.craftzero.inventory.ItemStack stack, BlockType clickedBlock) {
@@ -815,6 +908,45 @@ public class Player {
             return false;
         }
         ItemType type = stack.getType();
+        if ((type == ItemType.MINECART || type == ItemType.CHEST_MINECART || type == ItemType.FURNACE_MINECART)
+                && (clickedBlock == BlockType.RAIL || clickedBlock == BlockType.POWERED_RAIL
+                        || clickedBlock == BlockType.DETECTOR_RAIL)) {
+            if (world.placeMinecartOnRail(targetBlock.blockPos.x, targetBlock.blockPos.y, targetBlock.blockPos.z, type)) {
+                consumePlacedStack(stack);
+                return true;
+            }
+        }
+        if (type.isRecord() && clickedBlock == BlockType.JUKEBOX) {
+            TileEntity tile = world.getTileEntity(targetBlock.blockPos.x, targetBlock.blockPos.y, targetBlock.blockPos.z);
+            if (tile instanceof JukeboxTileEntity jukebox && !jukebox.hasRecord()) {
+                if (jukebox.insertRecord(stack)) {
+                    if (!isCreative()) {
+                        stack.remove(1);
+                        if (stack.isEmpty()) {
+                            inventory.getHotbar()[inventory.getSelectedSlot()] = null;
+                        }
+                    }
+                    startUseAnimation();
+                    return true;
+                }
+            }
+        }
+        if (type == ItemType.GLASS_BOTTLE && fillBottle(world, stack, clickedBlock)) {
+            return true;
+        }
+        if (type == ItemType.WATER_BUCKET && clickedBlock == BlockType.CAULDRON) {
+            int level = world.getBlockMetadata(targetBlock.blockPos.x, targetBlock.blockPos.y, targetBlock.blockPos.z);
+            if (level < 3) {
+                world.setBlock(targetBlock.blockPos.x, targetBlock.blockPos.y, targetBlock.blockPos.z,
+                        BlockType.CAULDRON, 3);
+                if (!isCreative()) {
+                    replaceHeldItemAfterBucketUse(world, stack, ItemType.BUCKET);
+                } else {
+                    startUseAnimation();
+                }
+                return true;
+            }
+        }
         if (isHoe(type) && targetBlock.face == Block.FACE_TOP
                 && (clickedBlock == BlockType.DIRT || clickedBlock == BlockType.GRASS)) {
             int aboveY = targetBlock.blockPos.y + 1;
@@ -836,6 +968,12 @@ public class Player {
             return true;
         }
         if (type == ItemType.FLINT_AND_STEEL && targetBlock.previousBlockPos != null) {
+            if (clickedBlock == BlockType.TNT) {
+                world.primeTnt(targetBlock.blockPos.x, targetBlock.blockPos.y, targetBlock.blockPos.z, 80);
+                damageHeldDurable(stack);
+                startUseAnimation();
+                return true;
+            }
             Vector3i pos = targetBlock.previousBlockPos;
             if (world.getBlockIfLoaded(pos.x, pos.y, pos.z, BlockType.AIR) != BlockType.AIR) {
                 return false;
@@ -847,7 +985,81 @@ public class Player {
                 return true;
             }
         }
+        if (type == ItemType.EYE_OF_ENDER && clickedBlock == BlockType.END_PORTAL_FRAME) {
+            boolean placedEye = world.addEyeToEndPortalFrame(targetBlock.blockPos.x, targetBlock.blockPos.y,
+                    targetBlock.blockPos.z);
+            if (!placedEye) {
+                return false;
+            }
+            consumePlacedStack(stack);
+            startUseAnimation();
+            return true;
+        }
         return false;
+    }
+
+    private boolean fillBottle(World world, com.craftzero.inventory.ItemStack stack, BlockType clickedBlock) {
+        boolean filled = false;
+        if ((clickedBlock == BlockType.WATER || clickedBlock == BlockType.FLOWING_WATER)
+                && world.getBlockMetadata(targetBlock.blockPos.x, targetBlock.blockPos.y, targetBlock.blockPos.z) == 0) {
+            filled = true;
+        } else if (clickedBlock == BlockType.CAULDRON) {
+            int level = world.getBlockMetadata(targetBlock.blockPos.x, targetBlock.blockPos.y, targetBlock.blockPos.z);
+            if (level > 0) {
+                world.setBlock(targetBlock.blockPos.x, targetBlock.blockPos.y, targetBlock.blockPos.z,
+                        BlockType.CAULDRON, level - 1);
+                filled = true;
+            }
+        }
+        if (!filled) {
+            return false;
+        }
+        if (!isCreative()) {
+            replaceHeldItemAfterBottleFill(world, stack);
+        } else {
+            startUseAnimation();
+        }
+        return true;
+    }
+
+    private void replaceHeldItemAfterBottleFill(World world, com.craftzero.inventory.ItemStack stack) {
+        com.craftzero.inventory.ItemStack waterBottle = new com.craftzero.inventory.ItemStack(ItemType.POTION, 1);
+        waterBottle.setPotionData(PotionData.water());
+        com.craftzero.inventory.ItemStack[] hotbar = inventory.getHotbar();
+        int selected = inventory.getSelectedSlot();
+        if (stack.getCount() <= 1) {
+            hotbar[selected] = waterBottle;
+        } else {
+            stack.remove(1);
+            if (!inventory.addItem(waterBottle) && !waterBottle.isEmpty()) {
+                Vector3f forward = camera.getForward();
+                world.spawnThrownStack(position.x + forward.x * 0.5f, position.y + EYE_HEIGHT,
+                        position.z + forward.z * 0.5f, waterBottle, forward.x * 0.2f, 0.2f, forward.z * 0.2f);
+            }
+        }
+        startUseAnimation();
+    }
+
+    private boolean throwEyeOfEnder(World world, com.craftzero.inventory.ItemStack stack) {
+        StructureGenerator.StructureLocation target = world.locateStructure(StructureType.STRONGHOLD,
+                (int) Math.floor(position.x), (int) Math.floor(position.z));
+        if (target == null) {
+            return false;
+        }
+        if (!isCreative()) {
+            stack.remove(1);
+            if (stack.isEmpty()) {
+                inventory.getHotbar()[inventory.getSelectedSlot()] = null;
+            }
+        }
+        boolean drops = Math.random() >= 0.20;
+        EyeOfEnderEntity eye = new EyeOfEnderEntity(position.x, position.y + EYE_HEIGHT - 0.2f, position.z,
+                target.blockX() + 0.5f, target.blockY() + 1.0f, target.blockZ() + 0.5f, drops);
+        Vector3f forward = camera.getForward();
+        eye.setMotion(forward.x * 0.5f, forward.y * 0.5f + 0.15f, forward.z * 0.5f);
+        world.spawnEntity(eye);
+        startUseAnimation();
+        return true;
     }
 
     private boolean equipArmorFromHand(com.craftzero.inventory.ItemStack stack) {
@@ -885,9 +1097,19 @@ public class Player {
         if (isCreative() || stack == null || !stack.isDamageable()) {
             return;
         }
-        if (stack.useDurability()) {
+        if (useDurabilityWithEnchantments(stack)) {
             inventory.getHotbar()[inventory.getSelectedSlot()] = null;
         }
+    }
+
+    private boolean useDurabilityWithEnchantments(com.craftzero.inventory.ItemStack stack) {
+        if (stack == null || !stack.isDamageable()) {
+            return false;
+        }
+        if (EnchantmentResolver.shouldPreventDurabilityLoss(stack, random)) {
+            return false;
+        }
+        return stack.useDurability();
     }
 
     private FoodValue foodValue(ItemType type) {
@@ -1003,20 +1225,39 @@ public class Player {
     }
 
     private int getPlacementMetadata(BlockType placedBlock) {
-        if (placedBlock == BlockType.CHEST || placedBlock.isFurnace()) {
+        if (placedBlock == BlockType.CHEST || placedBlock.isFurnace()
+                || placedBlock == BlockType.DISPENSER
+                || placedBlock == BlockType.PISTON
+                || placedBlock == BlockType.STICKY_PISTON) {
             return getPlacementFacingMetadata();
         }
-        if (placedBlock == BlockType.TORCH) {
+        if (placedBlock == BlockType.TORCH
+                || placedBlock == BlockType.REDSTONE_TORCH_ON
+                || placedBlock == BlockType.REDSTONE_TORCH_OFF) {
             return targetBlock.face == Block.FACE_TOP ? 5 : targetBlock.face;
+        }
+        if (placedBlock == BlockType.STONE_BUTTON) {
+            return targetBlock.face == Block.FACE_TOP ? 5 : targetBlock.face;
+        }
+        if (placedBlock == BlockType.LEVER) {
+            return targetBlock.face == Block.FACE_TOP ? 5 : targetBlock.face;
+        }
+        if (placedBlock == BlockType.REDSTONE_REPEATER_OFF || placedBlock == BlockType.REDSTONE_REPEATER_ON) {
+            return getHorizontalFacingIndex();
         }
         if (placedBlock == BlockType.LADDER || placedBlock == BlockType.WALL_SIGN) {
             return targetBlock.face;
         }
         if (placedBlock == BlockType.TRAPDOOR) {
-            if (targetBlock.face == Block.FACE_TOP || targetBlock.face == Block.FACE_BOTTOM) {
-                return 0;
-            }
-            return horizontalIndexFromFace(targetBlock.face);
+            int metadata = targetBlock.face == Block.FACE_TOP || targetBlock.face == Block.FACE_BOTTOM
+                    ? getHorizontalFacingIndex()
+                    : horizontalIndexFromFace(targetBlock.face);
+            float hitY = targetBlock.hitPoint == null
+                    ? 0.5f
+                    : targetBlock.hitPoint.y - (float) Math.floor(targetBlock.hitPoint.y);
+            boolean topHalf = targetBlock.face == Block.FACE_BOTTOM
+                    || (targetBlock.face != Block.FACE_TOP && hitY > 0.5f);
+            return topHalf ? metadata | 8 : metadata;
         }
         if (placedBlock.isStairs() || placedBlock.isFenceGate()) {
             return getHorizontalFacingIndex();
@@ -1044,6 +1285,9 @@ public class Player {
             toolType = heldItem.getType().getToolType();
             damage = toolType.getAttackDamage();
         }
+        damage += EnchantmentResolver.attackDamageBonus(heldItem, target);
+        damage += stats.getAttackDamageBonus();
+        damage = Math.max(0.0f, damage);
 
         // 2. Critical Hit Check (Pre-1.9 Logic)
         boolean isCritical = velocity.y < 0 && !onGround && !inWater && !flying;
@@ -1066,6 +1310,7 @@ public class Player {
         if (successfulHit && target.getHealth() > 0) {
 
             float knockbackStrength = CombatRules.PLAYER_ATTACK_KNOCKBACK;
+            knockbackStrength += EnchantmentResolver.getLevel(heldItem, EnchantmentType.KNOCKBACK) * 0.4f;
 
             // Sprint Knockback (W-Tap Mechanic)
             // Only apply bonus if: 1) Currently sprinting, 2) Haven't used bonus since last
@@ -1096,13 +1341,17 @@ public class Player {
                     velocity.z *= 0.6f;
                 }
             }
+            int fireAspect = EnchantmentResolver.getLevel(heldItem, EnchantmentType.FIRE_ASPECT);
+            if (fireAspect > 0) {
+                target.setOnFire(fireAspect * 80);
+            }
         }
 
         // D. Durability is only consumed on valid hits (even if target died)
         if (successfulHit && !isCreative()) {
             com.craftzero.inventory.ItemStack heldItem2 = inventory.getItemInHand();
             if (heldItem2 != null && heldItem2.isTool()) {
-                boolean toolBroke = heldItem2.useDurability();
+                boolean toolBroke = useDurabilityWithEnchantments(heldItem2);
                 if (toolBroke) {
                     inventory.getHotbar()[inventory.getSelectedSlot()] = null;
                 }
@@ -1263,7 +1512,7 @@ public class Player {
         }
 
         // Clamp horizontal velocity
-        float maxHorizontal = sprinting ? SPRINT_SPEED : WALK_SPEED;
+        float maxHorizontal = (sprinting ? SPRINT_SPEED : WALK_SPEED) * stats.getMovementSpeedMultiplier();
         float horizontalSpeed = (float) Math.sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
         if (horizontalSpeed > maxHorizontal) {
             velocity.x = (velocity.x / horizontalSpeed) * maxHorizontal;
@@ -1422,8 +1671,9 @@ public class Player {
             if (viewBobbing && onGround && !flying) {
                 float walk = prevDistanceWalked + (distanceWalked - prevDistanceWalked) * partialTick;
                 float bob = prevLimbSwingAmount + (limbSwingAmount - prevLimbSwingAmount) * partialTick;
-                interpX += (float) Math.sin(walk * 6.0f) * 0.03f * bob;
-                eyeY += Math.abs((float) Math.cos(walk * 6.0f)) * 0.035f * bob;
+                float clampedBob = Math.min(1.0f, Math.max(0.0f, bob));
+                interpX += (float) Math.sin(walk * 6.0f) * 0.006f * clampedBob;
+                eyeY += Math.abs((float) Math.cos(walk * 6.0f)) * 0.012f * clampedBob;
             }
             camera.setPosition(interpX, eyeY, interpZ);
         } else {
@@ -1894,8 +2144,11 @@ public class Player {
         if (source == null) {
             source = DamageSource.generic();
         }
+        if (source.type() == DamageSource.Type.FIRE && stats.hasEffect(StatusEffectType.FIRE_RESISTANCE)) {
+            return false;
+        }
         float scaledAmount = difficulty.scaleIncomingDamage(amount);
-        float protectedAmount = applyArmorProtection(scaledAmount);
+        float protectedAmount = applyArmorProtection(scaledAmount, source);
         boolean applied = stats.damage(protectedAmount);
         if (!applied) {
             return false;
@@ -1915,28 +2168,15 @@ public class Player {
         return true;
     }
 
-    private float applyArmorProtection(float damage) {
-        int armorPoints = 0;
-        com.craftzero.inventory.ItemStack[] armor = inventory.getArmor();
-        for (int i = 0; i < armor.length; i++) {
-            com.craftzero.inventory.ItemStack stack = armor[i];
-            if (stack == null || stack.isEmpty()) {
-                continue;
-            }
-            ArmorMaterial material = ArmorMaterial.materialOf(stack.getType());
-            if (material != null) {
-                armorPoints += material.getProtection(ArmorSlot.values()[i]);
-            }
-        }
-        float reduction = Math.min(0.8f, armorPoints * 0.04f);
-        return damage * (1.0f - reduction);
+    private float applyArmorProtection(float damage, DamageSource source) {
+        return ArmorCalculator.reduceDamage(damage, inventory.getArmor(), source);
     }
 
     private void damageArmor() {
         com.craftzero.inventory.ItemStack[] armor = inventory.getArmor();
         for (int i = 0; i < armor.length; i++) {
             com.craftzero.inventory.ItemStack stack = armor[i];
-            if (stack != null && stack.isDamageable() && stack.useDurability()) {
+            if (stack != null && stack.isDamageable() && useDurabilityWithEnchantments(stack)) {
                 armor[i] = null;
             }
         }
@@ -2082,6 +2322,18 @@ public class Player {
     public Vector3i getAndClearFurnaceOpenRequest() {
         Vector3i value = requestedFurnacePos != null ? new Vector3i(requestedFurnacePos) : null;
         requestedFurnacePos = null;
+        return value;
+    }
+
+    public Vector3i getAndClearBrewingStandOpenRequest() {
+        Vector3i value = requestedBrewingStandPos != null ? new Vector3i(requestedBrewingStandPos) : null;
+        requestedBrewingStandPos = null;
+        return value;
+    }
+
+    public Vector3i getAndClearEnchantingTableOpenRequest() {
+        Vector3i value = requestedEnchantingTablePos != null ? new Vector3i(requestedEnchantingTablePos) : null;
+        requestedEnchantingTablePos = null;
         return value;
     }
 
@@ -2522,6 +2774,11 @@ public class Player {
         float dropZ = position.z;
 
         java.util.Random rand = new java.util.Random();
+        int deathXp = stats.getProgression().deathDropExperience();
+        if (deathXp > 0) {
+            world.spawnExperience(dropX, dropY, dropZ, deathXp);
+            stats.getProgression().clearExperience();
+        }
 
         // Drop hotbar items
         com.craftzero.inventory.ItemStack[] hotbar = inventory.getHotbar();

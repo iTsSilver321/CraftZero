@@ -54,15 +54,11 @@ public class SwimGoal implements Goal {
 
         boolean headUnderwater = headBlock.isWater();
 
-        if (headUnderwater) {
-            // Swim up to surface - stronger impulse to help exit water
-            mob.addMotion(0, 0.08f, 0);
-        }
-
-        // Random swimming motion (slight side-to-side)
-        if (mob.getTicksExisted() % 20 == 0) {
-            float swimDir = (float) (Math.random() - 0.5f) * 0.02f;
-            mob.addMotion(swimDir, 0, swimDir);
+        if (headUnderwater && mob.getMotionY() < 0.12f) {
+            // Small upward intent only when the head is actually underwater.
+            // Horizontal steering stays with the active navigation/goal so mobs do
+            // not fight themselves at the water surface.
+            mob.addMotion(0, 0.045f, 0);
         }
     }
 

@@ -22,6 +22,9 @@ public class ArrowEntity extends Entity {
     private final Entity shooter;
     private final boolean playerOwned;
     private final float damage;
+    private float knockbackHorizontal = CombatRules.ARROW_HORIZONTAL_KNOCKBACK;
+    private float knockbackVertical = CombatRules.ARROW_VERTICAL_KNOCKBACK;
+    private int fireTicksOnHit;
     private boolean inGround;
     private int stuckTicks;
     private int blockX;
@@ -106,9 +109,12 @@ public class ArrowEntity extends Entity {
         if (target == null || target.isDead()) {
             return;
         }
-        target.damage(damage, DamageSource.entity(DamageSource.Type.ARROW, this,
-                CombatRules.ARROW_HORIZONTAL_KNOCKBACK,
-                CombatRules.ARROW_VERTICAL_KNOCKBACK));
+        boolean applied = target.damage(damage, DamageSource.entity(DamageSource.Type.ARROW, this,
+                knockbackHorizontal,
+                knockbackVertical));
+        if (applied && fireTicksOnHit > 0) {
+            target.setOnFire(fireTicksOnHit);
+        }
         remove();
     }
 
@@ -117,8 +123,8 @@ public class ArrowEntity extends Entity {
             return;
         }
         player.hurt(damage, DamageSource.point(DamageSource.Type.ARROW, x, y, z,
-                CombatRules.ARROW_HORIZONTAL_KNOCKBACK,
-                CombatRules.ARROW_VERTICAL_KNOCKBACK));
+                knockbackHorizontal,
+                knockbackVertical));
         remove();
     }
 
@@ -212,6 +218,15 @@ public class ArrowEntity extends Entity {
 
     public boolean isPlayerOwned() {
         return playerOwned;
+    }
+
+    public void setKnockback(float horizontal, float vertical) {
+        this.knockbackHorizontal = Math.max(0.0f, horizontal);
+        this.knockbackVertical = Math.max(0.0f, vertical);
+    }
+
+    public void setFireTicksOnHit(int fireTicksOnHit) {
+        this.fireTicksOnHit = Math.max(0, fireTicksOnHit);
     }
 
     private record PlayerHit(boolean hit, Player player, float distance) {

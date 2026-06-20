@@ -19,6 +19,9 @@ public class Renderer {
     // Fog settings for atmosphere
     private boolean fogEnabled = true;
     private float fogDensity = 0.007f;
+    private int fogMode = 0;
+    private float fogStart = 64.0f;
+    private float fogEnd = 128.0f;
     private Vector3f fogColor = new Vector3f(0.6f, 0.6f, 0.6f); // Grey fog
 
     // Ambient lighting
@@ -43,6 +46,9 @@ public class Renderer {
         // Fog uniforms
         shaderProgram.createUniform("fogEnabled");
         shaderProgram.createUniform("fogDensity");
+        shaderProgram.createUniform("fogMode");
+        shaderProgram.createUniform("fogStart");
+        shaderProgram.createUniform("fogEnd");
         shaderProgram.createUniform("fogColor");
 
         // Lighting uniforms
@@ -104,6 +110,9 @@ public class Renderer {
         // Set fog
         shaderProgram.setUniform("fogEnabled", fogEnabled);
         shaderProgram.setUniform("fogDensity", fogDensity);
+        shaderProgram.setUniform("fogMode", fogMode);
+        shaderProgram.setUniform("fogStart", fogStart);
+        shaderProgram.setUniform("fogEnd", fogEnd);
         shaderProgram.setUniform("fogColor", fogColor);
 
         // Set lighting
@@ -131,6 +140,9 @@ public class Renderer {
         // Set fog
         shaderProgram.setUniform("fogEnabled", fogEnabled);
         shaderProgram.setUniform("fogDensity", fogDensity);
+        shaderProgram.setUniform("fogMode", fogMode);
+        shaderProgram.setUniform("fogStart", fogStart);
+        shaderProgram.setUniform("fogEnd", fogEnd);
         shaderProgram.setUniform("fogColor", fogColor);
 
         // Set lighting
@@ -195,6 +207,13 @@ public class Renderer {
 
     public void setFogDensity(float density) {
         this.fogDensity = density;
+        this.fogMode = 0;
+    }
+
+    public void setFogRange(float start, float end) {
+        this.fogStart = Math.max(0.0f, Math.min(start, end - 0.001f));
+        this.fogEnd = Math.max(this.fogStart + 0.001f, end);
+        this.fogMode = 1;
     }
 
     public void setFogColor(Vector3f color) {

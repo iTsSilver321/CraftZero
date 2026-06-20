@@ -104,4 +104,23 @@ class FluidSimulationTest {
             world.cleanup();
         }
     }
+
+    @Test
+    @DisplayName("Weaker water flow should not overwrite stronger or source water")
+    void weakerWaterDoesNotOverwriteStrongerWater() {
+        World world = new World(36L);
+        try {
+            world.setBlock(0, 99, 0, BlockType.STONE);
+            world.setBlock(1, 99, 0, BlockType.STONE);
+            world.setBlock(0, 100, 0, BlockType.WATER, 0);
+            world.setBlock(1, 100, 0, BlockType.FLOWING_WATER, 6);
+
+            world.advanceBlockTicks(5);
+
+            assertSame(BlockType.WATER, world.getBlock(0, 100, 0));
+            assertEquals(0, world.getBlockMetadata(0, 100, 0));
+        } finally {
+            world.cleanup();
+        }
+    }
 }

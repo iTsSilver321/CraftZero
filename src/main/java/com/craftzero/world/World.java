@@ -8,20 +8,31 @@ import com.craftzero.graphics.Mesh;
 import com.craftzero.graphics.Renderer;
 import com.craftzero.graphics.Texture;
 import com.craftzero.entity.ArrowEntity;
+import com.craftzero.entity.ChestMinecartEntity;
 import com.craftzero.entity.DroppedItem;
 import com.craftzero.entity.Entity;
+import com.craftzero.entity.ExperienceOrbEntity;
 import com.craftzero.entity.FireballEntity;
 import com.craftzero.entity.FallingBlockEntity;
+import com.craftzero.entity.FurnaceMinecartEntity;
+import com.craftzero.entity.MinecartEntity;
+import com.craftzero.entity.PrimedTntEntity;
+import com.craftzero.entity.SplashPotionEntity;
 import com.craftzero.inventory.ItemType;
 import com.craftzero.inventory.ItemStack;
 import com.craftzero.main.CombatRules;
 import com.craftzero.math.Noise;
 import com.craftzero.physics.AABB;
+import com.craftzero.progression.PotionData;
 import com.craftzero.save.SaveManager;
 import com.craftzero.world.tile.BlockPos;
 import com.craftzero.world.tile.ChestTileEntity;
+import com.craftzero.world.tile.BrewingStandTileEntity;
+import com.craftzero.world.tile.DispenserTileEntity;
 import com.craftzero.world.tile.FurnaceTileEntity;
+import com.craftzero.world.tile.JukeboxTileEntity;
 import com.craftzero.world.tile.MonsterSpawnerTileEntity;
+import com.craftzero.world.tile.NoteBlockTileEntity;
 import com.craftzero.world.tile.SignTileEntity;
 import com.craftzero.world.tile.TileEntity;
 
@@ -42,20 +53,25 @@ import java.util.concurrent.Executors;
  * World manager that handles chunk loading, generation, and rendering.
  * Implements procedural terrain generation with biomes.
  */
-public class World {
+public class World implements GeneratedStructureSink {
 
     private static final int DEFAULT_RENDER_DISTANCE = 8; // Chunks in each direction
     private static final int MAX_RENDER_DISTANCE = 16;
-    private static final int MAX_MESH_UPLOADS_PER_FRAME = 1; // GPU uploads are the biggest main-thread spike.
-    private static final int MAX_GENERATES_PER_FRAME = 1; // Limit async terrain generation submits.
-    private static final int MAX_LIGHTINGS_PER_FRAME = 1; // Limit async lighting submits.
-    private static final int MAX_MESHES_PER_FRAME = 1; // Limit async mesh building submits.
+    private static final int MAX_MESH_UPLOADS_PER_FRAME = 3; // GPU uploads are the biggest main-thread spike.
+    private static final int MAX_GENERATES_PER_FRAME = 4; // Limit async terrain generation submits.
+    private static final int MAX_LIGHTINGS_PER_FRAME = 4; // Limit async lighting submits.
+    private static final int MAX_MESHES_PER_FRAME = 3; // Limit async mesh building submits.
+    private static final int MAX_PENDING_CHUNK_WORK = 8;
     private static final int MAX_CHUNK_SHELL_STEPS_PER_FRAME = 96;
     private static final int MAX_BLOCK_UPDATES_PER_TICK = 1000;
+    private static final float DROPPED_ITEM_MERGE_RADIUS_SQ = 2.25f;
+    private static final float DROPPED_ITEM_PICKUP_SCAN_RADIUS_SQ = 9.0f;
+    private static final float DROPPED_ITEM_PICKUP_DELAY = 0.5f;
     private static final int WATER_TICK_DELAY = 5;
     private static final int LAVA_TICK_DELAY = 30;
     private static final int FIRE_TICK_DELAY = 30;
     private static final int FALLING_BLOCK_TICK_DELAY = 3;
+    public static final int END_PORTAL_FRAME_EYE_BIT = 4;
     private static final int SEA_LEVEL = 62;
     private static final int BASE_HEIGHT = 64;
     private static final int[][] HORIZONTAL_DIRS = {
@@ -103,6 +119,7 @@ public class World {
     private final List<Entity> entities;
     private final List<Entity> entitiesToAdd;
     private final List<Entity> entitiesToRemove;
+    private final ConcurrentLinkedQueue<Entity> generatedEntities;
 
     // Reference to player (for AI targeting)
     private com.craftzero.main.Player player;
@@ -140,10 +157,14 @@ public class World {
     private static class ChunkMeshTask {
         final Chunk chunk;
         final ChunkMeshData meshData;
+        final long expectedVersion;
+        final Chunk.ChunkState fallbackState;
 
-        ChunkMeshTask(Chunk chunk, ChunkMeshData meshData) {
+        ChunkMeshTask(Chunk chunk, ChunkMeshData meshData, long expectedVersion, Chunk.ChunkState fallbackState) {
             this.chunk = chunk;
             this.meshData = meshData;
+            this.expectedVersion = expectedVersion;
+            this.fallbackState = fallbackState;
         }
     }
 
@@ -156,6 +177,20 @@ public class World {
         public int compareTo(ScheduledBlockTick other) {
             int dueCompare = Long.compare(dueTick, other.dueTick);
             return dueCompare != 0 ? dueCompare : Long.compare(sequence, other.sequence);
+        }
+    }
+
+    public record ChunkAreaProgress(int total, int generated, int lighted, int readyChunks) {
+        public float progress() {
+            if (total <= 0) {
+                return 1.0f;
+            }
+            int weighted = generated + lighted + readyChunks;
+            return Math.min(1.0f, weighted / (float) (total * 3));
+        }
+
+        public boolean isReady() {
+            return total > 0 && readyChunks >= total;
         }
     }
 
@@ -199,9 +234,10 @@ public class World {
         this.entities = new ArrayList<>();
         this.entitiesToAdd = new ArrayList<>();
         this.entitiesToRemove = new ArrayList<>();
+        this.generatedEntities = new ConcurrentLinkedQueue<>();
 
-        // Two workers keep terrain streaming without starving the render thread.
-        this.meshBuildPool = Executors.newFixedThreadPool(2, r -> {
+        int workerCount = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() - 1));
+        this.meshBuildPool = Executors.newFixedThreadPool(workerCount, r -> {
             Thread t = new Thread(r, "ChunkMeshBuilder");
             t.setDaemon(true);
             return t;
@@ -259,6 +295,50 @@ public class World {
 
     public void setAdvancedOpenGl(boolean advancedOpenGl) {
         this.advancedOpenGl = advancedOpenGl;
+    }
+
+    public int regenerateUnmodifiedChunksAround(float worldX, float worldZ, int radiusChunks) {
+        int radius = Math.max(0, Math.min(4, radiusChunks));
+        int centerChunkX = (int) Math.floor(worldX / Chunk.WIDTH);
+        int centerChunkZ = (int) Math.floor(worldZ / Chunk.DEPTH);
+        int regenerated = 0;
+        for (int dz = -radius; dz <= radius; dz++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                int chunkX = centerChunkX + dx;
+                int chunkZ = centerChunkZ + dz;
+                long key = chunkKey(chunkX, chunkZ);
+                Chunk existing = chunks.get(key);
+                if (existing != null && existing.isModified()) {
+                    continue;
+                }
+                Chunk chunk = existing == null ? createChunk(chunkX, chunkZ) : existing;
+                if (existing == null) {
+                    chunks.put(key, chunk);
+                }
+                chunksBeingBuilt.remove(key);
+                chunk.cleanup();
+                chunk.setState(Chunk.ChunkState.GENERATING);
+                generateChunkTerrain(chunk, chunkX, chunkZ);
+                chunk.setState(Chunk.ChunkState.GENERATED);
+                reconcileTileEntitiesInChunk(chunk);
+                scheduleTickableBlocksInChunk(chunk);
+                if (chunk.hasAllNeighborsAtLeast(Chunk.ChunkState.GENERATED)) {
+                    chunk.calculateSkyLight();
+                    chunk.setState(Chunk.ChunkState.LIGHTED);
+                }
+                chunk.setDirty(true);
+                regenerated++;
+                refreshChunkAndNeighbors(chunkX, chunkZ);
+            }
+        }
+        return regenerated;
+    }
+
+    public ReleaseOneWorldGenerator.SpawnPoint findSafeSpawn() {
+        if (worldGenerator instanceof ReleaseOneWorldGenerator releaseOne) {
+            return releaseOne.findSafeSpawn();
+        }
+        return new ReleaseOneWorldGenerator.SpawnPoint(0, 80, 0);
     }
 
     public void setSaveManager(SaveManager saveManager) {
@@ -320,9 +400,38 @@ public class World {
         }
     }
 
+    public ChunkAreaProgress getChunkAreaProgress(float worldX, float worldZ, int radius) {
+        int centerChunkX = (int) Math.floor(worldX / Chunk.WIDTH);
+        int centerChunkZ = (int) Math.floor(worldZ / Chunk.DEPTH);
+        int total = 0;
+        int generated = 0;
+        int lighted = 0;
+        int ready = 0;
+        for (int dz = -radius; dz <= radius; dz++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                total++;
+                Chunk chunk = chunks.get(chunkKey(centerChunkX + dx, centerChunkZ + dz));
+                if (chunk == null) {
+                    continue;
+                }
+                Chunk.ChunkState state = chunk.getState();
+                if (state.ordinal() >= Chunk.ChunkState.GENERATED.ordinal()) {
+                    generated++;
+                }
+                if (state.ordinal() >= Chunk.ChunkState.LIGHTED.ordinal()) {
+                    lighted++;
+                }
+                if (state == Chunk.ChunkState.READY && !chunk.isEmpty()) {
+                    ready++;
+                }
+            }
+        }
+        return new ChunkAreaProgress(total, generated, lighted, ready);
+    }
+
     private Chunk createChunk(int chunkX, int chunkZ) {
         Chunk chunk = new Chunk(chunkX, chunkZ);
-        if (saveManager != null && saveManager.loadChunkIfExists(chunk)) {
+        if (saveManager != null && saveManager.loadChunkIfExists(chunk, dimension)) {
             chunk.setState(Chunk.ChunkState.GENERATED);
             reconcileTileEntitiesInChunk(chunk);
         }
@@ -632,6 +741,12 @@ public class World {
                 chunksBeingBuilt.remove(key);
                 continue;
             }
+            if (task.chunk.getModificationVersion() != task.expectedVersion) {
+                task.chunk.setState(task.fallbackState);
+                task.chunk.setDirty(true);
+                chunksBeingBuilt.remove(key);
+                continue;
+            }
 
             // Apply mesh data on main thread (GPU upload)
             task.chunk.applyMeshData(task.meshData);
@@ -641,6 +756,11 @@ public class World {
         }
 
         ensureChunkShell(playerChunkX, playerChunkZ);
+
+        // Push already-generated nearby chunks toward visibility before spending
+        // worker capacity on farther empty terrain.
+        progressPriorityMeshableChunks(playerChunkX, playerChunkZ);
+        progressPriorityLightingChunks(playerChunkX, playerChunkZ);
 
         // Step 3: Progress chunks through states (with per-frame rate limiting)
         // Uses spiral order: closest chunks to player are processed first
@@ -671,14 +791,11 @@ public class World {
                 continue;
 
             Chunk.ChunkState state = chunk.getState();
-            if (state.ordinal() >= Chunk.ChunkState.GENERATED.ordinal() && dynamicTickScannedChunks.add(key)) {
-                reconcileTileEntitiesInChunk(chunk);
-                scheduleTickableBlocksInChunk(chunk);
-            }
-
             // EMPTY → Submit for terrain generation (rate limited)
             if (state == Chunk.ChunkState.EMPTY && !chunksBeingBuilt.contains(key)) {
                 if (generationsThisFrame >= MAX_GENERATES_PER_FRAME)
+                    continue;
+                if (chunksBeingBuilt.size() >= MAX_PENDING_CHUNK_WORK)
                     continue;
                 generationsThisFrame++;
 
@@ -700,8 +817,14 @@ public class World {
 
             // GENERATED → Submit for lighting (rate limited, ASYNC!)
             else if (state == Chunk.ChunkState.GENERATED && !chunksBeingBuilt.contains(key)) {
+                if (dynamicTickScannedChunks.add(key)) {
+                    reconcileTileEntitiesInChunk(chunk);
+                    scheduleTickableBlocksInChunk(chunk);
+                }
                 if (chunk.hasAllNeighborsAtLeast(Chunk.ChunkState.GENERATED)) {
                     if (lightingsThisFrame >= MAX_LIGHTINGS_PER_FRAME)
+                        continue;
+                    if (chunksBeingBuilt.size() >= MAX_PENDING_CHUNK_WORK)
                         continue;
                     lightingsThisFrame++;
 
@@ -728,15 +851,19 @@ public class World {
                 if (chunk.hasAllNeighborsAtLeast(Chunk.ChunkState.LIGHTED)) {
                     if (meshesThisFrame >= MAX_MESHES_PER_FRAME)
                         continue;
+                    if (chunksBeingBuilt.size() >= MAX_PENDING_CHUNK_WORK)
+                        continue;
                     meshesThisFrame++;
 
                     chunk.setState(Chunk.ChunkState.MESHING);
                     chunksBeingBuilt.add(key);
                     final Chunk chunkRef = chunk;
+                    final long expectedVersion = chunkRef.getModificationVersion();
                     meshBuildPool.submit(() -> {
                         try {
                             ChunkMeshData meshData = ChunkMeshBuilder.buildMeshData(chunkRef);
-                            completedMeshTasks.offer(new ChunkMeshTask(chunkRef, meshData));
+                            completedMeshTasks.offer(new ChunkMeshTask(chunkRef, meshData, expectedVersion,
+                                    Chunk.ChunkState.LIGHTED));
                         } catch (Exception e) {
                             System.err.println("Error building chunk mesh: " + e.getMessage());
                             chunkRef.setState(Chunk.ChunkState.LIGHTED);
@@ -751,16 +878,20 @@ public class World {
                 if (chunk.hasAllNeighborsAtLeast(Chunk.ChunkState.LIGHTED)) {
                     if (meshesThisFrame >= MAX_MESHES_PER_FRAME)
                         continue;
+                    if (chunksBeingBuilt.size() >= MAX_PENDING_CHUNK_WORK)
+                        continue;
                     meshesThisFrame++;
 
                     chunk.setState(Chunk.ChunkState.MESHING);
                     chunksBeingBuilt.add(key);
                     final Chunk chunkRef = chunk;
+                    final long expectedVersion = chunkRef.getModificationVersion();
                     meshBuildPool.submit(() -> {
                         try {
                             chunkRef.calculateSkyLight();
                             ChunkMeshData meshData = ChunkMeshBuilder.buildMeshData(chunkRef);
-                            completedMeshTasks.offer(new ChunkMeshTask(chunkRef, meshData));
+                            completedMeshTasks.offer(new ChunkMeshTask(chunkRef, meshData, expectedVersion,
+                                    Chunk.ChunkState.READY));
                         } catch (Exception e) {
                             System.err.println("Error rebuilding chunk mesh: " + e.getMessage());
                             chunkRef.setState(Chunk.ChunkState.READY);
@@ -787,7 +918,7 @@ public class World {
             Chunk chunk = chunks.get(key);
             if (chunk != null && chunk.isModified() && saveManager != null) {
                 try {
-                    saveManager.saveModifiedChunk(chunk);
+                    saveManager.saveModifiedChunk(chunk, dimension);
                 } catch (Exception e) {
                     System.err.println("Failed to flush modified chunk before unload "
                             + chunk.getChunkX() + "," + chunk.getChunkZ() + ": " + e.getMessage());
@@ -796,10 +927,107 @@ public class World {
             }
             chunk = chunks.remove(key);
             if (chunk != null) {
+                removeScheduledTicksForChunk(chunk);
                 chunk.cleanup();
             }
             chunksBeingBuilt.remove(key);
             dynamicTickScannedChunks.remove(key);
+        }
+    }
+
+    private void progressPriorityLightingChunks(int playerChunkX, int playerChunkZ) {
+        int lightingsThisFrame = 0;
+        for (int[] offset : SPIRAL_OFFSETS) {
+            if (lightingsThisFrame >= MAX_LIGHTINGS_PER_FRAME
+                    || chunksBeingBuilt.size() >= MAX_PENDING_CHUNK_WORK) {
+                return;
+            }
+            int dx = offset[0];
+            int dz = offset[1];
+            if (Math.abs(dx) > renderDistance || Math.abs(dz) > renderDistance) {
+                continue;
+            }
+            int chunkX = playerChunkX + dx;
+            int chunkZ = playerChunkZ + dz;
+            long key = chunkKey(chunkX, chunkZ);
+            Chunk chunk = chunks.get(key);
+            if (chunk == null || chunk.getState() != Chunk.ChunkState.GENERATED
+                    || chunksBeingBuilt.contains(key)) {
+                continue;
+            }
+            if (dynamicTickScannedChunks.add(key)) {
+                reconcileTileEntitiesInChunk(chunk);
+                scheduleTickableBlocksInChunk(chunk);
+            }
+            if (!chunk.hasAllNeighborsAtLeast(Chunk.ChunkState.GENERATED)) {
+                continue;
+            }
+
+            lightingsThisFrame++;
+            chunk.setState(Chunk.ChunkState.LIGHTING);
+            chunksBeingBuilt.add(key);
+            final Chunk chunkRef = chunk;
+            final long chunkKey = key;
+            meshBuildPool.submit(() -> {
+                try {
+                    chunkRef.calculateSkyLight();
+                    chunkRef.setState(Chunk.ChunkState.LIGHTED);
+                } catch (Exception e) {
+                    System.err.println("Error lighting chunk: " + e.getMessage());
+                    chunkRef.setState(Chunk.ChunkState.GENERATED);
+                } finally {
+                    chunksBeingBuilt.remove(chunkKey);
+                }
+            });
+        }
+    }
+
+    private void progressPriorityMeshableChunks(int playerChunkX, int playerChunkZ) {
+        int meshesThisFrame = 0;
+        for (int[] offset : SPIRAL_OFFSETS) {
+            if (meshesThisFrame >= MAX_MESHES_PER_FRAME
+                    || chunksBeingBuilt.size() >= MAX_PENDING_CHUNK_WORK) {
+                return;
+            }
+            int dx = offset[0];
+            int dz = offset[1];
+            if (Math.abs(dx) > renderDistance || Math.abs(dz) > renderDistance) {
+                continue;
+            }
+            int chunkX = playerChunkX + dx;
+            int chunkZ = playerChunkZ + dz;
+            long key = chunkKey(chunkX, chunkZ);
+            Chunk chunk = chunks.get(key);
+            if (chunk == null || chunksBeingBuilt.contains(key)) {
+                continue;
+            }
+
+            Chunk.ChunkState state = chunk.getState();
+            boolean dirtyReady = state == Chunk.ChunkState.READY && chunk.isDirty();
+            boolean initialMesh = state == Chunk.ChunkState.LIGHTED;
+            if ((!dirtyReady && !initialMesh) || !chunk.hasAllNeighborsAtLeast(Chunk.ChunkState.LIGHTED)) {
+                continue;
+            }
+
+            meshesThisFrame++;
+            chunk.setState(Chunk.ChunkState.MESHING);
+            chunksBeingBuilt.add(key);
+            final Chunk chunkRef = chunk;
+            final Chunk.ChunkState fallbackState = dirtyReady ? Chunk.ChunkState.READY : Chunk.ChunkState.LIGHTED;
+            final long expectedVersion = chunkRef.getModificationVersion();
+            meshBuildPool.submit(() -> {
+                try {
+                    if (dirtyReady) {
+                        chunkRef.calculateSkyLight();
+                    }
+                    ChunkMeshData meshData = ChunkMeshBuilder.buildMeshData(chunkRef);
+                    completedMeshTasks.offer(new ChunkMeshTask(chunkRef, meshData, expectedVersion, fallbackState));
+                } catch (Exception e) {
+                    System.err.println("Error building chunk mesh: " + e.getMessage());
+                    chunkRef.setState(fallbackState);
+                    chunksBeingBuilt.remove(chunkKey(chunkRef.getChunkX(), chunkRef.getChunkZ()));
+                }
+            });
         }
     }
 
@@ -1120,11 +1348,7 @@ public class World {
     public List<AABB> getCollisionBoxes(int x, int y, int z) {
         BlockType type = getBlock(x, y, z);
         int metadata = getBlockMetadata(x, y, z);
-        List<AABB> boxes = new ArrayList<>();
-        for (BlockShape.Cuboid box : BlockShape.getCollisionBoxes(type, metadata, contextAt(x, y, z))) {
-            boxes.add(box.toAabb(x, y, z));
-        }
-        return boxes;
+        return BlockShape.collisionShape(new BlockState(type, metadata), contextAt(x, y, z)).toAabbs(x, y, z);
     }
 
     public List<AABB> getCollisionBoxesIfLoaded(int x, int y, int z) {
@@ -1133,21 +1357,14 @@ public class World {
             return List.of();
         }
         int metadata = getBlockMetadataIfLoaded(x, y, z, 0);
-        List<AABB> boxes = new ArrayList<>();
-        for (BlockShape.Cuboid box : BlockShape.getCollisionBoxes(type, metadata, contextAtIfLoaded(x, y, z))) {
-            boxes.add(box.toAabb(x, y, z));
-        }
-        return boxes;
+        return BlockShape.collisionShape(new BlockState(type, metadata), contextAtIfLoaded(x, y, z))
+                .toAabbs(x, y, z);
     }
 
     public List<AABB> getSelectionBoxes(int x, int y, int z) {
         BlockType type = getBlock(x, y, z);
         int metadata = getBlockMetadata(x, y, z);
-        List<AABB> boxes = new ArrayList<>();
-        for (BlockShape.Cuboid box : BlockShape.getSelectionBoxes(type, metadata, contextAt(x, y, z))) {
-            boxes.add(box.toAabb(x, y, z));
-        }
-        return boxes;
+        return BlockShape.selectionShape(new BlockState(type, metadata), contextAt(x, y, z)).toAabbs(x, y, z);
     }
 
     public List<AABB> getSelectionBoxesIfLoaded(int x, int y, int z) {
@@ -1156,19 +1373,12 @@ public class World {
             return List.of();
         }
         int metadata = getBlockMetadataIfLoaded(x, y, z, 0);
-        List<AABB> boxes = new ArrayList<>();
-        for (BlockShape.Cuboid box : BlockShape.getSelectionBoxes(type, metadata, contextAtIfLoaded(x, y, z))) {
-            boxes.add(box.toAabb(x, y, z));
-        }
-        return boxes;
+        return BlockShape.selectionShape(new BlockState(type, metadata), contextAtIfLoaded(x, y, z))
+                .toAabbs(x, y, z);
     }
 
     public List<AABB> getPlacementCollisionBoxes(int x, int y, int z, BlockType type, int metadata) {
-        List<AABB> boxes = new ArrayList<>();
-        for (BlockShape.Cuboid box : BlockShape.getCollisionBoxes(type, metadata, contextAt(x, y, z))) {
-            boxes.add(box.toAabb(x, y, z));
-        }
-        return boxes;
+        return BlockShape.collisionShape(new BlockState(type, metadata), contextAt(x, y, z)).toAabbs(x, y, z);
     }
 
     public boolean canPlaceBlockAt(int x, int y, int z, BlockType type, int metadata, AABB playerBox) {
@@ -1188,7 +1398,7 @@ public class World {
         return true;
     }
 
-    private BlockShape.BlockContext contextAt(int x, int y, int z) {
+    BlockShape.BlockContext contextAt(int x, int y, int z) {
         return new BlockShape.BlockContext() {
             @Override
             public BlockType getBlock(int dx, int dy, int dz) {
@@ -1202,7 +1412,7 @@ public class World {
         };
     }
 
-    private BlockShape.BlockContext contextAtIfLoaded(int x, int y, int z) {
+    public BlockShape.BlockContext contextAtIfLoaded(int x, int y, int z) {
         return new BlockShape.BlockContext() {
             @Override
             public BlockType getBlock(int dx, int dy, int dz) {
@@ -1328,6 +1538,70 @@ public class World {
         }
     }
 
+    public boolean setBlockIfLoaded(int x, int y, int z, BlockType type, int metadata) {
+        if (y < 0 || y >= Chunk.HEIGHT) {
+            return false;
+        }
+        int chunkX = Math.floorDiv(x, Chunk.WIDTH);
+        int chunkZ = Math.floorDiv(z, Chunk.DEPTH);
+        Chunk chunk = chunks.get(chunkKey(chunkX, chunkZ));
+        if (chunk == null || chunk.getState().ordinal() < Chunk.ChunkState.GENERATED.ordinal()) {
+            return false;
+        }
+
+        int localX = Math.floorMod(x, Chunk.WIDTH);
+        int localZ = Math.floorMod(z, Chunk.DEPTH);
+        BlockType previous = chunk.getBlock(localX, y, localZ);
+        int previousMetadata = chunk.getBlockMetadata(localX, y, localZ);
+        if (previous == type && previousMetadata == metadata) {
+            return true;
+        }
+
+        chunk.setBlock(localX, y, localZ, type, metadata);
+        scheduledTickKeys.remove(new ScheduledTickKey(x, y, z, previous));
+
+        BlockPos pos = new BlockPos(x, y, z);
+        if (previous.hasTileEntity() && !type.hasTileEntity()) {
+            tileEntities.remove(pos);
+        }
+        if (type.hasTileEntity()) {
+            tileEntities.computeIfAbsent(pos, key -> createTileEntityForBlock(type, x, y, z));
+        } else {
+            tileEntities.remove(pos);
+        }
+
+        chunk.setDirty(true);
+        chunk.markLightDirty();
+        markNeighborChunkDirtyForBorder(chunkX, chunkZ, localX, localZ);
+        if (!suppressNeighborSupportUpdates) {
+            notifyBlockChanged(x, y, z, previous, previousMetadata, type, metadata);
+        }
+        return true;
+    }
+
+    private void markNeighborChunkDirtyForBorder(int chunkX, int chunkZ, int localX, int localZ) {
+        if (localX == 0) {
+            markChunkDirtyIfLoaded(chunkX - 1, chunkZ);
+        }
+        if (localX == Chunk.WIDTH - 1) {
+            markChunkDirtyIfLoaded(chunkX + 1, chunkZ);
+        }
+        if (localZ == 0) {
+            markChunkDirtyIfLoaded(chunkX, chunkZ - 1);
+        }
+        if (localZ == Chunk.DEPTH - 1) {
+            markChunkDirtyIfLoaded(chunkX, chunkZ + 1);
+        }
+    }
+
+    private void markChunkDirtyIfLoaded(int chunkX, int chunkZ) {
+        Chunk neighbor = chunks.get(chunkKey(chunkX, chunkZ));
+        if (neighbor != null) {
+            neighbor.setDirty(true);
+            neighbor.markLightDirty();
+        }
+    }
+
     public void tickBlockUpdates(float deltaTime) {
         blockTickAccumulator += deltaTime * 20.0f;
         while (blockTickAccumulator >= 1.0f) {
@@ -1348,7 +1622,11 @@ public class World {
                     continue;
                 }
                 ScheduledTickKey key = tick.key();
-                if (getBlock(key.x(), key.y(), key.z()) != key.type()) {
+                if (getBlockIfLoaded(key.x(), key.y(), key.z(), null) != key.type()) {
+                    continue;
+                }
+                if (requiresHorizontalTickNeighborhood(key.type())
+                        && !hasLoadedHorizontalTickNeighborhood(key.x(), key.z())) {
                     continue;
                 }
                 tickScheduledBlock(key.x(), key.y(), key.z(), key.type());
@@ -1357,12 +1635,28 @@ public class World {
         }
     }
 
+    private boolean hasLoadedHorizontalTickNeighborhood(int x, int z) {
+        return isChunkGeneratedForBlock(x, z)
+                && isChunkGeneratedForBlock(x + 1, z)
+                && isChunkGeneratedForBlock(x - 1, z)
+                && isChunkGeneratedForBlock(x, z + 1)
+                && isChunkGeneratedForBlock(x, z - 1);
+    }
+
+    private boolean requiresHorizontalTickNeighborhood(BlockType type) {
+        return type.isFluid() || type == BlockType.FIRE || RedstoneEngine.isRedstoneTickable(type);
+    }
+
     public int getScheduledBlockTickCount() {
         return scheduledTickKeys.size();
     }
 
     public boolean hasScheduledBlockTick(int x, int y, int z, BlockType type) {
         return scheduledTickKeys.contains(new ScheduledTickKey(x, y, z, type));
+    }
+
+    public long getBlockTickClock() {
+        return blockTickClock;
     }
 
     public void scheduleBlockTick(int x, int y, int z, BlockType type, int delayTicks) {
@@ -1377,6 +1671,33 @@ public class World {
         scheduledBlockTicks.add(new ScheduledBlockTick(dueTick, nextBlockTickSequence++, key));
     }
 
+    private void removeScheduledTicksForChunk(Chunk chunk) {
+        int minX = chunk.getWorldX();
+        int maxX = minX + Chunk.WIDTH;
+        int minZ = chunk.getWorldZ();
+        int maxZ = minZ + Chunk.DEPTH;
+        scheduledTickKeys.removeIf(key -> key.x() >= minX && key.x() < maxX
+                && key.z() >= minZ && key.z() < maxZ);
+        scheduledBlockTicks.removeIf(tick -> tick.key().x() >= minX && tick.key().x() < maxX
+                && tick.key().z() >= minZ && tick.key().z() < maxZ);
+    }
+
+    public void scheduleMechanismUpdatesAround(int x, int y, int z) {
+        RedstoneEngine.scheduleAround(this, x, y, z);
+    }
+
+    public boolean isBlockPowered(int x, int y, int z) {
+        return RedstoneEngine.isBlockPowered(this, x, y, z);
+    }
+
+    public int getWeakPower(int x, int y, int z, int towardFace) {
+        return RedstoneEngine.getWeakPower(this, x, y, z, towardFace);
+    }
+
+    public int getStrongPower(int x, int y, int z, int towardFace) {
+        return RedstoneEngine.getStrongPower(this, x, y, z, towardFace);
+    }
+
     private void scheduleTickableBlocksInChunk(Chunk chunk) {
         int worldX = chunk.getChunkX() * Chunk.WIDTH;
         int worldZ = chunk.getChunkZ() * Chunk.DEPTH;
@@ -1387,7 +1708,7 @@ public class World {
                     int bx = worldX + x;
                     int bz = worldZ + z;
                     if (type.isFlowingFluid() || type == BlockType.FIRE
-                            || (type.isFallingBlock() && y > 0 && BlockShape.canFallThrough(chunk.getBlock(x, y - 1, z)))) {
+                            || RedstoneEngine.isRedstoneTickable(type)) {
                         scheduleBlockTick(bx, y, bz, type, getTickDelay(type));
                     }
                 }
@@ -1396,7 +1717,8 @@ public class World {
     }
 
     private boolean isTickableBlock(BlockType type) {
-        return type.isFluid() || type == BlockType.FIRE || type.isFallingBlock();
+        return type.isFluid() || type == BlockType.FIRE || type.isFallingBlock()
+                || RedstoneEngine.isRedstoneTickable(type);
     }
 
     private int getTickDelay(BlockType type) {
@@ -1412,6 +1734,9 @@ public class World {
         if (type.isFallingBlock()) {
             return FALLING_BLOCK_TICK_DELAY;
         }
+        if (RedstoneEngine.isRedstoneTickable(type)) {
+            return RedstoneEngine.getTickDelay(type, 0);
+        }
         return 1;
     }
 
@@ -1422,6 +1747,8 @@ public class World {
             updateFireBlock(x, y, z);
         } else if (type.isFallingBlock()) {
             updateFallingBlock(x, y, z, type);
+        } else if (RedstoneEngine.isRedstoneTickable(type)) {
+            RedstoneEngine.tick(this, x, y, z, type);
         }
     }
 
@@ -1430,6 +1757,7 @@ public class World {
         scheduleBlockTick(x, y, z, current, getTickDelay(current));
         updateNeighborSupport(x, y, z);
         scheduleNeighborBlockUpdates(x, y, z);
+        scheduleMechanismUpdatesAround(x, y, z);
         tryMixFluidsAround(x, y, z);
         if (current.isLava()) {
             igniteAroundLava(x, y, z);
@@ -1447,9 +1775,11 @@ public class World {
             int nx = x + dir[0];
             int ny = y + dir[1];
             int nz = z + dir[2];
-            BlockType neighbor = getBlock(nx, ny, nz);
+            BlockType neighbor = getBlockIfLoaded(nx, ny, nz, BlockType.AIR);
             if (neighbor.isFluid() || neighbor == BlockType.FIRE
-                    || (neighbor.isFallingBlock() && ny > 0 && BlockShape.canFallThrough(getBlock(nx, ny - 1, nz)))) {
+                    || RedstoneEngine.isRedstoneTickable(neighbor)
+                    || (neighbor.isFallingBlock() && ny > 0
+                            && BlockShape.canFallThrough(getBlockIfLoaded(nx, ny - 1, nz, BlockType.AIR)))) {
                 scheduleBlockTick(nx, ny, nz, neighbor, getTickDelay(neighbor));
             }
             if (neighbor.isLava()) {
@@ -1460,7 +1790,7 @@ public class World {
 
     public boolean isFluidSource(int x, int y, int z) {
         BlockType type = getBlock(x, y, z);
-        return type.isFluid() && (getBlockMetadata(x, y, z) & 7) == 0;
+        return type.isFluid() && FluidState.isSource(getBlockMetadata(x, y, z));
     }
 
     public ItemType pickupFluidSource(int x, int y, int z) {
@@ -1490,7 +1820,11 @@ public class World {
     }
 
     public boolean canPlaceFallingBlockAt(int x, int y, int z, BlockType type, int metadata) {
-        if (y < 0 || y >= Chunk.HEIGHT || getBlock(x, y, z) != BlockType.AIR) {
+        if (y < 0 || y >= Chunk.HEIGHT) {
+            return false;
+        }
+        BlockType target = getBlock(x, y, z);
+        if (target != BlockType.AIR && !target.isFluid()) {
             return false;
         }
         return !BlockShape.canFallThrough(getBlock(x, y - 1, z));
@@ -1681,7 +2015,7 @@ public class World {
             return true;
         }
         if (target.isFluid()) {
-            return false;
+            return water ? target.isWater() : target.isLava();
         }
         if (target.isDoor() || target.isSign() || target == BlockType.LADDER) {
             return false;
@@ -1703,7 +2037,11 @@ public class World {
         if (!canFluidDisplace(x, y, z, water)) {
             return;
         }
-        if (target != BlockType.AIR) {
+        if (target.isFluid() && (water ? target.isWater() : target.isLava())
+                && FluidState.isStrongerOrEqual(getBlockMetadata(x, y, z), metadata)) {
+            return;
+        }
+        if (target != BlockType.AIR && !target.isFluid()) {
             if (water) {
                 breakBlock(x, y, z, true);
             } else {
@@ -1872,6 +2210,18 @@ public class World {
         if (type == BlockType.MOB_SPAWNER) {
             return new MonsterSpawnerTileEntity(x, y, z);
         }
+        if (type == BlockType.BREWING_STAND) {
+            return new BrewingStandTileEntity(x, y, z);
+        }
+        if (type == BlockType.DISPENSER) {
+            return new DispenserTileEntity(x, y, z);
+        }
+        if (type == BlockType.NOTE_BLOCK) {
+            return new NoteBlockTileEntity(x, y, z);
+        }
+        if (type == BlockType.JUKEBOX) {
+            return new JukeboxTileEntity(x, y, z);
+        }
         if (type.isSign()) {
             return new SignTileEntity(x, y, z);
         }
@@ -1892,9 +2242,17 @@ public class World {
         }
     }
 
+    @Override
     public void stageGeneratedTileEntity(TileEntity tileEntity) {
         if (tileEntity != null) {
             generatedTileEntities.put(tileEntity.getPos(), tileEntity);
+        }
+    }
+
+    @Override
+    public void stageGeneratedEntity(Entity entity) {
+        if (entity != null) {
+            generatedEntities.add(entity);
         }
     }
 
@@ -1990,12 +2348,16 @@ public class World {
     }
 
     public boolean toggleBlock(int x, int y, int z) {
+        if (RedstoneEngine.toggleInteractiveBlock(this, x, y, z)) {
+            return true;
+        }
         BlockType type = getBlock(x, y, z);
         int metadata = getBlockMetadata(x, y, z);
         if (type == BlockType.WOODEN_DOOR) {
             int lowerY = BlockShape.isDoorUpper(metadata) ? y - 1 : y;
             int lowerMetadata = getBlockMetadata(x, lowerY, z);
             setBlock(x, lowerY, z, type, lowerMetadata ^ 4);
+            scheduleMechanismUpdatesAround(x, lowerY, z);
             return true;
         }
         if (type == BlockType.IRON_DOOR) {
@@ -2003,9 +2365,76 @@ public class World {
         }
         if (type == BlockType.TRAPDOOR || type == BlockType.FENCE_GATE) {
             setBlock(x, y, z, type, metadata ^ 4);
+            scheduleMechanismUpdatesAround(x, y, z);
             return true;
         }
         return false;
+    }
+
+    public boolean addEyeToEndPortalFrame(int x, int y, int z) {
+        if (getBlock(x, y, z) != BlockType.END_PORTAL_FRAME) {
+            return false;
+        }
+        int metadata = getBlockMetadata(x, y, z);
+        if ((metadata & END_PORTAL_FRAME_EYE_BIT) != 0) {
+            return false;
+        }
+        setBlock(x, y, z, BlockType.END_PORTAL_FRAME, metadata | END_PORTAL_FRAME_EYE_BIT);
+        tryActivateEndPortalAround(x, y, z);
+        return true;
+    }
+
+    public boolean tryActivateEndPortalAround(int frameX, int frameY, int frameZ) {
+        for (int centerX = frameX - 2; centerX <= frameX + 2; centerX++) {
+            for (int centerZ = frameZ - 2; centerZ <= frameZ + 2; centerZ++) {
+                if (isCompleteEndPortalFrame(centerX, frameY, centerZ)) {
+                    for (int x = centerX - 1; x <= centerX + 1; x++) {
+                        for (int z = centerZ - 1; z <= centerZ + 1; z++) {
+                            setBlock(x, frameY, z, BlockType.END_PORTAL, 0);
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public boolean isCompleteEndPortalFrame(int centerX, int y, int centerZ) {
+        for (int x = centerX - 1; x <= centerX + 1; x++) {
+            if (!hasEndPortalEye(x, y, centerZ - 2) || !hasEndPortalEye(x, y, centerZ + 2)) {
+                return false;
+            }
+        }
+        for (int z = centerZ - 1; z <= centerZ + 1; z++) {
+            if (!hasEndPortalEye(centerX - 2, y, z) || !hasEndPortalEye(centerX + 2, y, z)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean hasEndPortalEye(int x, int y, int z) {
+        return getBlockIfLoaded(x, y, z, BlockType.AIR) == BlockType.END_PORTAL_FRAME
+                && (getBlockMetadataIfLoaded(x, y, z, 0) & END_PORTAL_FRAME_EYE_BIT) != 0;
+    }
+
+    public boolean isEndPortalAt(int x, int y, int z) {
+        return getBlockIfLoaded(x, y, z, BlockType.AIR) == BlockType.END_PORTAL;
+    }
+
+    public void ensureEndSpawnPlatform() {
+        int cx = (int) Math.floor(DimensionTransferService.END_SPAWN_X);
+        int cy = (int) DimensionTransferService.END_SPAWN_Y;
+        int cz = (int) Math.floor(DimensionTransferService.END_SPAWN_Z);
+        for (int x = cx - 2; x <= cx + 2; x++) {
+            for (int z = cz - 2; z <= cz + 2; z++) {
+                setBlock(x, cy - 1, z, BlockType.OBSIDIAN, 0);
+                for (int y = cy; y <= cy + 3; y++) {
+                    setBlock(x, y, z, BlockType.AIR, 0);
+                }
+            }
+        }
     }
 
     public boolean placeDoor(int x, int y, int z, BlockType type, int facing, AABB playerBox) {
@@ -2088,6 +2517,39 @@ public class World {
         return BlockShape.canPlaceAt(type, metadata, contextAt(x, y, z));
     }
 
+    private boolean isBlockSupportedIfLoaded(int x, int y, int z) {
+        if (!isChunkGeneratedForBlock(x, z)) {
+            return true;
+        }
+        BlockType type = getBlockIfLoaded(x, y, z, BlockType.AIR);
+        int metadata = getBlockMetadataIfLoaded(x, y, z, 0);
+        if (type == BlockType.AIR) {
+            return true;
+        }
+        if (type.isDoor()) {
+            if (BlockShape.isDoorUpper(metadata)) {
+                return getBlockIfLoaded(x, y - 1, z, BlockType.AIR) == type
+                        && !BlockShape.isDoorUpper(getBlockMetadataIfLoaded(x, y - 1, z, 0));
+            }
+            return BlockShape.canSupportAttached(getBlockIfLoaded(x, y - 1, z, BlockType.BEDROCK))
+                    && getBlockIfLoaded(x, y + 1, z, BlockType.AIR) == type;
+        }
+        if (type.isBed()) {
+            if (!BlockShape.canSupportAttached(getBlockIfLoaded(x, y - 1, z, BlockType.BEDROCK))) {
+                return false;
+            }
+            int facing = metadata & 3;
+            int[] dir = horizontalDirection(facing);
+            int otherX = BlockShape.isBedHead(metadata) ? x - dir[0] : x + dir[0];
+            int otherZ = BlockShape.isBedHead(metadata) ? z - dir[1] : z + dir[1];
+            if (!isChunkGeneratedForBlock(otherX, otherZ)) {
+                return true;
+            }
+            return getBlockIfLoaded(otherX, y, otherZ, BlockType.BEDROCK) == BlockType.BED;
+        }
+        return BlockShape.canPlaceAt(type, metadata, contextAtIfLoaded(x, y, z));
+    }
+
     private void updateNeighborSupport(int x, int y, int z) {
         int[][] dirs = {
                 { 1, 0, 0 }, { -1, 0, 0 },
@@ -2098,8 +2560,8 @@ public class World {
             int nx = x + dir[0];
             int ny = y + dir[1];
             int nz = z + dir[2];
-            BlockType neighbor = getBlock(nx, ny, nz);
-            if (neighbor != BlockType.AIR && neighbor != BlockType.BEDROCK && !isBlockSupported(nx, ny, nz)) {
+            BlockType neighbor = getBlockIfLoaded(nx, ny, nz, BlockType.AIR);
+            if (neighbor != BlockType.AIR && neighbor != BlockType.BEDROCK && !isBlockSupportedIfLoaded(nx, ny, nz)) {
                 breakBlock(nx, ny, nz, true);
             }
         }
@@ -2209,6 +2671,13 @@ public class World {
         return dimension;
     }
 
+    public StructureGenerator.StructureLocation locateStructure(StructureType type, int originX, int originZ) {
+        ReleaseOneWorldGenerator generator = worldGenerator instanceof ReleaseOneWorldGenerator releaseOne
+                ? releaseOne
+                : new ReleaseOneWorldGenerator(seed, dimension);
+        return new StructureGenerator().locate(seed, dimension, type, originX, originZ, generator);
+    }
+
     public com.craftzero.world.BiomeType getReleaseBiome(int x, int z) {
         return worldGenerator != null
                 ? worldGenerator.getBiome(x, z)
@@ -2224,7 +2693,7 @@ public class World {
         if (type == null || count <= 0) {
             return;
         }
-        droppedItems.add(new DroppedItem(x, y, z, type, count));
+        addDroppedItem(new DroppedItem(x, y, z, type, count));
     }
 
     /**
@@ -2235,7 +2704,7 @@ public class World {
         if (type == null || count <= 0) {
             return;
         }
-        droppedItems.add(new DroppedItem(x, y, z, type, count, velX, velY, velZ));
+        addDroppedItem(new DroppedItem(x, y, z, type, count, velX, velY, velZ));
     }
 
     public void spawnThrownStack(float x, float y, float z, ItemStack stack,
@@ -2243,7 +2712,23 @@ public class World {
         if (stack == null || stack.isEmpty()) {
             return;
         }
-        droppedItems.add(new DroppedItem(x, y, z, stack, velX, velY, velZ));
+        addDroppedItem(new DroppedItem(x, y, z, stack, velX, velY, velZ));
+    }
+
+    private void addDroppedItem(DroppedItem item) {
+        for (DroppedItem existing : droppedItems) {
+            float dx = existing.getX() - item.getX();
+            float dy = existing.getY() - item.getY();
+            float dz = existing.getZ() - item.getZ();
+            if (dx * dx + dy * dy + dz * dz > DROPPED_ITEM_MERGE_RADIUS_SQ) {
+                continue;
+            }
+            if (existing.canMergeWith(item)) {
+                existing.mergeWith(item);
+                return;
+            }
+        }
+        droppedItems.add(item);
     }
 
     /**
@@ -2272,7 +2757,15 @@ public class World {
 
         while (iterator.hasNext()) {
             DroppedItem item = iterator.next();
-            // Check if player can hold this item before trying to collect
+            if (item.getAge() < DROPPED_ITEM_PICKUP_DELAY) {
+                continue;
+            }
+            float dx = item.getX() - playerX;
+            float dy = item.getY() - playerY;
+            float dz = item.getZ() - playerZ;
+            if (dx * dx + dy * dy + dz * dz > DROPPED_ITEM_PICKUP_SCAN_RADIUS_SQ) {
+                continue;
+            }
             if (player.canAddStackToInventory(item.toItemStack())) {
                 if (item.tryCollect(playerX, playerY, playerZ, deltaTime)) {
                     collected.add(item);
@@ -2331,6 +2824,61 @@ public class World {
         return fireball;
     }
 
+    public SplashPotionEntity spawnSplashPotion(float x, float y, float z, float motionX, float motionY, float motionZ,
+            Entity shooter, PotionData potionData) {
+        SplashPotionEntity potion = new SplashPotionEntity(x, y, z, motionX, motionY, motionZ, shooter, potionData);
+        spawnEntity(potion);
+        return potion;
+    }
+
+    public MinecartEntity spawnMinecart(float x, float y, float z, MinecartEntity.CartKind kind) {
+        MinecartEntity cart = switch (kind) {
+            case CHEST -> new ChestMinecartEntity(x, y, z);
+            case FURNACE -> new FurnaceMinecartEntity(x, y, z);
+            default -> new MinecartEntity(x, y, z, MinecartEntity.CartKind.RIDEABLE);
+        };
+        spawnEntity(cart);
+        return cart;
+    }
+
+    public boolean placeMinecartOnRail(int x, int y, int z, ItemType itemType) {
+        BlockType rail = getBlockIfLoaded(x, y, z, BlockType.AIR);
+        if (!RailShapeResolver.isRail(rail)) {
+            return false;
+        }
+        MinecartEntity.CartKind kind = itemType == ItemType.CHEST_MINECART ? MinecartEntity.CartKind.CHEST
+                : itemType == ItemType.FURNACE_MINECART ? MinecartEntity.CartKind.FURNACE
+                        : MinecartEntity.CartKind.RIDEABLE;
+        spawnMinecart(x + 0.5f, y + 0.1f, z + 0.5f, kind);
+        return true;
+    }
+
+    public PrimedTntEntity spawnPrimedTnt(float x, float y, float z, int fuseTicks,
+            float motionX, float motionY, float motionZ) {
+        PrimedTntEntity tnt = new PrimedTntEntity(x, y, z, fuseTicks);
+        tnt.setMotion(motionX, motionY, motionZ);
+        spawnEntity(tnt);
+        return tnt;
+    }
+
+    public PrimedTntEntity primeTnt(int x, int y, int z, int fuseTicks) {
+        if (getBlockIfLoaded(x, y, z, BlockType.AIR) != BlockType.TNT) {
+            return null;
+        }
+        setBlockIfLoaded(x, y, z, BlockType.AIR, 0);
+        return spawnPrimedTnt(x + 0.5f, y, z + 0.5f, fuseTicks,
+                (random.nextFloat() - 0.5f) * 0.04f, 0.2f, (random.nextFloat() - 0.5f) * 0.04f);
+    }
+
+    public void spawnExperience(float x, float y, float z, int amount) {
+        int remaining = Math.max(0, amount);
+        while (remaining > 0) {
+            int value = ExperienceOrbEntity.getOrbValue(remaining);
+            remaining -= value;
+            spawnEntity(new ExperienceOrbEntity(x, y, z, value));
+        }
+    }
+
     /**
      * Remove an entity from the world.
      */
@@ -2342,6 +2890,12 @@ public class World {
      * Update all entities in the world.
      */
     public void updateEntities(float deltaTime) {
+        Entity generated;
+        while ((generated = generatedEntities.poll()) != null) {
+            generated.setWorld(this);
+            entitiesToAdd.add(generated);
+        }
+
         // Add pending entities
         entities.addAll(entitiesToAdd);
         entitiesToAdd.clear();
@@ -2370,6 +2924,71 @@ public class World {
      */
     public List<Entity> getEntities() {
         return entities;
+    }
+
+    public boolean hasEntityIntersecting(float minX, float minY, float minZ,
+            float maxX, float maxY, float maxZ, boolean includeDroppedItems) {
+        AABB area = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
+        for (Entity entity : entities) {
+            if (!entity.isRemoved() && entity.getBoundingBox().intersects(area)) {
+                return true;
+            }
+        }
+        for (Entity entity : entitiesToAdd) {
+            if (!entity.isRemoved() && entity.getBoundingBox().intersects(area)) {
+                return true;
+            }
+        }
+        if (includeDroppedItems) {
+            for (DroppedItem item : droppedItems) {
+                if (item.getX() >= minX && item.getX() <= maxX
+                        && item.getY() >= minY && item.getY() <= maxY
+                        && item.getZ() >= minZ && item.getZ() <= maxZ) {
+                    return true;
+                }
+            }
+        }
+        if (player != null && player.getBoundingBox().intersects(area)) {
+            return true;
+        }
+        return false;
+    }
+
+    public boolean hasMinecartAt(int x, int y, int z) {
+        AABB area = new AABB(x, y, z, x + 1, y + 1, z + 1);
+        for (Entity entity : entities) {
+            if (entity instanceof MinecartEntity && !entity.isRemoved() && entity.getBoundingBox().intersects(area)) {
+                return true;
+            }
+        }
+        for (Entity entity : entitiesToAdd) {
+            if (entity instanceof MinecartEntity && !entity.isRemoved() && entity.getBoundingBox().intersects(area)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean hasEntityOfType(Class<? extends Entity> type) {
+        if (type == null) {
+            return false;
+        }
+        for (Entity entity : entities) {
+            if (type.isInstance(entity) && !entity.isRemoved()) {
+                return true;
+            }
+        }
+        for (Entity entity : entitiesToAdd) {
+            if (type.isInstance(entity) && !entity.isRemoved()) {
+                return true;
+            }
+        }
+        for (Entity entity : generatedEntities) {
+            if (type.isInstance(entity) && !entity.isRemoved()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void replaceEntities(Collection<? extends Entity> restoredEntities) {

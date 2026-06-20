@@ -6,6 +6,8 @@ import com.craftzero.inventory.ItemStack;
 import com.craftzero.inventory.ItemRenderProfile;
 import com.craftzero.inventory.ItemType;
 import com.craftzero.main.Player;
+import com.craftzero.progression.ArmorMaterial;
+import com.craftzero.progression.ArmorSlot;
 import com.craftzero.world.BlockType;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
@@ -394,6 +396,7 @@ public class PlayerRenderer {
         if (atlas != null || itemsTexture != null) {
             renderHeldItemThirdPerson(player, partialTick, entityBrightness);
         }
+        renderArmorLayers(player, renderX, renderY, renderZ, bodyYaw, deathRotation);
 
         glEnable(GL_CULL_FACE);
 
@@ -409,6 +412,73 @@ public class PlayerRenderer {
         for (ModelPart child : part.getChildren()) {
             renderModelPart(child);
         }
+    }
+
+    private void renderArmorLayers(Player player, float renderX, float renderY, float renderZ,
+            float bodyYaw, float deathRotation) {
+        ItemStack[] armor = player.getInventory().getArmor();
+        if (armor == null) {
+            return;
+        }
+        ArmorMaterial layerOne = firstMaterial(armor, false);
+        ArmorMaterial layerTwo = firstMaterial(armor, true);
+        if (layerOne == null && layerTwo == null) {
+            return;
+        }
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(-1.0f, -1.0f);
+        if (layerOne != null) {
+            renderArmorLayer(layerOne, 1, renderX, renderY, renderZ, bodyYaw, deathRotation);
+        }
+        if (layerTwo != null) {
+            renderArmorLayer(layerTwo, 2, renderX, renderY, renderZ, bodyYaw, deathRotation);
+        }
+        glDisable(GL_POLYGON_OFFSET_FILL);
+    }
+
+    private ArmorMaterial firstMaterial(ItemStack[] armor, boolean leggingsLayer) {
+        for (int i = 0; i < armor.length && i < ArmorSlot.values().length; i++) {
+            if ((ArmorSlot.values()[i] == ArmorSlot.LEGGINGS) != leggingsLayer) {
+                continue;
+            }
+            ItemStack stack = armor[i];
+            if (stack == null || stack.isEmpty()) {
+                continue;
+            }
+            ArmorMaterial material = ArmorMaterial.materialOf(stack.getType());
+            if (material != null) {
+                return material;
+            }
+        }
+        return null;
+    }
+
+    private void renderArmorLayer(ArmorMaterial material, int layer, float renderX, float renderY, float renderZ,
+            float bodyYaw, float deathRotation) {
+        Texture texture = MobTexture.get(armorTexturePath(material, layer));
+        if (texture == null) {
+            return;
+        }
+        Matrix4f armorMatrix = new Matrix4f()
+                .translate(renderX, renderY, renderZ)
+                .rotateY((float) Math.toRadians(-bodyYaw))
+                .rotateZ(deathRotation)
+                .scale(MODEL_SCALE * 1.025f, MODEL_SCALE * 1.025f, MODEL_SCALE * 1.025f);
+        playerModel.root.calculateTransform(armorMatrix);
+        texture.bind(0);
+        renderModelPart(playerModel.root);
+        texture.unbind();
+    }
+
+    private String armorTexturePath(ArmorMaterial material, int layer) {
+        String prefix = switch (material) {
+            case LEATHER -> "cloth";
+            case CHAIN -> "chain";
+            case IRON -> "iron";
+            case DIAMOND -> "diamond";
+            case GOLD -> "gold";
+        };
+        return "/textures/armor/" + prefix + "_" + layer + ".png";
     }
 
     private void renderFirstPersonHand(Player player, Camera camera, float partialTick) {
@@ -511,12 +581,14 @@ public class PlayerRenderer {
         float origPY = playerModel.leftArm.getPivotY();
         float origPZ = playerModel.leftArm.getPivotZ();
 
-        playerModel.leftArm.setPivot(0, 0, 0);
-        playerModel.leftArm.setRotation(0, 0, 0);
-        playerModel.leftArm.calculateTransform(modelMatrix);
+        if (!holdingItem) {
+            playerModel.leftArm.setPivot(0, 0, 0);
+            playerModel.leftArm.setRotation(0, 0, 0);
+            playerModel.leftArm.calculateTransform(modelMatrix);
 
-        playerTexture.bind(0);
-        renderModelPart(playerModel.leftArm);
+            playerTexture.bind(0);
+            renderModelPart(playerModel.leftArm);
+        }
 
         // Render held item (block or tool)
         if (holdingItem && (atlas != null || itemsTexture != null)) {
@@ -585,11 +657,13 @@ public class PlayerRenderer {
                 renderHeldMesh(getHeldBlockMesh(type.getPlacedBlock()));
             }
         } else if (isSpriteItem) {
-            // Tool: render as flat 2D sprite angled
+            // Sprite items stay upright in screen-space first, then cant slightly inward
+            // toward the player. Keeping pitch near zero prevents tools from pointing
+            // forward into the world.
             itemMatrix.scale(profile.firstPersonScale());
-            itemMatrix.rotateX((float) Math.toRadians(profile.firstPersonRotX()));
-            itemMatrix.rotateY((float) Math.toRadians(profile.firstPersonRotY()));
             itemMatrix.rotateZ((float) Math.toRadians(profile.firstPersonRotZ()));
+            itemMatrix.rotateY((float) Math.toRadians(profile.firstPersonRotY()));
+            itemMatrix.rotateX((float) Math.toRadians(profile.firstPersonRotX()));
 
             Texture texToUse = null;
             if (ItemTextureResolver.usesItemsAtlas(type) && itemsTexture != null) {

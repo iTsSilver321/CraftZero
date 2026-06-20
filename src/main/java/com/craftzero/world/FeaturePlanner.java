@@ -60,13 +60,9 @@ final class FeaturePlanner {
 
     List<SmallFeature> smallFeaturesForChunk(int chunkX, int chunkZ) {
         List<SmallFeature> features = new ArrayList<>();
-        for (int ox = chunkX - 1; ox <= chunkX + 1; ox++) {
-            for (int oz = chunkZ - 1; oz <= chunkZ + 1; oz++) {
-                for (SmallFeature feature : rawSmallFeaturesForOrigin(ox, oz)) {
-                    if (feature.intersectsChunk(chunkX, chunkZ)) {
-                        features.add(feature);
-                    }
-                }
+        for (SmallFeature feature : rawSmallFeaturesForOrigin(chunkX, chunkZ)) {
+            if (feature.intersectsChunk(chunkX, chunkZ)) {
+                features.add(feature);
             }
         }
         features.sort(Comparator.comparingInt(SmallFeature::x).thenComparingInt(SmallFeature::z));

@@ -137,6 +137,16 @@ public class Input {
         return pressed;
     }
 
+    public static List<Integer> getDownKeys() {
+        List<Integer> down = new ArrayList<>();
+        for (int i = 0; i < MAX_KEYS; i++) {
+            if (keys[i]) {
+                down.add(i);
+            }
+        }
+        return down;
+    }
+
     public static List<Integer> getPressedButtons() {
         List<Integer> pressed = new ArrayList<>();
         for (int i = 0; i < MAX_BUTTONS; i++) {

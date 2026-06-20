@@ -26,7 +26,8 @@ public final class MobFactory {
             MobDefinition.GHAST,
             MobDefinition.ZOMBIE_PIGMAN,
             MobDefinition.BLAZE,
-            MobDefinition.MAGMA_CUBE);
+            MobDefinition.MAGMA_CUBE,
+            MobDefinition.ENDER_DRAGON);
 
     private MobFactory() {
     }
@@ -61,6 +62,7 @@ public final class MobFactory {
             case ZOMBIE_PIGMAN -> new ZombiePigman();
             case BLAZE -> new Blaze();
             case MAGMA_CUBE -> new MagmaCube(4);
+            case ENDER_DRAGON -> new EnderDragon();
             default -> null;
         };
     }

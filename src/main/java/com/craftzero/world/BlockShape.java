@@ -35,7 +35,45 @@ public final class BlockShape {
         int getMetadata(int dx, int dy, int dz);
     }
 
+    public static VoxelShape renderShape(BlockState state, BlockContext context) {
+        return VoxelShape.of(renderBoxes(state.type(), state.metadata(), context));
+    }
+
+    public static VoxelShape collisionShape(BlockState state, BlockContext context) {
+        BlockType type = state.type();
+        int metadata = state.metadata();
+        if (type == BlockType.AIR || type.isFluid() || type == BlockType.FIRE
+                || type == BlockType.TORCH || type == BlockType.REDSTONE_TORCH_OFF
+                || type == BlockType.REDSTONE_TORCH_ON || type == BlockType.LADDER || type.isSign()
+                || type.isPlant() || BlockBehavior.of(type) == BlockBehavior.RAIL
+                || BlockBehavior.of(type) == BlockBehavior.REDSTONE_DUST
+                || BlockBehavior.of(type) == BlockBehavior.REDSTONE_REPEATER
+                || type == BlockType.LEVER || type == BlockType.STONE_BUTTON
+                || type == BlockType.STONE_PRESSURE_PLATE || type == BlockType.WOODEN_PRESSURE_PLATE) {
+            return VoxelShape.EMPTY;
+        }
+        if (type.isFence()) {
+            return VoxelShape.of(fenceBoxes(context));
+        }
+        if (type.isFenceGate() && isFenceGateOpen(metadata)) {
+            return VoxelShape.EMPTY;
+        }
+        return renderShape(state, context);
+    }
+
+    public static VoxelShape selectionShape(BlockState state, BlockContext context) {
+        BlockType type = state.type();
+        if (type == BlockType.AIR || type.isFluid() || type == BlockType.FIRE) {
+            return VoxelShape.EMPTY;
+        }
+        return renderShape(state, context);
+    }
+
     public static List<Cuboid> getRenderBoxes(BlockType type, int metadata, BlockContext context) {
+        return renderShape(new BlockState(type, metadata), context).boxes();
+    }
+
+    private static List<Cuboid> renderBoxes(BlockType type, int metadata, BlockContext context) {
         if (type == BlockType.AIR) {
             return EMPTY_LIST;
         }
@@ -105,36 +143,15 @@ public final class BlockShape {
     }
 
     public static List<Cuboid> getCollisionBoxes(BlockType type, int metadata, BlockContext context) {
-        if (type == BlockType.AIR || type.isFluid() || type == BlockType.FIRE
-                || type == BlockType.TORCH || type == BlockType.REDSTONE_TORCH_OFF
-                || type == BlockType.REDSTONE_TORCH_ON || type == BlockType.LADDER || type.isSign()
-                || type.isPlant() || BlockBehavior.of(type) == BlockBehavior.RAIL
-                || BlockBehavior.of(type) == BlockBehavior.REDSTONE_DUST
-                || BlockBehavior.of(type) == BlockBehavior.REDSTONE_REPEATER
-                || type == BlockType.LEVER || type == BlockType.STONE_BUTTON
-                || type == BlockType.STONE_PRESSURE_PLATE || type == BlockType.WOODEN_PRESSURE_PLATE) {
-            return EMPTY_LIST;
-        }
-        if (type.isFence()) {
-            return fenceBoxes(context);
-        }
-        if (type.isFenceGate() && isFenceGateOpen(metadata)) {
-            return EMPTY_LIST;
-        }
-        return getRenderBoxes(type, metadata, context);
+        return collisionShape(new BlockState(type, metadata), context).boxes();
     }
 
     public static List<Cuboid> getSelectionBoxes(BlockType type, int metadata, BlockContext context) {
-        if (type == BlockType.AIR || type.isFluid() || type == BlockType.FIRE) {
-            return EMPTY_LIST;
-        }
-        return getRenderBoxes(type, metadata, context);
+        return selectionShape(new BlockState(type, metadata), context).boxes();
     }
 
     public static boolean isFullCube(BlockType type, int metadata) {
-        return type != BlockType.AIR && getRenderBoxes(type, metadata, emptyContext()).stream()
-                .anyMatch(Cuboid::isFullCube)
-                && getRenderBoxes(type, metadata, emptyContext()).size() == 1;
+        return type != BlockType.AIR && renderShape(new BlockState(type, metadata), emptyContext()).isFullCube();
     }
 
     public static boolean isOpaqueCube(BlockType type) {

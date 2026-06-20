@@ -7,7 +7,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class StructureGeneratorTest {
     @Test
-    @DisplayName("First-pass stronghold generation should be deterministic and dimension-gated")
+    @DisplayName("Stronghold generation should be deterministic and dimension-gated")
     void strongholdGenerationIsDeterministicAndDimensionGated() {
         long seed = 8128L;
         StructureGenerator structures = new StructureGenerator();
@@ -42,6 +42,64 @@ class StructureGeneratorTest {
             structures.generate(world, netherChunk, seed, foundX, foundZ, Dimension.NETHER,
                     new ReleaseOneWorldGenerator(seed, Dimension.NETHER));
             assertFalse(contains(netherChunk, BlockType.END_PORTAL_FRAME));
+        } finally {
+            world.cleanup();
+        }
+    }
+
+    @Test
+    @DisplayName("Structure locator should point at a generated stronghold chunk")
+    void locateStrongholdMatchesGeneratedPortalRoom() {
+        long seed = 24681357L;
+        StructureGenerator structures = new StructureGenerator();
+        ReleaseOneWorldGenerator generator = new ReleaseOneWorldGenerator(seed, Dimension.OVERWORLD);
+        StructureGenerator.StructureLocation location = structures.locate(seed, Dimension.OVERWORLD,
+                StructureType.STRONGHOLD, 0, 0, generator);
+        assertNotNull(location);
+
+        World world = new World(seed);
+        try {
+            boolean found = false;
+            for (int cx = location.chunkX() - 5; cx <= location.chunkX() + 5 && !found; cx++) {
+                for (int cz = location.chunkZ() - 5; cz <= location.chunkZ() + 5; cz++) {
+                    Chunk chunk = new Chunk(cx, cz);
+                    structures.generate(world, chunk, seed, cx, cz, Dimension.OVERWORLD, generator);
+                    if (contains(chunk, BlockType.END_PORTAL_FRAME)) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            assertTrue(found, "Locator should resolve to a stronghold with a portal room nearby");
+        } finally {
+            world.cleanup();
+        }
+    }
+
+    @Test
+    @DisplayName("Nether fortress locator should generate blaze spawner and wart pieces")
+    void locateNetherFortressMatchesGeneratedPieces() {
+        long seed = 97531L;
+        StructureGenerator structures = new StructureGenerator();
+        ReleaseOneWorldGenerator generator = new ReleaseOneWorldGenerator(seed, Dimension.NETHER);
+        StructureGenerator.StructureLocation location = structures.locate(seed, Dimension.NETHER,
+                StructureType.NETHER_FORTRESS, 0, 0, generator);
+        assertNotNull(location);
+
+        World world = new World(seed, WorldGenerator.RELEASE_ONE, Dimension.NETHER);
+        try {
+            boolean hasSpawner = false;
+            boolean hasWart = false;
+            for (int cx = location.chunkX() - 4; cx <= location.chunkX() + 4; cx++) {
+                for (int cz = location.chunkZ() - 4; cz <= location.chunkZ() + 4; cz++) {
+                    Chunk chunk = new Chunk(cx, cz);
+                    structures.generate(world, chunk, seed, cx, cz, Dimension.NETHER, generator);
+                    hasSpawner |= contains(chunk, BlockType.MOB_SPAWNER);
+                    hasWart |= contains(chunk, BlockType.NETHER_WART);
+                }
+            }
+            assertTrue(hasSpawner);
+            assertTrue(hasWart);
         } finally {
             world.cleanup();
         }

@@ -29,8 +29,10 @@ import com.craftzero.save.SaveManager;
 import com.craftzero.save.WorldManager;
 import com.craftzero.save.WorldManager.WorldInfo;
 import com.craftzero.ui.ChestScreen;
+import com.craftzero.ui.BrewingStandScreen;
 import com.craftzero.ui.ChatOverlay;
 import com.craftzero.ui.CraftingTableScreen;
+import com.craftzero.ui.EnchantingTableScreen;
 import com.craftzero.ui.FurnaceScreen;
 import com.craftzero.ui.InventoryScreen;
 import com.craftzero.ui.SignEditScreen;
@@ -46,11 +48,17 @@ import com.craftzero.ui.menu.ScreenManager;
 import com.craftzero.ui.menu.TextField;
 import com.craftzero.world.DayCycleManager;
 import com.craftzero.world.Dimension;
+import com.craftzero.world.DimensionTransferService;
 import com.craftzero.world.MobSpawner;
 import com.craftzero.world.BlockType;
+import com.craftzero.world.Chunk;
 import com.craftzero.world.World;
 import com.craftzero.world.WorldGenerator;
+import com.craftzero.entity.mob.EnderDragon;
+import com.craftzero.world.StructureGenerator;
+import com.craftzero.world.StructureType;
 import com.craftzero.world.tile.ChestTileEntity;
+import com.craftzero.world.tile.BrewingStandTileEntity;
 import com.craftzero.world.tile.FurnaceTileEntity;
 import com.craftzero.world.tile.SignTileEntity;
 
@@ -73,6 +81,7 @@ public class Main implements Runnable {
     private static final int TARGET_UPS = 60;
     private static final float FIXED_DELTA = 1.0f / TARGET_UPS;
     private static final float AUTOSAVE_INTERVAL = 60.0f;
+    private static final int INITIAL_LOAD_READY_RADIUS = 2;
     private static final boolean VSYNC = false;
 
     private Window window;
@@ -89,6 +98,8 @@ public class Main implements Runnable {
     private InventoryScreen inventoryScreen;
     private ChestScreen chestScreen;
     private FurnaceScreen furnaceScreen;
+    private BrewingStandScreen brewingStandScreen;
+    private EnchantingTableScreen enchantingTableScreen;
     private SignEditScreen signEditScreen;
     private InventoryRenderer inventoryRenderer;
     private InventoryPlayerRenderer inventoryPlayerRenderer;
@@ -140,6 +151,10 @@ public class Main implements Runnable {
     private final java.util.Set<String> bannedIps = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final java.util.Set<String> whitelist = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private boolean whitelistEnabled;
+    private float dimensionTransferCooldown;
+    private boolean hostAfterTerrainLoad;
+    private float terrainLoadingTime;
+    private World.ChunkAreaProgress terrainLoadProgress = new World.ChunkAreaProgress(1, 0, 0, 0);
 
     private boolean running;
     private boolean paused;
@@ -208,6 +223,9 @@ public class Main implements Runnable {
         inventoryRenderer.setContainerTextures(
                 com.craftzero.graphics.GuiTexture.getContainerTexture(),
                 com.craftzero.graphics.GuiTexture.getFurnaceTexture());
+        inventoryRenderer.setProgressionTextures(
+                com.craftzero.graphics.GuiTexture.getEnchantTexture(),
+                com.craftzero.graphics.GuiTexture.getAlchemyTexture());
         inventoryRenderer.setItemsTexture(com.craftzero.graphics.GuiTexture.getItemsTexture());
 
         inventoryPlayerRenderer = new InventoryPlayerRenderer();
@@ -338,6 +356,7 @@ public class Main implements Runnable {
                 Input.isButtonDown(GLFW_MOUSE_BUTTON_LEFT),
                 Input.getScrollY(),
                 Input.getPressedKeys(),
+                Input.getDownKeys(),
                 Input.getTypedCharacters());
     }
 
@@ -550,6 +569,14 @@ public class Main implements Runnable {
             furnaceScreen.update();
             throwScreenItems(furnaceScreen.getAndClearItemsToThrow(), 4.0f, 2.0f);
         }
+        if (brewingStandScreen.isOpen()) {
+            brewingStandScreen.update();
+            throwScreenItems(brewingStandScreen.getAndClearItemsToThrow(), 4.0f, 2.0f);
+        }
+        if (enchantingTableScreen.isOpen()) {
+            enchantingTableScreen.update();
+            throwScreenItems(enchantingTableScreen.getAndClearItemsToThrow(), 4.0f, 2.0f);
+        }
         if (signEditScreen.isOpen()) {
             signEditScreen.update();
         }
@@ -582,6 +609,16 @@ public class Main implements Runnable {
         if (furnacePos != null
                 && world.getTileEntity(furnacePos.x, furnacePos.y, furnacePos.z) instanceof FurnaceTileEntity furnace) {
             furnaceScreen.open(furnace, window.getWidth(), window.getHeight());
+        }
+        org.joml.Vector3i brewingPos = player.getAndClearBrewingStandOpenRequest();
+        if (brewingPos != null
+                && world.getTileEntity(brewingPos.x, brewingPos.y, brewingPos.z) instanceof BrewingStandTileEntity brewingStand) {
+            brewingStandScreen.open(brewingStand, window.getWidth(), window.getHeight());
+        }
+        org.joml.Vector3i enchantingPos = player.getAndClearEnchantingTableOpenRequest();
+        if (enchantingPos != null) {
+            enchantingTableScreen.open(world, enchantingPos, player.getStats().getProgression(),
+                    window.getWidth(), window.getHeight());
         }
         org.joml.Vector3i signPos = player.getAndClearSignEditRequest();
         if (signPos != null
@@ -618,6 +655,10 @@ public class Main implements Runnable {
             return;
         }
         drainPendingNetworkMessages();
+        if (gameState == GameState.LOADING_WORLD) {
+            updateTerrainLoading(deltaTime);
+            return;
+        }
         Screen screen = screenManager.currentScreen();
         if (paused || gameState != GameState.PLAYING || !window.isFocused()
                 || (screen != null && screen.pausesGame())) {
@@ -628,6 +669,11 @@ public class Main implements Runnable {
         if (player.isDead()) {
             openDeathMenuIfNeeded();
             return;
+        }
+        if (dimensionTransferCooldown > 0.0f) {
+            dimensionTransferCooldown -= deltaTime;
+        } else {
+            handleEndPortalTransfer();
         }
 
         updateFog();
@@ -656,6 +702,40 @@ public class Main implements Runnable {
         }
     }
 
+    private void updateTerrainLoading(float deltaTime) {
+        terrainLoadingTime += deltaTime;
+        player.setInterpolatedCameraPosition(1.0f);
+        world.update(player.getCamera());
+        org.joml.Vector3f position = player.getPosition();
+        terrainLoadProgress = world.getChunkAreaProgress(position.x, position.z, INITIAL_LOAD_READY_RADIUS);
+        if (terrainLoadProgress.isReady()) {
+            finishTerrainLoading();
+        }
+    }
+
+    private void beginTerrainLoading(boolean hostAfterLoad) {
+        hostAfterTerrainLoad = hostAfterLoad;
+        terrainLoadingTime = 0.0f;
+        terrainLoadProgress = new World.ChunkAreaProgress(1, 0, 0, 0);
+        gameState = GameState.LOADING_WORLD;
+        paused = false;
+        Input.setCursorLocked(false);
+        if (player != null) {
+            player.getCamera().setAspectRatio(window.getWidth(), window.getHeight());
+            player.setInterpolatedCameraPosition(1.0f);
+        }
+    }
+
+    private void finishTerrainLoading() {
+        gameState = GameState.PLAYING;
+        Input.setCursorLocked(true);
+        player.getCamera().setAspectRatio(window.getWidth(), window.getHeight());
+        if (hostAfterTerrainLoad) {
+            hostAfterTerrainLoad = false;
+            startMultiplayerHost();
+        }
+    }
+
     private void updateFog() {
         if (player.isHeadInWater()) {
             int depth = 0;
@@ -676,7 +756,7 @@ public class Main implements Runnable {
             renderer.setFogColor(new org.joml.Vector3f(r, g, b));
             renderer.setClearColor(r, g, b, 1.0f);
         } else {
-            renderer.setFogDensity(0.007f);
+            applyNormalDistanceFog();
             renderer.setFogColor(new org.joml.Vector3f(0.6f, 0.6f, 0.6f));
             renderer.setClearColor(0.529f, 0.808f, 0.922f, 1.0f);
         }
@@ -758,6 +838,18 @@ public class Main implements Runnable {
             return 0.42f;
         }
         return 0.007f;
+    }
+
+    static float[] normalFogRangeForRenderDistance(int renderDistanceChunks) {
+        float end = Math.max(32.0f, renderDistanceChunks * (float) Chunk.WIDTH);
+        return new float[] { end * 0.70f, end };
+    }
+
+    private void applyNormalDistanceFog() {
+        int chunks = settings == null ? GameSettings.DEFAULT_RENDER_DISTANCE_CHUNKS
+                : renderDistanceChunks(settings.getRenderDistance());
+        float[] range = normalFogRangeForRenderDistance(chunks);
+        renderer.setFogRange(range[0], range[1]);
     }
 
     private static int floorBlock(float value) {
@@ -1204,6 +1296,33 @@ public class Main implements Runnable {
             };
         }
 
+        @Override
+        public int regenerateUnmodifiedChunks(int radiusChunks) {
+            if (world == null || player == null) {
+                return 0;
+            }
+            return world.regenerateUnmodifiedChunksAround(player.getPosition().x, player.getPosition().z, radiusChunks);
+        }
+
+        @Override
+        public CommandDispatcher.StructureResult locateStructure(String type) {
+            if (world == null || player == null) {
+                return null;
+            }
+            StructureType structureType = switch (type == null ? "" : type) {
+                case "stronghold" -> StructureType.STRONGHOLD;
+                case "nether_fortress" -> StructureType.NETHER_FORTRESS;
+                default -> null;
+            };
+            if (structureType == null) {
+                return null;
+            }
+            StructureGenerator.StructureLocation location = world.locateStructure(structureType,
+                    (int) Math.floor(player.getPosition().x), (int) Math.floor(player.getPosition().z));
+            return location == null ? null
+                    : new CommandDispatcher.StructureResult(location.blockX(), location.blockY(), location.blockZ());
+        }
+
         private String whitelistCommand(List<String> args) {
             if (args.isEmpty() || "list".equalsIgnoreCase(args.get(0))) {
                 return "Whitelisted players: " + (whitelist.isEmpty() ? "(none)" : String.join(", ", whitelist));
@@ -1290,13 +1409,25 @@ public class Main implements Runnable {
         }
         drainPendingChatMessages();
 
+        if (gameState == GameState.LOADING_WORLD) {
+            renderer.setClearColor(0.08f, 0.10f, 0.12f, 1.0f);
+            renderer.clear();
+            renderTerrainLoadingScreen(deltaTime);
+            restoreWorldGlState();
+            return;
+        }
+
         player.setInterpolatedCameraPosition(partialTick);
         CameraFluid cameraFluid = cameraFluid();
         float waterDepth = cameraFluid == CameraFluid.WATER ? cameraWaterDepthFactor() : 0.0f;
         org.joml.Vector3f clearColor = renderEnvironmentClearColor(cameraFluid, waterDepth);
         renderer.setClearColor(clearColor.x, clearColor.y, clearColor.z, 1.0f);
         renderer.setFogColor(renderEnvironmentFogColor(cameraFluid, waterDepth));
-        renderer.setFogDensity(renderEnvironmentFogDensity(cameraFluid, waterDepth));
+        if (cameraFluid == CameraFluid.NONE) {
+            applyNormalDistanceFog();
+        } else {
+            renderer.setFogDensity(renderEnvironmentFogDensity(cameraFluid, waterDepth));
+        }
         float gammaBoost = settings == null ? 0.0f : settings.getGamma() * 0.35f;
         renderer.setAmbientLight(Math.min(1.0f, dayCycleManager.getAmbientIntensity() + gammaBoost));
         renderer.setLightDirection(dayCycleManager.getSunDirection());
@@ -1340,10 +1471,13 @@ public class Main implements Runnable {
         } else {
             survivalHudRenderer.renderHotbarOnly(player.getInventory(), deltaTime);
         }
+        renderBossHud();
         inventoryRenderer.render(inventoryScreen);
         inventoryRenderer.renderCraftingTable(craftingTableScreen);
         inventoryRenderer.renderChest(chestScreen);
         inventoryRenderer.renderFurnace(furnaceScreen);
+        inventoryRenderer.renderBrewingStand(brewingStandScreen);
+        inventoryRenderer.renderEnchantingTable(enchantingTableScreen);
         inventoryRenderer.renderSignEditor(signEditScreen);
 
         if (player.isDead()) {
@@ -1357,6 +1491,48 @@ public class Main implements Runnable {
             inventoryRenderer.renderCreative(creativeInventoryScreen, menuRenderer.guiScale());
         }
         restoreWorldGlState();
+    }
+
+    private void renderTerrainLoadingScreen(float deltaTime) {
+        menuRenderer.renderDirtBackground();
+        int width = guiWidth();
+        int height = guiHeight();
+        int centerX = width / 2;
+        int centerY = height / 2;
+        float progress = terrainLoadProgress == null ? 0.0f : terrainLoadProgress.progress();
+        progress = Math.max(0.0f, Math.min(1.0f, progress));
+
+        menuRenderer.drawCenteredText("Building terrain", centerX, centerY - 34, 1.0f,
+                new float[] { 1.0f, 1.0f, 1.0f, 1.0f });
+        int barWidth = 182;
+        int barHeight = 6;
+        int barX = centerX - barWidth / 2;
+        int barY = centerY - 12;
+        menuRenderer.drawRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2,
+                0.18f, 0.18f, 0.18f, 1.0f);
+        menuRenderer.drawRect(barX, barY, barWidth, barHeight,
+                0.0f, 0.0f, 0.0f, 1.0f);
+        menuRenderer.drawRect(barX + 1, barY + 1, Math.max(0.0f, (barWidth - 2) * progress), barHeight - 2,
+                0.55f, 0.55f, 0.55f, 1.0f);
+
+        String detail = Math.round(progress * 100.0f) + "%";
+        if (terrainLoadProgress != null) {
+            detail += "  " + terrainLoadProgress.readyChunks() + "/" + terrainLoadProgress.total();
+        }
+        menuRenderer.drawCenteredText(detail, centerX, centerY + 6, 0.8f,
+                new float[] { 0.75f, 0.75f, 0.75f, 1.0f });
+    }
+
+    private void renderBossHud() {
+        if (world == null || survivalHudRenderer == null || world.getDimension() != Dimension.THE_END) {
+            return;
+        }
+        for (com.craftzero.entity.Entity entity : world.getEntities()) {
+            if (entity instanceof EnderDragon dragon && !dragon.isDead()) {
+                survivalHudRenderer.renderBossBar("Ender Dragon", dragon.getHealth() / dragon.getMaxHealth());
+                return;
+            }
+        }
     }
 
     private void restoreWorldGlState() {
@@ -1467,11 +1643,21 @@ public class Main implements Runnable {
             world.setSmoothLighting(settings.isSmoothLighting());
             world.setAdvancedOpenGl(settings.isAdvancedOpenGl());
             saveManager.applyLevel(loadedLevel, player, dayCycleManager, world);
+            if (loadedLevel == null || loadedLevel.player == null) {
+                com.craftzero.world.ReleaseOneWorldGenerator.SpawnPoint spawn = world.findSafeSpawn();
+                worldSpawnX = spawn.x();
+                worldSpawnY = spawn.y();
+                worldSpawnZ = spawn.z();
+                player.setPosition(spawn.x() + 0.5f, spawn.y(), spawn.z() + 0.5f);
+                player.setSpawnPosition(spawn.x() + 0.5f, spawn.y(), spawn.z() + 0.5f);
+            }
 
             mobSpawner = new MobSpawner(world);
             inventoryScreen = new InventoryScreen(player.getInventory());
             chestScreen = new ChestScreen(player.getInventory());
             furnaceScreen = new FurnaceScreen(player.getInventory());
+            brewingStandScreen = new BrewingStandScreen(player.getInventory());
+            enchantingTableScreen = new EnchantingTableScreen(player.getInventory());
             signEditScreen = new SignEditScreen();
             craftingTableScreen = new CraftingTableScreen(player.getInventory());
 
@@ -1479,13 +1665,7 @@ public class Main implements Runnable {
             savingEnabled = true;
             paused = false;
             deathMenuOpen = false;
-            gameState = GameState.PLAYING;
-            Input.setCursorLocked(true);
-            player.getCamera().setAspectRatio(window.getWidth(), window.getHeight());
-
-            if (host) {
-                startMultiplayerHost();
-            }
+            beginTerrainLoading(host);
 
             System.out.println("Loaded world '" + worldInfo.displayName() + "' at " + worldInfo.path());
             System.out.println("Seed: " + seed + " | Generator: " + world.getGeneratorId()
@@ -1540,6 +1720,8 @@ public class Main implements Runnable {
         inventoryScreen = new InventoryScreen(player.getInventory());
         chestScreen = new ChestScreen(player.getInventory());
         furnaceScreen = new FurnaceScreen(player.getInventory());
+        brewingStandScreen = new BrewingStandScreen(player.getInventory());
+        enchantingTableScreen = new EnchantingTableScreen(player.getInventory());
         signEditScreen = new SignEditScreen();
         craftingTableScreen = new CraftingTableScreen(player.getInventory());
 
@@ -1549,13 +1731,14 @@ public class Main implements Runnable {
         multiplayerStateTimer = 0.0f;
         paused = false;
         deathMenuOpen = false;
-        gameState = GameState.PLAYING;
-        Input.setCursorLocked(true);
-        player.getCamera().setAspectRatio(window.getWidth(), window.getHeight());
+        beginTerrainLoading(false);
     }
 
     private void unloadWorld(boolean save) {
         waitForAutosave();
+        hostAfterTerrainLoad = false;
+        terrainLoadingTime = 0.0f;
+        terrainLoadProgress = new World.ChunkAreaProgress(1, 0, 0, 0);
         if (save) {
             saveGame("leave world");
         }
@@ -1575,6 +1758,8 @@ public class Main implements Runnable {
         inventoryScreen = null;
         chestScreen = null;
         furnaceScreen = null;
+        brewingStandScreen = null;
+        enchantingTableScreen = null;
         signEditScreen = null;
         craftingTableScreen = null;
         paused = false;
@@ -1889,6 +2074,59 @@ public class Main implements Runnable {
         if (multiplayerClient != null) {
             multiplayerClient.close();
             multiplayerClient = null;
+        }
+    }
+
+    private void handleEndPortalTransfer() {
+        if (world == null || player == null || clientMultiplayerWorld) {
+            return;
+        }
+        org.joml.Vector3f pos = player.getPosition();
+        int x = floorBlock(pos.x);
+        int y = floorBlock(pos.y + 0.1f);
+        int z = floorBlock(pos.z);
+        boolean inPortal = world.isEndPortalAt(x, y, z) || world.isEndPortalAt(x, y + 1, z);
+        if (!inPortal) {
+            return;
+        }
+        DimensionTransferService.TransferTarget target = DimensionTransferService.fromEndPortal(world.getDimension(),
+                worldSpawnX, worldSpawnY, worldSpawnZ);
+        switchDimension(target);
+    }
+
+    private void switchDimension(DimensionTransferService.TransferTarget target) {
+        if (target == null || world == null || player == null || dayCycleManager == null) {
+            return;
+        }
+        try {
+            waitForAutosave();
+            saveGame("dimension transfer");
+            long seed = world.getSeed();
+            if (world != null) {
+                world.cleanup();
+            }
+            world = new World(seed, WorldGenerator.RELEASE_ONE, target.dimension());
+            world.setSaveManager(saveManager);
+            world.init();
+            survivalHudRenderer.setAtlas(world.getAtlas());
+            inventoryRenderer.setAtlas(world.getAtlas());
+            playerRenderer.setTextures(world.getAtlas(), com.craftzero.graphics.GuiTexture.getItemsTexture());
+            player.setPosition(target.x(), target.y(), target.z());
+            player.setWorld(world);
+            world.setPlayer(player);
+            world.setDayCycleManager(dayCycleManager);
+            world.setRenderDistanceChunks(renderDistanceChunks(settings.getRenderDistance()));
+            world.setFancyGraphics(settings.isFancyGraphics());
+            world.setSmoothLighting(settings.isSmoothLighting());
+            world.setAdvancedOpenGl(settings.isAdvancedOpenGl());
+            if (target.dimension() == Dimension.THE_END) {
+                world.ensureEndSpawnPlatform();
+            }
+            mobSpawner = new MobSpawner(world);
+            dimensionTransferCooldown = 2.0f;
+        } catch (Exception e) {
+            e.printStackTrace();
+            openMessageScreen("Dimension Transfer Failed", e.getMessage());
         }
     }
 

@@ -7,6 +7,8 @@ import java.util.function.IntPredicate;
 public final class TextField implements MenuComponent {
 
     private static final int DEFAULT_CHARACTER_WIDTH = 6;
+    private static final long REPEAT_INITIAL_DELAY_NANOS = 350_000_000L;
+    private static final long REPEAT_INTERVAL_NANOS = 45_000_000L;
 
     private final String id;
     private Rect bounds;
@@ -22,6 +24,9 @@ public final class TextField implements MenuComponent {
     private boolean visible = true;
     private boolean enabled = true;
     private boolean focused;
+    private boolean mouseWasDown;
+    private int heldRepeatKey = Integer.MIN_VALUE;
+    private long nextRepeatNanos;
 
     public TextField(String id, Rect bounds, String initialText, int maxLength) {
         if (maxLength < 0) {
@@ -130,6 +135,9 @@ public final class TextField implements MenuComponent {
 
     public void setFocused(boolean focused) {
         this.focused = focused && visible && enabled;
+        if (!this.focused) {
+            resetRepeat();
+        }
     }
 
     public void setCharacterFilter(IntPredicate characterFilter) {
@@ -168,6 +176,7 @@ public final class TextField implements MenuComponent {
         this.visible = visible;
         if (!visible) {
             focused = false;
+            resetRepeat();
         }
     }
 
@@ -184,6 +193,7 @@ public final class TextField implements MenuComponent {
         this.enabled = enabled;
         if (!enabled) {
             focused = false;
+            resetRepeat();
         }
     }
 
@@ -237,14 +247,21 @@ public final class TextField implements MenuComponent {
         }
         int mouseX = (int) Math.round(input.mouseX());
         int mouseY = (int) Math.round(input.mouseY());
-        if (input.leftPressed()) {
+        if (input.leftPressed() && !mouseWasDown) {
             mousePressed(mouseX, mouseY, MouseButton.LEFT);
         }
+        mouseWasDown = input.leftPressed();
+
+        long now = System.nanoTime();
         if (input.pressedKeys() != null) {
             for (int key : input.pressedKeys()) {
+                if (isRepeatableEditingKey(key)) {
+                    startRepeat(key, now);
+                }
                 keyPressed(key);
             }
         }
+        repeatHeldKey(input, now);
         if (input.typedCharacters() != null) {
             for (char character : input.typedCharacters()) {
                 charTyped(character);
@@ -267,5 +284,59 @@ public final class TextField implements MenuComponent {
         }
         text.deleteCharAt(cursorIndex);
         onChanged.accept(text());
+    }
+
+    private void repeatHeldKey(MenuInput input, long now) {
+        if (!focused || !enabled) {
+            resetRepeat();
+            return;
+        }
+        int key = heldEditingKey(input);
+        if (key == Integer.MIN_VALUE) {
+            resetRepeat();
+            return;
+        }
+        if (key != heldRepeatKey) {
+            startRepeat(key, now);
+            return;
+        }
+        if (now < nextRepeatNanos) {
+            return;
+        }
+        keyPressed(key);
+        nextRepeatNanos = now + REPEAT_INTERVAL_NANOS;
+    }
+
+    private int heldEditingKey(MenuInput input) {
+        if (input == null) {
+            return Integer.MIN_VALUE;
+        }
+        if (input.keyDown(MenuKeys.BACKSPACE)) {
+            return MenuKeys.BACKSPACE;
+        }
+        if (input.keyDown(MenuKeys.DELETE)) {
+            return MenuKeys.DELETE;
+        }
+        if (input.keyDown(MenuKeys.LEFT)) {
+            return MenuKeys.LEFT;
+        }
+        if (input.keyDown(MenuKeys.RIGHT)) {
+            return MenuKeys.RIGHT;
+        }
+        return Integer.MIN_VALUE;
+    }
+
+    private boolean isRepeatableEditingKey(int key) {
+        return key == MenuKeys.BACKSPACE || key == MenuKeys.DELETE || key == MenuKeys.LEFT || key == MenuKeys.RIGHT;
+    }
+
+    private void startRepeat(int key, long now) {
+        heldRepeatKey = key;
+        nextRepeatNanos = now + REPEAT_INITIAL_DELAY_NANOS;
+    }
+
+    private void resetRepeat() {
+        heldRepeatKey = Integer.MIN_VALUE;
+        nextRepeatNanos = 0L;
     }
 }

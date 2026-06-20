@@ -1,6 +1,8 @@
 package com.craftzero.world;
 
 import com.craftzero.entity.FallingBlockEntity;
+import com.craftzero.graphics.Camera;
+import org.joml.Vector3f;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -41,6 +43,43 @@ class ScheduledBlockTickTest {
             world.updateEntities(1.0f / 20.0f);
             assertSame(BlockType.AIR, world.getBlock(0, 100, 0));
             assertTrue(world.getEntities().stream().anyMatch(entity -> entity instanceof FallingBlockEntity));
+        } finally {
+            world.cleanup();
+        }
+    }
+
+    @Test
+    @DisplayName("Generated chunks should not wake dormant unsupported falling blocks")
+    void generatedChunksDoNotScheduleDormantFallingBlocks() {
+        World world = new World(23L, WorldGenerator.LEGACY_CRAFTZERO);
+        try {
+            Chunk chunk = world.getChunk(0, 0);
+            chunk.setBlock(1, 20, 1, BlockType.SAND);
+            chunk.setState(Chunk.ChunkState.GENERATED);
+
+            world.update(new Camera(new Vector3f(8.0f, 70.0f, 8.0f)));
+
+            assertFalse(world.hasScheduledBlockTick(1, 20, 1, BlockType.SAND));
+        } finally {
+            world.cleanup();
+        }
+    }
+
+    @Test
+    @DisplayName("Due scheduled ticks should not synchronously generate unloaded chunks")
+    void scheduledTicksDoNotGenerateUnloadedChunks() {
+        World world = new World(24L, WorldGenerator.LEGACY_CRAFTZERO);
+        try {
+            int x = 4096;
+            int z = 4096;
+            int chunkX = Math.floorDiv(x, Chunk.WIDTH);
+            int chunkZ = Math.floorDiv(z, Chunk.DEPTH);
+
+            world.scheduleBlockTick(x, 64, z, BlockType.WATER, 0);
+            world.advanceBlockTicks(1);
+
+            assertNull(world.getLoadedChunk(chunkX, chunkZ));
+            assertFalse(world.hasScheduledBlockTick(x, 64, z, BlockType.WATER));
         } finally {
             world.cleanup();
         }

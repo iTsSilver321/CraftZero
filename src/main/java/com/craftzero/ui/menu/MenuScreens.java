@@ -199,6 +199,7 @@ public final class MenuScreens {
         int visibleRows = Math.max(4, Math.min(7, (height - 116) / rowHeight));
         MenuList<WorldInfo> list = new MenuList<>(worlds.get(), WorldInfo::displayName,
                 width / 2 - listWidth / 2, listY, listWidth, rowHeight, visibleRows);
+        list.setOnActivated(play);
         BaseMenuScreen screen = new BaseMenuScreen("Select World", true, false, cancel);
         screen.add(list);
         int y = height - 60;

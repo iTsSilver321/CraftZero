@@ -2,19 +2,30 @@ package com.craftzero.world;
 
 import com.craftzero.math.Noise;
 
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
  * Release 1.0-style interpolated density sampler for Overworld base terrain.
  */
 final class OverworldDensityField {
     private static final int XZ_STEP = 4;
     private static final int Y_STEP = 8;
+    private static final int BIOME_BLEND_RADIUS = 16;
+    private static final int BIOME_BLEND_STEP = 16;
 
     private final Noise terrainNoise;
     private final Noise detailNoise;
+    private final BiomeSampler biomeSampler;
+    private final ConcurrentHashMap<Long, Double> surfaceCache = new ConcurrentHashMap<>();
 
-    OverworldDensityField(Noise terrainNoise, Noise detailNoise) {
+    interface BiomeSampler {
+        BiomeType getBiome(int blockX, int blockZ);
+    }
+
+    OverworldDensityField(Noise terrainNoise, Noise detailNoise, BiomeSampler biomeSampler) {
         this.terrainNoise = terrainNoise;
         this.detailNoise = detailNoise;
+        this.biomeSampler = biomeSampler;
     }
 
     boolean isSolid(int blockX, int y, int blockZ, BiomeType biome) {
@@ -78,22 +89,59 @@ final class OverworldDensityField {
     }
 
     double surfaceAnchor(int blockX, int blockZ, BiomeType biome) {
+        long key = (((long) blockX) << 32) ^ (blockZ & 0xFFFFFFFFL);
+        Double cached = surfaceCache.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        double computed = computeSurfaceAnchor(blockX, blockZ, biome);
+        surfaceCache.put(key, computed);
+        return computed;
+    }
+
+    private double computeSurfaceAnchor(int blockX, int blockZ, BiomeType biome) {
+        if (biomeSampler == null || biome == BiomeType.HELL || biome == BiomeType.SKY) {
+            return rawSurfaceAnchor(blockX, blockZ, biome);
+        }
+
+        BiomeType centerBiome = biomeSampler.getBiome(blockX, blockZ);
+        double weightedHeight = 0.0;
+        double totalWeight = 0.0;
+        for (int dx = -BIOME_BLEND_RADIUS; dx <= BIOME_BLEND_RADIUS; dx += BIOME_BLEND_STEP) {
+            for (int dz = -BIOME_BLEND_RADIUS; dz <= BIOME_BLEND_RADIUS; dz += BIOME_BLEND_STEP) {
+                int sx = blockX + dx;
+                int sz = blockZ + dz;
+                BiomeType sampleBiome = dx == 0 && dz == 0 ? centerBiome : biomeSampler.getBiome(sx, sz);
+                double distanceSq = dx * dx + dz * dz;
+                double weight = 1.0 / (1.0 + distanceSq / 96.0);
+                weightedHeight += rawSurfaceAnchor(sx, sz, sampleBiome) * weight;
+                totalWeight += weight;
+            }
+        }
+
+        double blended = weightedHeight / Math.max(0.0001, totalWeight);
+        double local = rawSurfaceAnchor(blockX, blockZ, centerBiome);
+        double height = lerp(0.62, local, blended);
+        return Math.max(5.0, Math.min(Chunk.HEIGHT - 6.0, height));
+    }
+
+    private double rawSurfaceAnchor(int blockX, int blockZ, BiomeType biome) {
         double broad = terrainNoise.octaveNoise2D(blockX * 0.0035, blockZ * 0.0035, 4, 0.5);
         double medium = detailNoise.octaveNoise2D(blockX * 0.011, blockZ * 0.011, 3, 0.52);
         double rough = terrainNoise.octaveNoise2D((blockX - 5000) * 0.028, (blockZ + 5000) * 0.028, 2, 0.5);
         double ridged = 1.0 - Math.abs(detailNoise.octaveNoise2D(blockX * 0.006, blockZ * 0.006, 3, 0.5));
 
-        double height = ReleaseOneWorldGenerator.SEA_LEVEL + broad * 17.0 + medium * 7.0 + rough * 2.5;
+        double height = ReleaseOneWorldGenerator.SEA_LEVEL + broad * 12.0 + medium * 4.5 + rough * 1.4;
         if (biome.isOceanic() || biome == BiomeType.RIVER || biome == BiomeType.FROZEN_RIVER) {
-            height -= 15.0 + Math.max(0.0, -broad) * 8.0;
+            height -= 13.0 + Math.max(0.0, -broad) * 5.0;
         } else if (biome == BiomeType.EXTREME_HILLS || biome == BiomeType.ICE_MOUNTAINS) {
-            height += 18.0 + ridged * 22.0;
+            height += 12.0 + ridged * 14.0;
         } else if (biome == BiomeType.EXTREME_HILLS_EDGE) {
-            height += 10.0 + ridged * 10.0;
+            height += 6.0 + ridged * 7.0;
         } else if (biome == BiomeType.FOREST_HILLS || biome == BiomeType.TAIGA_HILLS || biome == BiomeType.DESERT_HILLS) {
-            height += 8.0 + ridged * 9.0;
+            height += 5.0 + ridged * 6.0;
         } else if (biome == BiomeType.PLAINS || biome == BiomeType.DESERT) {
-            height = ReleaseOneWorldGenerator.SEA_LEVEL + broad * 7.0 + medium * 2.0;
+            height = ReleaseOneWorldGenerator.SEA_LEVEL + broad * 5.5 + medium * 1.8;
         } else if (biome == BiomeType.SWAMPLAND) {
             height = Math.min(height, ReleaseOneWorldGenerator.SEA_LEVEL + 2.0);
         }

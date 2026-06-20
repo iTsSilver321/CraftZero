@@ -1,8 +1,14 @@
 package com.craftzero.save;
 
 import com.craftzero.entity.DroppedItem;
+import com.craftzero.entity.ChestMinecartEntity;
+import com.craftzero.entity.EndCrystalEntity;
 import com.craftzero.entity.Entity;
+import com.craftzero.entity.ExperienceOrbEntity;
+import com.craftzero.entity.FurnaceMinecartEntity;
 import com.craftzero.entity.LivingEntity;
+import com.craftzero.entity.MinecartEntity;
+import com.craftzero.entity.PrimedTntEntity;
 import com.craftzero.entity.mob.Blaze;
 import com.craftzero.entity.mob.CaveSpider;
 import com.craftzero.entity.mob.Mob;
@@ -30,8 +36,12 @@ import com.craftzero.world.World;
 import com.craftzero.world.WorldGenerator;
 import com.craftzero.world.tile.BlockPos;
 import com.craftzero.world.tile.ChestTileEntity;
+import com.craftzero.world.tile.BrewingStandTileEntity;
+import com.craftzero.world.tile.DispenserTileEntity;
 import com.craftzero.world.tile.FurnaceTileEntity;
+import com.craftzero.world.tile.JukeboxTileEntity;
 import com.craftzero.world.tile.MonsterSpawnerTileEntity;
+import com.craftzero.world.tile.NoteBlockTileEntity;
 import com.craftzero.world.tile.SignTileEntity;
 import com.craftzero.world.tile.TileEntity;
 import com.google.gson.Gson;
@@ -193,10 +203,11 @@ public class SaveManager {
 
     public void writeSnapshot(SaveSnapshot snapshot) throws IOException {
         Files.createDirectories(worldDir);
-        Files.createDirectories(chunksDir);
+        Dimension dimension = Dimension.fromSaveName(snapshot.levelData().dimension);
+        Files.createDirectories(chunkDirFor(dimension));
 
         for (ChunkSaveData chunk : snapshot.chunks()) {
-            ChunkCodec.write(chunkPath(chunk.chunkX(), chunk.chunkZ()), chunk.blockIds(), chunk.metadata());
+            ChunkCodec.write(chunkPath(dimension, chunk.chunkX(), chunk.chunkZ()), chunk.blockIds(), chunk.metadata());
         }
 
         SafeFiles.writeAtomic(levelPath, writer -> gson.toJson(snapshot.levelData(), writer),
@@ -216,16 +227,24 @@ public class SaveManager {
     }
 
     public void saveModifiedChunk(Chunk chunk) throws IOException {
+        saveModifiedChunk(chunk, Dimension.OVERWORLD);
+    }
+
+    public void saveModifiedChunk(Chunk chunk, Dimension dimension) throws IOException {
         if (chunk == null || !chunk.isModified()) {
             return;
         }
         long version = chunk.getModificationVersion();
-        ChunkCodec.write(chunkPath(chunk.getChunkX(), chunk.getChunkZ()), chunk);
+        ChunkCodec.write(chunkPath(dimension, chunk.getChunkX(), chunk.getChunkZ()), chunk);
         chunk.clearModifiedIfVersion(version);
     }
 
     public boolean loadChunkIfExists(Chunk chunk) {
-        Path path = chunkPath(chunk.getChunkX(), chunk.getChunkZ());
+        return loadChunkIfExists(chunk, Dimension.OVERWORLD);
+    }
+
+    public boolean loadChunkIfExists(Chunk chunk, Dimension dimension) {
+        Path path = chunkPath(dimension, chunk.getChunkX(), chunk.getChunkZ());
         if (!Files.exists(path)) {
             return false;
         }
@@ -312,14 +331,26 @@ public class SaveManager {
     private void saveModifiedChunks(Collection<Chunk> chunks) throws IOException {
         for (Chunk chunk : chunks) {
             if (chunk.isModified()) {
-                ChunkCodec.write(chunkPath(chunk.getChunkX(), chunk.getChunkZ()), chunk);
+                ChunkCodec.write(chunkPath(Dimension.OVERWORLD, chunk.getChunkX(), chunk.getChunkZ()), chunk);
                 chunk.clearModified();
             }
         }
     }
 
     private Path chunkPath(int chunkX, int chunkZ) {
-        return chunksDir.resolve("c." + chunkX + "." + chunkZ + ".bin");
+        return chunkPath(Dimension.OVERWORLD, chunkX, chunkZ);
+    }
+
+    private Path chunkPath(Dimension dimension, int chunkX, int chunkZ) {
+        return chunkDirFor(dimension).resolve("c." + chunkX + "." + chunkZ + ".bin");
+    }
+
+    private Path chunkDirFor(Dimension dimension) {
+        Dimension normalized = dimension == null ? Dimension.OVERWORLD : dimension;
+        if (normalized == Dimension.OVERWORLD) {
+            return chunksDir;
+        }
+        return worldDir.resolve("dimensions").resolve(normalized.getSaveName()).resolve("chunks");
     }
 
     private LevelData createLevelData(World world, Player player, DayCycleManager dayCycle) {
@@ -600,12 +631,20 @@ public class SaveManager {
             return data;
         }
 
-        private static StackData[] stackArray(ItemStack[] stacks) {
+        static StackData[] stackArray(ItemStack[] stacks) {
             StackData[] data = new StackData[stacks.length];
             for (int i = 0; i < stacks.length; i++) {
                 data[i] = StackData.from(stacks[i]);
             }
             return data;
+        }
+    }
+
+    private static void restoreStackArray(ItemStack[] target, StackData[] source) {
+        for (int i = 0; i < target.length; i++) {
+            target[i] = source != null && i < source.length && source[i] != null
+                    ? source[i].toStack()
+                    : null;
         }
     }
 
@@ -704,6 +743,7 @@ public class SaveManager {
         public int burnTime;
         public int currentFuelBurnTime;
         public int cookTime;
+        public int brewTime;
         public float lidAngle;
         public String[] signText;
         public String mobType;
@@ -712,6 +752,9 @@ public class SaveManager {
         public int maxSpawnDelay;
         public int spawnCount;
         public int maxNearbyEntities;
+        public int notePitch;
+        public int playTicks;
+        public StackData record;
 
         static TileEntityData from(TileEntity tile) {
             TileEntityData data = new TileEntityData();
@@ -729,6 +772,17 @@ public class SaveManager {
                 data.burnTime = furnace.getBurnTime();
                 data.currentFuelBurnTime = furnace.getCurrentFuelBurnTime();
                 data.cookTime = furnace.getCookTime();
+            } else if (tile instanceof BrewingStandTileEntity brewingStand) {
+                data.inventory = InventoryData.stackArray(brewingStand.getInventory());
+                data.brewTime = brewingStand.getBrewTime();
+            } else if (tile instanceof DispenserTileEntity dispenser) {
+                data.inventory = InventoryData.stackArray(dispenser.getInventory());
+            } else if (tile instanceof NoteBlockTileEntity note) {
+                data.notePitch = note.getPitch();
+                data.playTicks = note.getPlayTicks();
+            } else if (tile instanceof JukeboxTileEntity jukebox) {
+                data.record = StackData.from(jukebox.getRecord());
+                data.playTicks = jukebox.getPlayTicks();
             } else if (tile instanceof SignTileEntity sign) {
                 data.signText = java.util.Arrays.copyOf(sign.getLines(), sign.getLines().length);
             } else if (tile instanceof MonsterSpawnerTileEntity spawner) {
@@ -758,6 +812,33 @@ public class SaveManager {
                 furnace.setCookTime(cookTime);
                 furnace.clearDirty();
                 return furnace;
+            }
+            if ("brewing_stand".equals(type)) {
+                BrewingStandTileEntity brewingStand = new BrewingStandTileEntity(x, y, z);
+                restoreArray(brewingStand.getInventory(), inventory);
+                brewingStand.setBrewTime(brewTime);
+                brewingStand.clearDirty();
+                return brewingStand;
+            }
+            if ("dispenser".equals(type)) {
+                DispenserTileEntity dispenser = new DispenserTileEntity(x, y, z);
+                restoreArray(dispenser.getInventory(), inventory);
+                dispenser.clearDirty();
+                return dispenser;
+            }
+            if ("note_block".equals(type)) {
+                NoteBlockTileEntity note = new NoteBlockTileEntity(x, y, z);
+                note.setPitch(notePitch);
+                note.clearDirty();
+                return note;
+            }
+            if ("jukebox".equals(type)) {
+                JukeboxTileEntity jukebox = new JukeboxTileEntity(x, y, z);
+                if (record != null) {
+                    jukebox.insertRecord(record.toStack());
+                }
+                jukebox.clearDirty();
+                return jukebox;
             }
             if ("sign".equals(type)) {
                 SignTileEntity sign = new SignTileEntity(x, y, z);
@@ -822,39 +903,137 @@ public class SaveManager {
         public int carriedMetadata;
         public boolean angry;
         public int angerTicks;
+        public int experienceValue;
+        public int pickupDelayTicks;
+        public int orbHealth;
+        public List<StatusEffectInstance> activeEffects;
+        public String cartKind;
+        public StackData[] inventory;
+        public int fuelTicks;
+        public float pushX;
+        public float pushZ;
+        public float cartDamage;
+        public int fuseTicks;
 
         static EntityData from(Entity entity) {
-            if (!(entity instanceof Mob mob) || mob.isRemoved() || mob.isDead() || mob.getDefinition() == null) {
+            if (entity == null || entity.isRemoved()) {
                 return null;
             }
             EntityData data = new EntityData();
-            data.type = mob.getDefinition().name();
-            data.x = mob.getX();
-            data.y = mob.getY();
-            data.z = mob.getZ();
-            data.motionX = mob.getMotionX();
-            data.motionY = mob.getMotionY();
-            data.motionZ = mob.getMotionZ();
-            data.yaw = mob.getYaw();
-            data.pitch = mob.getPitch();
-            data.health = mob.getHealth();
-            data.fireTicks = mob.getFireTicks();
-            data.age = mob.getTicksExisted();
-            if (mob instanceof Slime slime) {
-                data.slimeSize = slime.getSize();
+            data.x = entity.getX();
+            data.y = entity.getY();
+            data.z = entity.getZ();
+            data.motionX = entity.getMotionX();
+            data.motionY = entity.getMotionY();
+            data.motionZ = entity.getMotionZ();
+            data.yaw = entity.getYaw();
+            data.pitch = entity.getPitch();
+            data.age = entity.getTicksExisted();
+            if (entity instanceof ExperienceOrbEntity orb) {
+                data.type = "EXPERIENCE_ORB";
+                data.experienceValue = orb.getValue();
+                data.pickupDelayTicks = orb.getPickupDelayTicks();
+                data.orbHealth = orb.getHealth();
+                return data;
             }
-            if (mob instanceof Enderman enderman) {
-                data.carriedBlockId = enderman.getCarriedBlock().getId();
-                data.carriedMetadata = enderman.getCarriedMetadata();
-                data.angry = enderman.isAngry();
+            if (entity instanceof PrimedTntEntity tnt) {
+                data.type = "PRIMED_TNT";
+                data.fuseTicks = tnt.getFuseTicks();
+                return data;
             }
-            if (mob instanceof ZombiePigman pigman) {
-                data.angerTicks = pigman.getAngerTicks();
+            if (entity instanceof MinecartEntity cart) {
+                data.type = "MINECART";
+                data.cartKind = cart.getKind().name();
+                data.cartDamage = cart.getDamage();
+                if (cart instanceof ChestMinecartEntity chestCart) {
+                    data.inventory = InventoryData.stackArray(chestCart.getInventory());
+                }
+                if (cart instanceof FurnaceMinecartEntity furnaceCart) {
+                    data.fuelTicks = furnaceCart.getFuelTicks();
+                    data.pushX = furnaceCart.getPushX();
+                    data.pushZ = furnaceCart.getPushZ();
+                }
+                return data;
             }
-            return data;
+            if (entity instanceof EndCrystalEntity crystal) {
+                data.type = "END_CRYSTAL";
+                data.health = crystal.getHealth();
+                data.activeEffects = new ArrayList<>(crystal.getActiveEffects());
+                return crystal.isDead() ? null : data;
+            }
+            if (entity instanceof Mob mob && !mob.isDead() && mob.getDefinition() != null) {
+                data.type = mob.getDefinition().name();
+                data.health = mob.getHealth();
+                data.fireTicks = mob.getFireTicks();
+                data.activeEffects = new ArrayList<>(mob.getActiveEffects());
+                if (mob instanceof Slime slime) {
+                    data.slimeSize = slime.getSize();
+                }
+                if (mob instanceof Enderman enderman) {
+                    data.carriedBlockId = enderman.getCarriedBlock().getId();
+                    data.carriedMetadata = enderman.getCarriedMetadata();
+                    data.angry = enderman.isAngry();
+                }
+                if (mob instanceof ZombiePigman pigman) {
+                    data.angerTicks = pigman.getAngerTicks();
+                }
+                return data;
+            }
+            return null;
         }
 
         Entity toEntity() {
+            if ("EXPERIENCE_ORB".equals(type)) {
+                ExperienceOrbEntity orb = new ExperienceOrbEntity(x, y, z, Math.max(1, experienceValue));
+                orb.setMotion(motionX, motionY, motionZ);
+                orb.setYaw(yaw);
+                orb.setPitch(pitch);
+                orb.setTicksExisted(age);
+                orb.setPickupDelayTicks(pickupDelayTicks);
+                if (orbHealth > 0) {
+                    orb.setHealth(orbHealth);
+                }
+                return orb;
+            }
+            if ("PRIMED_TNT".equals(type)) {
+                PrimedTntEntity tnt = new PrimedTntEntity(x, y, z, fuseTicks <= 0 ? 80 : fuseTicks);
+                tnt.setMotion(motionX, motionY, motionZ);
+                tnt.setYaw(yaw);
+                tnt.setPitch(pitch);
+                tnt.setTicksExisted(age);
+                return tnt;
+            }
+            if ("MINECART".equals(type)) {
+                MinecartEntity.CartKind kind = parseCartKind(cartKind);
+                MinecartEntity cart = switch (kind) {
+                    case CHEST -> new ChestMinecartEntity();
+                    case FURNACE -> new FurnaceMinecartEntity();
+                    default -> new MinecartEntity(MinecartEntity.CartKind.RIDEABLE);
+                };
+                cart.setPosition(x, y, z);
+                cart.setMotion(motionX, motionY, motionZ);
+                cart.setYaw(yaw);
+                cart.setPitch(pitch);
+                cart.setTicksExisted(age);
+                cart.setDamage(cartDamage);
+                if (cart instanceof ChestMinecartEntity chestCart) {
+                    restoreStackArray(chestCart.getInventory(), inventory);
+                }
+                if (cart instanceof FurnaceMinecartEntity furnaceCart) {
+                    furnaceCart.setFuelTicks(fuelTicks);
+                    furnaceCart.setPush(pushX, pushZ);
+                }
+                return cart;
+            }
+            if ("END_CRYSTAL".equals(type)) {
+                EndCrystalEntity crystal = new EndCrystalEntity(x, y, z);
+                crystal.setMotion(motionX, motionY, motionZ);
+                crystal.setYaw(yaw);
+                crystal.setPitch(pitch);
+                crystal.setTicksExisted(age);
+                crystal.setHealth(health <= 0.0f ? crystal.getMaxHealth() : health);
+                return crystal;
+            }
             MobDefinition definition = parseDefinition(type);
             if (definition == null) {
                 return null;
@@ -867,11 +1046,13 @@ public class SaveManager {
             mob.setMotion(motionX, motionY, motionZ);
             mob.setYaw(yaw);
             mob.setPitch(pitch);
+            mob.setTicksExisted(age);
             if (mob instanceof LivingEntity living) {
                 living.setHealth(health <= 0.0f ? living.getMaxHealth() : health);
                 if (fireTicks > 0) {
                     living.setOnFire(fireTicks);
                 }
+                living.setActiveEffects(activeEffects);
             }
             return mob;
         }
@@ -902,6 +1083,17 @@ public class SaveManager {
                 return MobDefinition.valueOf(type);
             } catch (IllegalArgumentException ignored) {
                 return null;
+            }
+        }
+
+        private static MinecartEntity.CartKind parseCartKind(String value) {
+            if (value == null || value.isBlank()) {
+                return MinecartEntity.CartKind.RIDEABLE;
+            }
+            try {
+                return MinecartEntity.CartKind.valueOf(value);
+            } catch (IllegalArgumentException ignored) {
+                return MinecartEntity.CartKind.RIDEABLE;
             }
         }
     }

@@ -47,6 +47,33 @@ public class CraftingRegistry {
                 recipes2x2.add(new CraftingRecipe(
                                 new ItemType[] { null, ItemType.CHARCOAL, null, ItemType.STICK },
                                 ItemType.TORCH, 4));
+                recipes2x2.add(new CraftingRecipe(
+                                new ItemType[] { ItemType.REDSTONE, null, ItemType.STICK, null },
+                                ItemType.REDSTONE_TORCH, 1));
+                recipes2x2.add(new CraftingRecipe(
+                                new ItemType[] { null, ItemType.REDSTONE, null, ItemType.STICK },
+                                ItemType.REDSTONE_TORCH, 1));
+                recipes2x2.add(new CraftingRecipe(
+                                new ItemType[] { ItemType.COBBLESTONE, null, ItemType.STICK, null },
+                                ItemType.LEVER, 1));
+                recipes2x2.add(new CraftingRecipe(
+                                new ItemType[] { null, ItemType.COBBLESTONE, null, ItemType.STICK },
+                                ItemType.LEVER, 1));
+                recipes2x2.add(new CraftingRecipe(
+                                new ItemType[] { ItemType.STONE, null, null, null },
+                                ItemType.STONE_BUTTON, 1, true));
+                recipes2x2.add(new CraftingRecipe(
+                                new ItemType[] { ItemType.STONE, ItemType.STONE, null, null },
+                                ItemType.STONE_PRESSURE_PLATE, 1));
+                recipes2x2.add(new CraftingRecipe(
+                                new ItemType[] { null, null, ItemType.STONE, ItemType.STONE },
+                                ItemType.STONE_PRESSURE_PLATE, 1));
+                recipes2x2.add(new CraftingRecipe(
+                                new ItemType[] { ItemType.OAK_PLANKS, ItemType.OAK_PLANKS, null, null },
+                                ItemType.WOODEN_PRESSURE_PLATE, 1));
+                recipes2x2.add(new CraftingRecipe(
+                                new ItemType[] { null, null, ItemType.OAK_PLANKS, ItemType.OAK_PLANKS },
+                                ItemType.WOODEN_PRESSURE_PLATE, 1));
         }
 
         private static void register3x3Recipes() {
@@ -175,6 +202,65 @@ public class CraftingRegistry {
                 addStairsRecipe(ItemType.BRICK, ItemType.BRICK_STAIRS);
                 addStairsRecipe(ItemType.STONE_BRICK, ItemType.STONE_BRICK_STAIRS);
                 addStairsRecipe(ItemType.NETHER_BRICK, ItemType.NETHER_BRICK_STAIRS);
+                addMechanismRecipes(P, S, C, I);
+        }
+
+        private static void addMechanismRecipes(ItemType P, ItemType S, ItemType C, ItemType I) {
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { ItemType.REDSTONE, null, null, S, null, null, null, null, null },
+                                ItemType.REDSTONE_TORCH, 1));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { I, null, I, I, S, I, I, null, I },
+                                ItemType.RAIL, 16));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { ItemType.GOLD_INGOT, null, ItemType.GOLD_INGOT,
+                                                ItemType.GOLD_INGOT, S, ItemType.GOLD_INGOT,
+                                                ItemType.GOLD_INGOT, ItemType.REDSTONE, ItemType.GOLD_INGOT },
+                                ItemType.POWERED_RAIL, 6));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { I, null, I, I, ItemType.STONE_PRESSURE_PLATE, I,
+                                                I, ItemType.REDSTONE, I },
+                                ItemType.DETECTOR_RAIL, 6));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, null, null, I, null, I, I, I, I },
+                                ItemType.MINECART, 1));
+                recipes3x3.add(new CraftingRecipe(
+                                new ItemType[] { ItemType.MINECART, ItemType.CHEST, null, null, null, null, null,
+                                                null, null },
+                                ItemType.CHEST_MINECART, 1, true, 3));
+                recipes3x3.add(new CraftingRecipe(
+                                new ItemType[] { ItemType.MINECART, ItemType.FURNACE, null, null, null, null, null,
+                                                null, null },
+                                ItemType.FURNACE_MINECART, 1, true, 3));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { C, C, C, null, S, null, null, ItemType.REDSTONE, null },
+                                ItemType.REDSTONE_REPEATER, 1));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { P, P, P, P, ItemType.REDSTONE, P, C, C, C },
+                                ItemType.PISTON, 1));
+                recipes3x3.add(new CraftingRecipe(
+                                new ItemType[] { ItemType.PISTON, ItemType.SLIMEBALL, null, null, null, null, null,
+                                                null, null },
+                                ItemType.STICKY_PISTON, 1, true, 3));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { null, C, null, C, ItemType.BOW, C, C, ItemType.REDSTONE, C },
+                                ItemType.DISPENSER, 1));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { P, P, P, P, ItemType.REDSTONE, P, P, P, P },
+                                ItemType.NOTE_BLOCK, 1));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { P, P, P, P, ItemType.DIAMOND, P, P, P, P },
+                                ItemType.JUKEBOX, 1));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { ItemType.SAND, ItemType.GUNPOWDER, ItemType.SAND,
+                                                ItemType.GUNPOWDER, ItemType.SAND, ItemType.GUNPOWDER,
+                                                ItemType.SAND, ItemType.GUNPOWDER, ItemType.SAND },
+                                ItemType.TNT, 1));
+                recipes3x3.add(CraftingRecipe.create3x3(
+                                new ItemType[] { ItemType.GUNPOWDER, ItemType.SAND, ItemType.GUNPOWDER,
+                                                ItemType.SAND, ItemType.GUNPOWDER, ItemType.SAND,
+                                                ItemType.GUNPOWDER, ItemType.SAND, ItemType.GUNPOWDER },
+                                ItemType.TNT, 1));
         }
 
         private static void addTorch3x3(ItemType fuel) {

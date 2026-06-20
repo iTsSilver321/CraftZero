@@ -60,6 +60,10 @@ public enum BiomeType {
         return frozen;
     }
 
+    public boolean canFreezeWater() {
+        return this == FROZEN_OCEAN || this == FROZEN_RIVER || this == ICE_PLAINS || this == ICE_MOUNTAINS;
+    }
+
     public boolean isOceanic() {
         return this == OCEAN || this == FROZEN_OCEAN;
     }

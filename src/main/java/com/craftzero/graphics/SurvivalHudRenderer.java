@@ -5,6 +5,8 @@ import com.craftzero.main.PlayerStats;
 import com.craftzero.inventory.Inventory;
 import com.craftzero.inventory.ItemStack;
 import com.craftzero.inventory.ItemType;
+import com.craftzero.progression.ArmorCalculator;
+import com.craftzero.progression.PlayerProgression;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryUtil;
 
@@ -189,6 +191,7 @@ public class SurvivalHudRenderer {
         // Hearts go LEFT from just left of center
         int heartStartX = centerX - 216;
         drawHearts(stats, heartStartX, bottomY);
+        drawArmor(inventory, heartStartX, bottomY - 22);
 
         // Hunger goes RIGHT from just right of center
         int hungerStartX = centerX + 18;
@@ -207,6 +210,7 @@ public class SurvivalHudRenderer {
 
         // Hotbar goes BELOW hearts/hunger
         int hotbarY = windowHeight - 60; // 10px from bottom edge
+        drawExperience(stats.getProgression(), centerX, hotbarY - 16);
         drawHotbar(inventory, centerX, hotbarY);
 
         shader.unbind();
@@ -236,6 +240,36 @@ public class SurvivalHudRenderer {
         shader.unbind();
 
         renderItemName(false);
+        glEnable(GL_DEPTH_TEST);
+    }
+
+    public void renderBossBar(String name, float healthFraction) {
+        if (name == null || name.isBlank()) {
+            return;
+        }
+        float clamped = Math.max(0.0f, Math.min(1.0f, healthFraction));
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_CULL_FACE);
+
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        shader.bind();
+        shader.setUniform("projection", ortho);
+        int width = Math.min(182 * 2, windowWidth - 80);
+        int height = 10;
+        int x = (windowWidth - width) / 2;
+        int y = 18;
+        drawRect(x - 1, y - 1, width + 2, height + 2, 0.0f, 0.0f, 0.0f, 0.85f);
+        drawRect(x, y, width, height, 0.18f, 0.0f, 0.18f, 1.0f);
+        drawRect(x, y, Math.round(width * clamped), height, 0.65f, 0.0f, 0.72f, 1.0f);
+        shader.unbind();
+        if (textRenderer != null) {
+            float scale = 1.0f;
+            int textWidth = textRenderer.getStringWidth(name, scale);
+            textRenderer.drawText(name, (windowWidth - textWidth) / 2.0f, y + 13, scale,
+                    new float[] { 1.0f, 1.0f, 1.0f, 1.0f });
+        }
         glEnable(GL_DEPTH_TEST);
     }
 
@@ -441,7 +475,7 @@ public class SurvivalHudRenderer {
                 int itemX = startX + i * slotWidth + itemOffset + 3;
                 int itemY = hotbarY + (hotbarHeight - itemSize) / 2;
 
-                if (item.getType().isBlockItem() && !item.getType().usesItemTexture()) {
+                if (item.getType().getRenderProfile().modelKind() == com.craftzero.inventory.ItemRenderProfile.ModelKind.BLOCK) {
                     drawIsometricBlockIcon(itemX, itemY, itemSize, item.getType());
                 } else {
                     drawItemSprite(itemX, itemY, itemSize, item.getType());
@@ -490,7 +524,7 @@ public class SurvivalHudRenderer {
     private void drawItemIcon(int x, int y, ItemType type) {
         // If atlas is available, draw textured icon
         if (atlas != null) {
-            if (type.isBlockItem() && !type.usesItemTexture()) {
+            if (type.getRenderProfile().modelKind() == com.craftzero.inventory.ItemRenderProfile.ModelKind.BLOCK) {
                 // Blocks render as isometric 3D cubes
                 drawIsometricBlockIcon(x + 4, y + 4, HOTBAR_SLOT_SIZE - 8, type);
             } else {
@@ -654,6 +688,94 @@ public class SurvivalHudRenderer {
                 x, y + size
         };
         drawShape(vertices, 4, r, g, b, a);
+    }
+
+    private void drawArmor(Inventory inventory, int startX, int y) {
+        int armor = inventory == null ? 0 : ArmorCalculator.armorPoints(inventory.getArmor());
+        if (armor <= 0) {
+            return;
+        }
+        if (iconsTexture == null) {
+            for (int i = 0; i < 10; i++) {
+                float fill = armor >= (i + 1) * 2 ? 1.0f : armor == i * 2 + 1 ? 0.55f : 0.18f;
+                drawSquare(startX + i * SPACING, y, ICON_SIZE, fill, fill, fill, 1.0f);
+            }
+            return;
+        }
+        float scale = 2.0f;
+        int iconSize = (int) (9 * scale);
+        int spacing = iconSize + 2;
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        shader.unbind();
+        iconsTexture.bind(0);
+        texturedShader.bind();
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+        float[] container = GuiTexture.getArmorContainerUV();
+        float[] half = GuiTexture.getHalfArmorUV();
+        float[] full = GuiTexture.getFullArmorUV();
+        for (int i = 0; i < 10; i++) {
+            int x = startX + i * spacing;
+            drawTexturedQuad(x, y, x + iconSize, y, x + iconSize, y + iconSize, x, y + iconSize,
+                    container[0], container[1], container[2], container[3]);
+            if (armor >= (i + 1) * 2) {
+                drawTexturedQuad(x, y, x + iconSize, y, x + iconSize, y + iconSize, x, y + iconSize,
+                        full[0], full[1], full[2], full[3]);
+            } else if (armor == i * 2 + 1) {
+                drawTexturedQuad(x, y, x + iconSize, y, x + iconSize, y + iconSize, x, y + iconSize,
+                        half[0], half[1], half[2], half[3]);
+            }
+        }
+        texturedShader.unbind();
+        iconsTexture.unbind();
+        shader.bind();
+        shader.setUniform("projection", ortho);
+    }
+
+    private void drawExperience(PlayerProgression progression, int centerX, int y) {
+        if (progression == null || progression.getTotalExperience() <= 0) {
+            return;
+        }
+        int width = 182 * 2;
+        int height = 5 * 2;
+        int x = centerX - width / 2;
+        float fraction = progression.getExperienceToNextLevel() <= 0 ? 0.0f
+                : progression.getExperienceIntoLevel() / (float) progression.getExperienceToNextLevel();
+        int fill = Math.round(182.0f * Math.max(0.0f, Math.min(1.0f, fraction)));
+        if (iconsTexture != null) {
+            Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+            shader.unbind();
+            iconsTexture.bind(0);
+            texturedShader.bind();
+            texturedShader.setUniform("projection", ortho);
+            texturedShader.setUniform("textureSampler", 0);
+            texturedShader.setUniform("brightness", 1.0f);
+            float[] bg = GuiTexture.getXpBarBackgroundUV();
+            drawTexturedQuad(x, y, x + width, y, x + width, y + height, x, y + height,
+                    bg[0], bg[1], bg[2], bg[3]);
+            if (fill > 0) {
+                float[] fg = GuiTexture.getXpBarFillUV(fill);
+                drawTexturedQuad(x, y, x + fill * 2, y, x + fill * 2, y + height, x, y + height,
+                        fg[0], fg[1], fg[2], fg[3]);
+            }
+            texturedShader.unbind();
+            iconsTexture.unbind();
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        } else {
+            drawRect(x, y, width, height, 0.0f, 0.0f, 0.0f, 0.8f);
+            drawRect(x, y, fill * 2, height, 0.3f, 0.85f, 0.05f, 1.0f);
+        }
+        if (textRenderer != null && progression.getLevel() > 0) {
+            String level = String.valueOf(progression.getLevel());
+            float scale = 1.5f;
+            int textWidth = textRenderer.getStringWidth(level, scale);
+            int tx = centerX - textWidth / 2;
+            int ty = y - 18;
+            textRenderer.drawText(level, tx + 1, ty + 1, scale, new float[] { 0.0f, 0.0f, 0.0f, 1.0f });
+            textRenderer.drawText(level, tx, ty, scale, new float[] { 0.55f, 1.0f, 0.2f, 1.0f });
+        }
     }
 
     private void drawHearts(PlayerStats stats, int startX, int y) {

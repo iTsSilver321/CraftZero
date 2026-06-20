@@ -29,6 +29,7 @@ public class MobRenderer {
     private SilverfishModel silverfishModel;
     private GhastModel ghastModel;
     private BlazeModel blazeModel;
+    private DragonModel dragonModel;
     private Mesh fireOverlayMesh;
 
     // Model matrix
@@ -93,6 +94,9 @@ public class MobRenderer {
         blazeModel = new BlazeModel();
         blazeModel.buildMeshes();
 
+        dragonModel = new DragonModel();
+        dragonModel.buildMeshes();
+
         fireOverlayMesh = createFireOverlayMesh();
 
         System.out.println("MobRenderer initialized");
@@ -154,7 +158,7 @@ public class MobRenderer {
                 renderSlime(mob, texture, renderX, renderY, renderZ, renderBodyYaw, ageInTicks);
                 break;
             case SQUID:
-                renderSquid(mob, texture, renderX, renderY, renderZ, renderBodyYaw, ageInTicks);
+                renderSquid(mob, texture, renderX, renderY, renderZ, renderBodyYaw, ageInTicks, partialTick);
                 break;
             case ENDERMAN:
                 renderEnderman(mob, texture, renderX, renderY, renderZ, renderBodyYaw,
@@ -169,6 +173,10 @@ public class MobRenderer {
                 break;
             case BLAZE:
                 renderBlaze(mob, texture, renderX, renderY, renderZ, renderBodyYaw,
+                        ageInTicks, partialTick, headYaw);
+                break;
+            case DRAGON:
+                renderDragon(mob, texture, renderX, renderY, renderZ, renderBodyYaw,
                         ageInTicks, partialTick, headYaw);
                 break;
         }
@@ -218,11 +226,21 @@ public class MobRenderer {
         texture.unbind();
     }
 
-    private void renderSquid(Mob mob, Texture texture, float x, float y, float z, float bodyYaw, float ageInTicks) {
-        squidModel.animate(ageInTicks);
+    private void renderSquid(Mob mob, Texture texture, float x, float y, float z, float bodyYaw, float ageInTicks,
+            float partialTick) {
+        float squidYaw = bodyYaw;
+        float squidPitch = mob.getRenderPitch(partialTick);
+        float tentacleAngle = (float) Math.sin(ageInTicks * 0.18f) * 0.45f + 0.35f;
+        if (mob instanceof Squid squid) {
+            squidYaw = squid.getRenderSquidYaw(partialTick);
+            squidPitch = squid.getRenderSquidPitch(partialTick);
+            tentacleAngle = squid.getRenderTentacleAngle(partialTick);
+        }
+        squidModel.animate(ageInTicks, tentacleAngle);
         modelMatrix.identity();
-        modelMatrix.translate(x, y + 0.2f, z);
-        modelMatrix.rotateY((float) Math.toRadians(-bodyYaw));
+        modelMatrix.translate(x, y + 0.25f, z);
+        modelMatrix.rotateY((float) Math.toRadians(-squidYaw));
+        modelMatrix.rotateX((float) Math.toRadians(squidPitch));
         modelMatrix.scale(MODEL_SCALE);
         squidModel.root.calculateTransform(modelMatrix);
         texture.bind(0);
@@ -282,6 +300,20 @@ public class MobRenderer {
         blazeModel.root.calculateTransform(modelMatrix);
         texture.bind(0);
         renderModelPart(blazeModel.root);
+        texture.unbind();
+    }
+
+    private void renderDragon(Mob mob, Texture texture,
+            float x, float y, float z, float bodyYaw,
+            float ageInTicks, float partialTick, float headYaw) {
+        dragonModel.animate(ageInTicks, headYaw, mob.getRenderPitch(partialTick));
+        modelMatrix.identity();
+        modelMatrix.translate(x, y + 1.5f, z);
+        modelMatrix.rotateY((float) Math.toRadians(-bodyYaw));
+        modelMatrix.scale(MODEL_SCALE * 1.25f);
+        dragonModel.root.calculateTransform(modelMatrix);
+        texture.bind(0);
+        renderModelPart(dragonModel.root);
         texture.unbind();
     }
 
@@ -591,6 +623,8 @@ public class MobRenderer {
             ghastModel.cleanup();
         if (blazeModel != null)
             blazeModel.cleanup();
+        if (dragonModel != null)
+            dragonModel.cleanup();
         if (fireOverlayMesh != null)
             fireOverlayMesh.cleanup();
 

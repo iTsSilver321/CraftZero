@@ -5,8 +5,6 @@ import com.craftzero.inventory.ItemStack;
 import com.craftzero.inventory.ItemType;
 import com.craftzero.inventory.SlotAccess;
 
-import java.util.Arrays;
-import java.util.Comparator;
 import java.util.List;
 
 public class CreativeInventoryScreen implements Screen, ScreenManager.EscapeHandler {
@@ -29,7 +27,7 @@ public class CreativeInventoryScreen implements Screen, ScreenManager.EscapeHand
 
     private final Inventory inventory;
     private final Runnable closeAction;
-    private final List<ItemType> items;
+    private final List<CreativeCatalogEntry> items;
     private int width;
     private int height;
     private int windowX;
@@ -43,9 +41,7 @@ public class CreativeInventoryScreen implements Screen, ScreenManager.EscapeHand
     public CreativeInventoryScreen(Inventory inventory, int width, int height, Runnable closeAction) {
         this.inventory = inventory;
         this.closeAction = closeAction;
-        this.items = Arrays.stream(ItemType.values())
-                .sorted(Comparator.comparingInt(ItemType::getId).thenComparingInt(ItemType::getDataValue))
-                .toList();
+        this.items = CreativeCatalog.entries();
         resize(width, height);
     }
 
@@ -107,9 +103,9 @@ public class CreativeInventoryScreen implements Screen, ScreenManager.EscapeHand
     private void handleLeftClick(int mouseX, int mouseY) {
         int creativeSlot = creativeSlotAt(mouseX, mouseY);
         if (creativeSlot >= 0) {
-            ItemType type = itemAtVisibleSlot(creativeSlot);
-            if (type != null) {
-                inventory.setCursorItem(stackFor(type));
+            ItemStack stack = stackAtVisibleSlot(creativeSlot);
+            if (stack != null) {
+                inventory.setCursorItem(stack);
             }
             return;
         }
@@ -196,25 +192,30 @@ public class CreativeInventoryScreen implements Screen, ScreenManager.EscapeHand
     }
 
     public ItemType itemAtVisibleSlot(int visibleSlot) {
+        ItemStack stack = stackAtVisibleSlot(visibleSlot);
+        return stack == null ? null : stack.getType();
+    }
+
+    public ItemStack stackAtVisibleSlot(int visibleSlot) {
         if (visibleSlot < 0 || visibleSlot >= GRID_SLOT_COUNT) {
             return null;
         }
         int index = scrollRow * GRID_COLS + visibleSlot;
-        return index >= 0 && index < items.size() ? items.get(index) : null;
+        return index >= 0 && index < items.size() ? items.get(index).createStack() : null;
     }
 
     public ItemStack stackFor(ItemType type) {
         if (type == null) {
             return null;
         }
-        int count = type.getMaxStackSize() <= 1 ? 1 : type.getMaxStackSize();
+        int count = type.getMaxStackSize() <= 1 || type.isDamageable() ? 1 : type.getMaxStackSize();
         return new ItemStack(type, count);
     }
 
     public ItemStack hoveredStack() {
-        ItemType creativeItem = itemAtVisibleSlot(hoveredCreativeSlot);
+        ItemStack creativeItem = stackAtVisibleSlot(hoveredCreativeSlot);
         if (creativeItem != null) {
-            return stackFor(creativeItem);
+            return creativeItem;
         }
         return hoveredHotbarSlot >= 0 ? inventory.getHotbar()[hoveredHotbarSlot] : null;
     }

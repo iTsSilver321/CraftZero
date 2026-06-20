@@ -38,28 +38,38 @@ public record ItemRenderProfile(
     }
 
     public static ItemRenderProfile toolSprite() {
-        return sprite(0.52f, 0.40f, 0.0f, 15.0f, -45.0f);
+        return sprite(0.54f, 0.40f, 0.0f, -10.0f, -46.0f, 0.72f, -0.58f, -0.82f);
     }
 
     public static ItemRenderProfile materialSprite() {
-        return sprite(0.38f, 0.32f, 0.0f, 12.0f, -35.0f);
+        return sprite(0.38f, 0.32f, -6.0f, 28.0f, -26.0f);
     }
 
     public static ItemRenderProfile skinnySprite() {
-        return sprite(0.42f, 0.34f, 0.0f, 15.0f, -45.0f);
+        return sprite(0.42f, 0.34f, 0.0f, -8.0f, -42.0f);
     }
 
     public static ItemRenderProfile largeSprite() {
-        return sprite(0.45f, 0.36f, 0.0f, 12.0f, -35.0f);
+        return sprite(0.45f, 0.36f, -6.0f, 30.0f, -28.0f);
+    }
+
+    public static ItemRenderProfile terrainSprite() {
+        return sprite(0.44f, 0.34f, -6.0f, 30.0f, -28.0f);
     }
 
     private static ItemRenderProfile sprite(float firstScale, float thirdScale,
             float firstRotX, float firstRotY, float firstRotZ) {
+        return sprite(firstScale, thirdScale, firstRotX, firstRotY, firstRotZ, 0.58f, -0.50f, -0.72f);
+    }
+
+    private static ItemRenderProfile sprite(float firstScale, float thirdScale,
+            float firstRotX, float firstRotY, float firstRotZ,
+            float firstOffsetX, float firstOffsetY, float firstOffsetZ) {
         return new ItemRenderProfile(
                 ModelKind.SPRITE,
                 firstScale,
                 thirdScale,
-                0.58f, -0.50f, -0.72f, 0.70f,
+                firstOffsetX, firstOffsetY, firstOffsetZ, 0.70f,
                 firstRotX, firstRotY, firstRotZ,
                 180.0f, 0.0f, 45.0f,
                 0.15f, -0.75f, -0.55f);

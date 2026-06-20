@@ -48,6 +48,31 @@ public class FallingBlockEntity extends Entity {
         return 0.98f;
     }
 
+    @Override
+    protected float getWaterGravityPerTick() {
+        return 0.035f;
+    }
+
+    @Override
+    protected float getWaterHorizontalDrag() {
+        return 0.72f;
+    }
+
+    @Override
+    protected float getWaterVerticalDrag() {
+        return 0.86f;
+    }
+
+    @Override
+    protected boolean usesDefaultWaterBobbing() {
+        return false;
+    }
+
+    @Override
+    protected boolean shouldSurfaceFloatInWater() {
+        return false;
+    }
+
     private void settle() {
         int blockX = (int) Math.floor(x);
         int blockY = (int) Math.floor(y);

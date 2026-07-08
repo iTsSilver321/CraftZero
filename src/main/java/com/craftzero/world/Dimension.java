@@ -24,6 +24,18 @@ public enum Dimension {
         return saveName;
     }
 
+    public static boolean isValidSaveName(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        for (Dimension dimension : values()) {
+            if (dimension.saveName.equalsIgnoreCase(value) || dimension.name().equalsIgnoreCase(value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static Dimension fromSaveName(String value) {
         if (value == null || value.isBlank()) {
             return OVERWORLD;

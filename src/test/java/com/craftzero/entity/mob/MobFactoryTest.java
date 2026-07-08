@@ -35,15 +35,25 @@ class MobFactoryTest {
         assertTrue(implemented.contains(MobDefinition.ENDERMAN));
         assertTrue(implemented.contains(MobDefinition.CAVE_SPIDER));
         assertTrue(implemented.contains(MobDefinition.SILVERFISH));
+        assertTrue(implemented.contains(MobDefinition.GIANT));
         assertTrue(implemented.contains(MobDefinition.GHAST));
         assertTrue(implemented.contains(MobDefinition.ZOMBIE_PIGMAN));
         assertTrue(implemented.contains(MobDefinition.BLAZE));
         assertTrue(implemented.contains(MobDefinition.MAGMA_CUBE));
         assertTrue(implemented.contains(MobDefinition.ENDER_DRAGON));
+        assertTrue(implemented.contains(MobDefinition.WOLF));
+        assertTrue(implemented.contains(MobDefinition.MOOSHROOM));
+        assertTrue(implemented.contains(MobDefinition.VILLAGER));
+        assertTrue(implemented.contains(MobDefinition.SNOW_GOLEM));
 
-        assertNull(MobFactory.create(MobDefinition.WOLF));
-        assertNull(MobFactory.create(MobDefinition.MOOSHROOM));
-        assertNull(MobFactory.create(MobDefinition.VILLAGER));
-        assertNull(MobFactory.create(MobDefinition.SNOW_GOLEM));
+        assertInstanceOf(Wolf.class, MobFactory.create(MobDefinition.WOLF));
+        assertInstanceOf(Mooshroom.class, MobFactory.create(MobDefinition.MOOSHROOM));
+        assertInstanceOf(Villager.class, MobFactory.create(MobDefinition.VILLAGER));
+        assertInstanceOf(SnowGolem.class, MobFactory.create(MobDefinition.SNOW_GOLEM));
+        assertInstanceOf(Giant.class, MobFactory.create(MobDefinition.GIANT));
+        assertEquals("/textures/mob/redcow.png", MobFactory.create(MobDefinition.MOOSHROOM).getTexturePath());
+        assertEquals("/textures/mob/villager/farmer.png", MobFactory.create(MobDefinition.VILLAGER).getTexturePath());
+        assertEquals("/textures/mob/snowman.png", MobFactory.create(MobDefinition.SNOW_GOLEM).getTexturePath());
+        assertEquals("/textures/mob/zombie.png", MobFactory.create(MobDefinition.GIANT).getTexturePath());
     }
 }

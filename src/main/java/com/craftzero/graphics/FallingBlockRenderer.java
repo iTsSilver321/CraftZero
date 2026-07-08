@@ -61,11 +61,7 @@ public class FallingBlockRenderer {
     }
 
     private static boolean isTooFar(Camera camera, Entity entity) {
-        float dx = entity.getX() - camera.getPosition().x;
-        float dy = entity.getY() - camera.getPosition().y;
-        float dz = entity.getZ() - camera.getPosition().z;
-        float max = Math.min(camera.getFarPlane(), FALLING_BLOCK_RENDER_DISTANCE);
-        return dx * dx + dy * dy + dz * dz > max * max;
+        return RenderDistanceCulling.isEntityTooFar(camera, entity, FALLING_BLOCK_RENDER_DISTANCE);
     }
 
     private Mesh createBlockMesh(BlockType type) {

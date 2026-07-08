@@ -30,6 +30,9 @@ public enum ArmorMaterial {
             return null;
         }
         String name = type.name();
+        if (!isArmorPieceName(name)) {
+            return null;
+        }
         if (name.startsWith("LEATHER_")) {
             return LEATHER;
         }
@@ -49,10 +52,13 @@ public enum ArmorMaterial {
     }
 
     public static ArmorSlot slotOf(ItemType type) {
-        if (type == null || materialOf(type) == null) {
+        if (type == null) {
             return null;
         }
         String name = type.name();
+        if (!isArmorPieceName(name) || materialOf(type) == null) {
+            return null;
+        }
         if (name.endsWith("_HELMET")) {
             return ArmorSlot.HELMET;
         }
@@ -66,5 +72,12 @@ public enum ArmorMaterial {
             return ArmorSlot.BOOTS;
         }
         return null;
+    }
+
+    private static boolean isArmorPieceName(String name) {
+        return name != null && (name.endsWith("_HELMET")
+                || name.endsWith("_CHESTPLATE")
+                || name.endsWith("_LEGGINGS")
+                || name.endsWith("_BOOTS"));
     }
 }

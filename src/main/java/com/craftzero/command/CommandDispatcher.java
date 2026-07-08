@@ -192,11 +192,13 @@ public final class CommandDispatcher {
     private void tell(List<String> args, Context context) {
         require(args, 2, "Usage: /tell <player> <message>");
         String target = args.get(0);
+        String message = join(args, 1);
+        String formatted = "[" + context.senderName() + " -> " + target + "] " + message;
         if (!isLocalPlayer(context, target)) {
             requireKnownPlayer(context, target);
-            throw usage("Private messages to remote players are not supported yet; use public chat.");
+            requireRemoteAction(context.sendPrivateMessage(context.senderName(), target, message), target);
         }
-        context.feedback("[" + context.senderName() + " -> " + target + "] " + join(args, 1));
+        context.feedback(formatted);
     }
 
     private void say(List<String> args, Context context) {
@@ -266,8 +268,9 @@ public final class CommandDispatcher {
     private void give(List<String> args, Context context) {
         require(args, 1, "Usage: /give [player] <item|id[:data]> [amount]");
         int itemIndex = 0;
-        if (args.size() >= 2 && context.playerNames().stream().anyMatch(name -> name.equalsIgnoreCase(args.get(0)))) {
-            requireLocalTarget(context, args.get(0));
+        String target = null;
+        if (args.size() >= 2 && isKnownPlayer(context, args.get(0))) {
+            target = args.get(0);
             itemIndex = 1;
         }
         String itemName = args.get(itemIndex);
@@ -276,26 +279,44 @@ public final class CommandDispatcher {
         int count = args.size() > itemIndex + 1 ? parseInt(args.get(itemIndex + 1), item.getMaxStackSize())
                 : item.getMaxStackSize();
         count = clamp(count, 1, Math.max(1, item.getMaxStackSize() * 64));
-        boolean fullyAdded = context.addItem(new ItemStack(item, count));
+        ItemStack stack = new ItemStack(item, count);
+        if (target != null && !isLocalPlayer(context, target)) {
+            requireRemoteAction(context.addItemToPlayer(target, stack), target);
+            context.feedback("Gave " + count + " " + item.getDisplayName() + " to " + target);
+            return;
+        }
+        boolean fullyAdded = context.addItem(stack);
         context.feedback("Gave " + count + " " + item.getDisplayName() + (fullyAdded ? "" : " (inventory full)"));
     }
 
     private void teleport(List<String> args, Context context) {
         require(args, 3, "Usage: /tp [player] <x> <y> <z>");
         int coord = args.size() >= 4 ? 1 : 0;
+        String target = coord == 1 ? args.get(0) : context.senderName();
         if (coord == 1) {
-            requireLocalTarget(context, args.get(0));
+            requireKnownPlayer(context, target);
         }
-        float x = parseCoordinate(args.get(coord), context.playerX());
-        float y = parseCoordinate(args.get(coord + 1), context.playerY());
-        float z = parseCoordinate(args.get(coord + 2), context.playerZ());
+        float x = parseCoordinate(args.get(coord), context.playerX(target));
+        float y = parseCoordinate(args.get(coord + 1), context.playerY(target));
+        float z = parseCoordinate(args.get(coord + 2), context.playerZ(target));
+        if (!isLocalPlayer(context, target)) {
+            requireRemoteAction(context.teleportPlayer(target, x, y, z), target);
+            context.feedback("Teleported " + target + " to " + oneDecimal(x) + ", " + oneDecimal(y) + ", "
+                    + oneDecimal(z));
+            return;
+        }
         context.teleport(x, y, z);
         context.feedback("Teleported to " + oneDecimal(x) + ", " + oneDecimal(y) + ", " + oneDecimal(z));
     }
 
     private void kill(List<String> args, Context context) {
         if (!args.isEmpty()) {
-            requireLocalTarget(context, args.get(0));
+            requireKnownPlayer(context, args.get(0));
+            if (!isLocalPlayer(context, args.get(0))) {
+                requireRemoteAction(context.killPlayer(args.get(0)), args.get(0));
+                context.feedback("Killed " + args.get(0) + ".");
+                return;
+            }
         }
         context.kill();
         context.feedback("Ouch. That looked like it hurt.");
@@ -303,27 +324,48 @@ public final class CommandDispatcher {
 
     private void clear(List<String> args, Context context) {
         ItemType filter = null;
+        String target = context.senderName();
         if (!args.isEmpty()) {
-            int itemIndex = args.size() == 1 ? 0 : 1;
-            if (itemIndex == 1) {
-                requireLocalTarget(context, args.get(0));
+            int itemIndex = 0;
+            if (isKnownPlayer(context, args.get(0))) {
+                target = args.get(0);
+                itemIndex = 1;
             }
-            String itemName = args.get(itemIndex);
-            filter = parseItem(itemName)
-                    .orElseThrow(() -> usage("Unknown item: " + itemName));
+            if (args.size() > itemIndex) {
+                String itemName = args.get(itemIndex);
+                filter = parseItem(itemName)
+                        .orElseThrow(() -> usage("Unknown item: " + itemName));
+            }
+        }
+        if (!isLocalPlayer(context, target)) {
+            requireRemoteAction(context.clearPlayerInventory(target, filter), target);
+            context.feedback(filter == null ? "Cleared " + target + "'s inventory."
+                    : "Cleared " + filter.getDisplayName() + " from " + target + ".");
+            return;
         }
         context.clearInventory(filter);
         context.feedback(filter == null ? "Cleared inventory." : "Cleared " + filter.getDisplayName() + ".");
     }
 
     private void spawnpoint(List<String> args, Context context) {
-        int coord = args.size() >= 4 ? 1 : 0;
-        if (coord == 1) {
-            requireLocalTarget(context, args.get(0));
+        boolean hasExplicitTarget = !args.isEmpty() && isKnownPlayer(context, args.get(0));
+        String target = hasExplicitTarget ? args.get(0) : context.senderName();
+        int coord = hasExplicitTarget ? 1 : 0;
+        if (hasExplicitTarget) {
+            requireKnownPlayer(context, target);
         }
-        float x = args.size() >= coord + 3 ? parseCoordinate(args.get(coord), context.playerX()) : context.playerX();
-        float y = args.size() >= coord + 3 ? parseCoordinate(args.get(coord + 1), context.playerY()) : context.playerY();
-        float z = args.size() >= coord + 3 ? parseCoordinate(args.get(coord + 2), context.playerZ()) : context.playerZ();
+        boolean hasCoords = args.size() >= coord + 3;
+        float x = hasCoords ? parseCoordinate(args.get(coord), context.playerX(target)) : context.playerX(target);
+        float y = hasCoords ? parseCoordinate(args.get(coord + 1), context.playerY(target)) : context.playerY(target);
+        float z = hasCoords ? parseCoordinate(args.get(coord + 2), context.playerZ(target)) : context.playerZ(target);
+        if (!isLocalPlayer(context, target)) {
+            requireRemoteAction(hasCoords
+                    ? context.setPlayerSpawn(target, x, y, z)
+                    : context.setPlayerSpawnToCurrentPosition(target), target);
+            context.feedback("Set " + target + "'s spawn point to " + oneDecimal(x) + ", " + oneDecimal(y)
+                    + ", " + oneDecimal(z));
+            return;
+        }
         context.setSpawn(x, y, z);
         context.feedback("Set spawn point to " + oneDecimal(x) + ", " + oneDecimal(y) + ", " + oneDecimal(z));
     }
@@ -542,18 +584,21 @@ public final class CommandDispatcher {
         return String.format(Locale.ROOT, "%.1f", value);
     }
 
-    private static void requireLocalTarget(Context context, String target) {
-        if (!isLocalPlayer(context, target)) {
-            requireKnownPlayer(context, target);
-            throw usage("Remote player targeting is not supported by this local command yet.");
+    private static void requireRemoteAction(boolean completed, String target) {
+        if (!completed) {
+            throw usage("Could not reach player: " + target);
         }
     }
 
     private static void requireKnownPlayer(Context context, String target) {
-        if (context == null || target == null || context.playerNames().stream()
-                .noneMatch(name -> name.equalsIgnoreCase(target))) {
+        if (!isKnownPlayer(context, target)) {
             throw usage("No such player: " + target);
         }
+    }
+
+    private static boolean isKnownPlayer(Context context, String target) {
+        return context != null && target != null && context.playerNames().stream()
+                .anyMatch(name -> name.equalsIgnoreCase(target));
     }
 
     private static boolean isLocalPlayer(Context context, String target) {
@@ -598,15 +643,51 @@ public final class CommandDispatcher {
 
         float playerZ();
 
+        default float playerX(String target) {
+            return playerX();
+        }
+
+        default float playerY(String target) {
+            return playerY();
+        }
+
+        default float playerZ(String target) {
+            return playerZ();
+        }
+
         void teleport(float x, float y, float z);
+
+        default boolean teleportPlayer(String target, float x, float y, float z) {
+            return false;
+        }
 
         boolean addItem(ItemStack stack);
 
+        default boolean addItemToPlayer(String target, ItemStack stack) {
+            return false;
+        }
+
         void clearInventory(ItemType filter);
+
+        default boolean clearPlayerInventory(String target, ItemType filter) {
+            return false;
+        }
 
         void kill();
 
+        default boolean killPlayer(String target) {
+            return false;
+        }
+
         void setSpawn(float x, float y, float z);
+
+        default boolean setPlayerSpawn(String target, float x, float y, float z) {
+            return false;
+        }
+
+        default boolean setPlayerSpawnToCurrentPosition(String target) {
+            return false;
+        }
 
         void setWorldSpawn(int x, int y, int z);
 
@@ -625,6 +706,10 @@ public final class CommandDispatcher {
         void feedback(String message);
 
         void broadcast(String message);
+
+        default boolean sendPrivateMessage(String sender, String target, String message) {
+            return false;
+        }
 
         String runServerAdminCommand(String command, List<String> args);
 

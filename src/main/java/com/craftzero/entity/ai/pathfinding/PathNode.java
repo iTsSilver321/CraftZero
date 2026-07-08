@@ -48,7 +48,7 @@ public class PathNode implements Comparable<PathNode> {
      * Calculate total cost (f = g + h).
      */
     public void calculateFCost() {
-        this.fCost = gCost + hCost + penalty;
+        this.fCost = gCost + hCost;
     }
 
     /**

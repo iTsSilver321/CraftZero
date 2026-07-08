@@ -5,13 +5,20 @@ import com.craftzero.inventory.Inventory;
 import com.craftzero.inventory.ItemStack;
 import com.craftzero.inventory.ItemStackOps;
 import com.craftzero.inventory.ItemType;
+import com.craftzero.main.Player;
+import com.craftzero.progression.AchievementTracker;
+import com.craftzero.progression.PotionData;
+import com.craftzero.progression.PotionType;
+import com.craftzero.world.BlockType;
+import com.craftzero.world.World;
 import com.craftzero.world.tile.BrewingRecipeRegistry;
 import com.craftzero.world.tile.BrewingStandTileEntity;
 
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 
 import static org.lwjgl.glfw.GLFW.*;
 
@@ -42,23 +49,46 @@ public class BrewingStandScreen {
 
     private final Inventory inventory;
     private BrewingStandTileEntity brewingStand;
+    private AchievementTracker achievementTracker;
     private boolean open;
     private int windowX;
     private int windowY;
     private int hoveredSlot = -1;
-    private boolean isRightClickDragging;
-    private final Set<Integer> draggedSlots = new HashSet<>();
+    private boolean isMouseDragging;
+    private boolean mouseDragRightClick;
+    private int dragStartSlot = -1;
+    private final Set<Integer> draggedSlots = new LinkedHashSet<>();
     private final List<ItemStack> itemsToThrow = new ArrayList<>();
+    private final ContainerDoubleClickTracker doubleClickTracker = new ContainerDoubleClickTracker();
+    private final BooleanSupplier inventoryCloseRequested;
+    private final BooleanSupplier dropRequested;
 
     public BrewingStandScreen(Inventory inventory) {
+        this(inventory, null, null);
+    }
+
+    public BrewingStandScreen(Inventory inventory, BooleanSupplier inventoryCloseRequested) {
+        this(inventory, inventoryCloseRequested, null);
+    }
+
+    public BrewingStandScreen(Inventory inventory, BooleanSupplier inventoryCloseRequested,
+            BooleanSupplier dropRequested) {
         this.inventory = inventory;
+        this.inventoryCloseRequested = ContainerScreenControls.closeRequester(inventoryCloseRequested);
+        this.dropRequested = ContainerScreenControls.dropRequester(dropRequested);
     }
 
     public void open(BrewingStandTileEntity brewingStand, int screenWidth, int screenHeight) {
+        open(brewingStand, screenWidth, screenHeight, null);
+    }
+
+    public void open(BrewingStandTileEntity brewingStand, int screenWidth, int screenHeight,
+            AchievementTracker achievementTracker) {
         if (open) {
             close();
         }
         this.brewingStand = brewingStand;
+        this.achievementTracker = achievementTracker;
         this.open = true;
         this.windowX = (screenWidth - WINDOW_WIDTH) / 2;
         this.windowY = (screenHeight - WINDOW_HEIGHT) / 2;
@@ -77,6 +107,7 @@ public class BrewingStandScreen {
         open = false;
         hoveredSlot = -1;
         brewingStand = null;
+        achievementTracker = null;
         Input.setCursorLocked(true);
     }
 
@@ -84,35 +115,128 @@ public class BrewingStandScreen {
         if (!open) {
             return;
         }
-        if (Input.isKeyPressed(GLFW_KEY_ESCAPE) || Input.isKeyPressed(GLFW_KEY_E)) {
+        if (ContainerScreenControls.shouldClose(inventoryCloseRequested)) {
             close();
             return;
         }
         hoveredSlot = getSlotAtPosition((int) Input.getMouseX(), (int) Input.getMouseY());
-        if (Input.isButtonPressed(GLFW_MOUSE_BUTTON_LEFT)) {
-            if (hoveredSlot == -1 && inventory.getCursorItem() != null) {
-                itemsToThrow.add(inventory.getCursorItem());
-                inventory.setCursorItem(null);
-            } else {
-                handleClick(hoveredSlot, false);
-            }
+        ContainerKeyboardDrop.DropResult keyboardDrop =
+                ContainerKeyboardDrop.dropOne(dropRequested, inventory, dragSlotAccess(), hoveredSlot, itemsToThrow);
+        if (keyboardDrop.dropped()) {
+            markDirtyIfNeeded(keyboardDrop.sourceSlot());
+            return;
         }
-        if (Input.isButtonDown(GLFW_MOUSE_BUTTON_RIGHT)) {
-            if (!isRightClickDragging) {
-                isRightClickDragging = true;
-                draggedSlots.clear();
-                handleClick(hoveredSlot, true);
-                if (hoveredSlot != -1) {
-                    draggedSlots.add(hoveredSlot);
-                }
-            } else if (hoveredSlot != -1 && !draggedSlots.contains(hoveredSlot)) {
-                handleClick(hoveredSlot, true);
-                draggedSlots.add(hoveredSlot);
-            }
+        if (ContainerHotbarSwap.trySwapWithHotbar(inventory, dragSlotAccess(), hoveredSlot,
+                BrewingStandTileEntity.SIZE + Inventory.MAIN_SIZE)) {
+            return;
+        }
+        handleMouseButton(GLFW_MOUSE_BUTTON_LEFT, false);
+        handleMouseButton(GLFW_MOUSE_BUTTON_RIGHT, true);
+    }
+
+    private void handleMouseButton(int button, boolean rightClick) {
+        if (Input.isButtonPressed(button)) {
+            startMouseDrag(rightClick);
+        }
+        if (isMouseDragging && mouseDragRightClick == rightClick && Input.isButtonDown(button)) {
+            continueMouseDrag();
+        }
+        if (isMouseDragging && mouseDragRightClick == rightClick && Input.isButtonReleased(button)) {
+            finishMouseDrag();
+        }
+    }
+
+    private void startMouseDrag(boolean rightClick) {
+        if (hoveredSlot == -1) {
+            doubleClickTracker.reset();
+            ContainerCursorDrop.dropOutside(inventory, itemsToThrow, rightClick);
+            return;
+        }
+        if (isShiftDown()) {
+            doubleClickTracker.recordClick(hoveredSlot, rightClick);
+            handleClick(hoveredSlot, rightClick);
+            return;
+        }
+        if (doubleClickTracker.isDoubleLeftClick(hoveredSlot, rightClick) && canHandleDoubleClick(hoveredSlot)) {
+            handleDoubleClick(hoveredSlot);
+            return;
+        }
+        ItemStack cursorItem = inventory.getCursorItem();
+        if (ItemStackOps.isEmpty(cursorItem) || !ContainerDragDistributor.canDragInto(dragSlotAccess(), hoveredSlot,
+                cursorItem)) {
+            handleClick(hoveredSlot, rightClick);
+            return;
+        }
+        isMouseDragging = true;
+        mouseDragRightClick = rightClick;
+        dragStartSlot = hoveredSlot;
+        draggedSlots.clear();
+        draggedSlots.add(hoveredSlot);
+    }
+
+    private boolean handleDoubleClick(int slotIndex) {
+        if (!canHandleDoubleClick(slotIndex)) {
+            return false;
+        }
+        boolean collected = ContainerDoubleClickCollector.collectMatching(dragSlotAccess(), doubleClickCollectSlots(slotIndex),
+                inventory.getCursorItem());
+        if (collected) {
+            brewingStand.markDirty();
+        }
+        return collected;
+    }
+
+    private boolean canHandleDoubleClick(int slotIndex) {
+        return brewingStand != null && !ItemStackOps.isEmpty(inventory.getCursorItem())
+                && slotIndex >= 0
+                && slotIndex < BrewingStandTileEntity.SIZE + Inventory.MAIN_SIZE + Inventory.HOTBAR_SIZE;
+    }
+
+    private int[] doubleClickCollectSlots(int clickedSlot) {
+        int[] brewingSlots = ContainerSlotOrder.range(0, BrewingStandTileEntity.SIZE);
+        int[] playerSlots = ContainerSlotOrder.range(BrewingStandTileEntity.SIZE,
+                BrewingStandTileEntity.SIZE + Inventory.MAIN_SIZE + Inventory.HOTBAR_SIZE);
+        return ContainerSlotOrder.clickedGroupFirst(clickedSlot, 0, BrewingStandTileEntity.SIZE,
+                brewingSlots, playerSlots);
+    }
+
+    private void continueMouseDrag() {
+        ItemStack cursorItem = inventory.getCursorItem();
+        if (hoveredSlot != -1 && !draggedSlots.contains(hoveredSlot)
+                && ContainerDragDistributor.canDragInto(dragSlotAccess(), hoveredSlot, cursorItem)) {
+            draggedSlots.add(hoveredSlot);
+        }
+    }
+
+    private void finishMouseDrag() {
+        if (draggedSlots.size() <= 1) {
+            handleClick(dragStartSlot, mouseDragRightClick);
         } else {
-            isRightClickDragging = false;
-            draggedSlots.clear();
+            ItemStack cursorItem = inventory.getCursorItem();
+            int moved = ContainerDragDistributor.distribute(dragSlotAccess(), draggedSlots, cursorItem,
+                    mouseDragRightClick);
+            if (moved == 0) {
+                handleClick(dragStartSlot, mouseDragRightClick);
+            } else {
+                markDraggedBrewingSlotsDirty();
+                if (ItemStackOps.isEmpty(cursorItem)) {
+                    inventory.setCursorItem(null);
+                }
+            }
         }
+        clearMouseDrag();
+    }
+
+    private void clearMouseDrag() {
+        isMouseDragging = false;
+        mouseDragRightClick = false;
+        dragStartSlot = -1;
+        draggedSlots.clear();
+    }
+
+    public boolean isStillUsable(World world, Player player) {
+        return open && BlockContainerValidity.sameTileWithinUseDistance(world, brewingStand, player,
+                BlockType.BREWING_STAND);
     }
 
     private int getSlotAtPosition(int mx, int my) {
@@ -158,22 +282,24 @@ public class BrewingStandScreen {
         }
         ItemStack cursorItem = inventory.getCursorItem();
         ItemStack slotItem = getItemInSlot(slotIndex);
-        if (Input.isKeyDown(GLFW_KEY_LEFT_SHIFT) || Input.isKeyDown(GLFW_KEY_RIGHT_SHIFT)) {
+        if (isShiftDown()) {
             shiftClick(slotIndex, slotItem);
             return;
         }
         if (rightClick) {
             if (cursorItem == null && slotItem != null) {
                 inventory.setCursorItem(ItemStackOps.splitHalf(slotItem));
+                recordBrewedPotionTaken(slotIndex, inventory.getCursorItem());
                 if (slotItem.isEmpty()) {
                     setItemInSlot(slotIndex, null);
                 }
             } else if (cursorItem != null && slotItem == null && canPlace(slotIndex, cursorItem)) {
-                setItemInSlot(slotIndex, ItemStackOps.splitOne(cursorItem));
+                setItemInSlot(slotIndex,
+                        ItemStackOps.split(cursorItem, Math.min(1, maxStackSizeForSlot(slotIndex, cursorItem))));
                 if (cursorItem.isEmpty()) {
                     inventory.setCursorItem(null);
                 }
-            } else if (ItemStackOps.mergeAmountInto(slotItem, cursorItem, 1) > 0) {
+            } else if (canPlace(slotIndex, cursorItem) && mergeIntoSlot(slotIndex, slotItem, cursorItem, 1) > 0) {
                 if (cursorItem.isEmpty()) {
                     inventory.setCursorItem(null);
                 }
@@ -185,15 +311,14 @@ public class BrewingStandScreen {
             inventory.setCursorItem(slotItem);
             setItemInSlot(slotIndex, null);
         } else if (cursorItem != null && slotItem == null && canPlace(slotIndex, cursorItem)) {
-            setItemInSlot(slotIndex, cursorItem);
-            inventory.setCursorItem(null);
-        } else if (ItemStackOps.canMerge(slotItem, cursorItem)) {
-            ItemStackOps.mergeInto(slotItem, cursorItem);
+            placeCursorIntoEmptySlot(slotIndex, cursorItem);
+        } else if (canPlace(slotIndex, cursorItem) && mergeIntoSlot(slotIndex, slotItem, cursorItem, Integer.MAX_VALUE) > 0) {
             if (cursorItem.isEmpty()) {
                 inventory.setCursorItem(null);
             }
             markDirtyIfNeeded(slotIndex);
-        } else if (cursorItem != null && canPlace(slotIndex, cursorItem)) {
+        } else if (cursorItem != null && canPlace(slotIndex, cursorItem)
+                && cursorItem.getCount() <= maxStackSizeForSlot(slotIndex, cursorItem)) {
             setItemInSlot(slotIndex, cursorItem);
             inventory.setCursorItem(slotItem);
         }
@@ -204,36 +329,80 @@ public class BrewingStandScreen {
             return;
         }
         if (slotIndex < BrewingStandTileEntity.SIZE) {
-            if (inventory.addItem(slotItem)) {
-                setItemInSlot(slotIndex, null);
+            int before = slotItem.getCount();
+            ItemStack moved = slotItem.copy();
+            if (ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex, playerInventoryShiftClickDestinations())) {
+                moved.setCount(before - (slotItem.isEmpty() ? 0 : slotItem.getCount()));
+                recordBrewedPotionTaken(slotIndex, moved);
+                markDirtyIfNeeded(slotIndex);
             }
             return;
         }
-        if (slotItem.getType() == ItemType.POTION) {
-            for (int i = 0; i < 3 && !slotItem.isEmpty(); i++) {
-                moveIntoBrewingSlot(slotItem, i);
+        if (BrewingRecipeRegistry.isIngredient(slotItem)) {
+            if (ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex,
+                    new int[] { BrewingStandTileEntity.SLOT_INGREDIENT })) {
+                brewingStand.markDirty();
             }
-            if (slotItem.isEmpty()) {
-                setItemInSlot(slotIndex, null);
+        } else if (isBottleSlotItem(slotItem)) {
+            if (ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex,
+                    new int[] { BrewingStandTileEntity.SLOT_BOTTLE_0, BrewingStandTileEntity.SLOT_BOTTLE_1,
+                            BrewingStandTileEntity.SLOT_BOTTLE_2 })) {
+                brewingStand.markDirty();
             }
-        } else if (BrewingRecipeRegistry.isIngredient(slotItem)) {
-            if (moveIntoBrewingSlot(slotItem, BrewingStandTileEntity.SLOT_INGREDIENT)) {
-                setItemInSlot(slotIndex, null);
-            }
+        } else if (moveWithinPlayerInventory(slotIndex)) {
         }
     }
 
-    private boolean moveIntoBrewingSlot(ItemStack stack, int targetSlot) {
-        ItemStack target = brewingStand.getInventory()[targetSlot];
-        if (target == null && canPlace(targetSlot, stack)) {
-            brewingStand.getInventory()[targetSlot] = ItemStackOps.split(stack, Math.min(1, stack.getCount()));
-            brewingStand.markDirty();
-            return stack.isEmpty();
+    private boolean moveWithinPlayerInventory(int slotIndex) {
+        int playerIndex = slotIndex - BrewingStandTileEntity.SIZE;
+        if (playerIndex < 0) {
+            return false;
         }
-        if (ItemStackOps.mergeInto(target, stack) > 0) {
-            brewingStand.markDirty();
+        if (playerIndex < Inventory.MAIN_SIZE) {
+            return ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex,
+                    ContainerSlotOrder.range(BrewingStandTileEntity.SIZE + Inventory.MAIN_SIZE,
+                            BrewingStandTileEntity.SIZE + Inventory.MAIN_SIZE + Inventory.HOTBAR_SIZE));
         }
-        return stack.isEmpty();
+        int hotbarIndex = playerIndex - Inventory.MAIN_SIZE;
+        if (hotbarIndex >= 0 && hotbarIndex < Inventory.HOTBAR_SIZE) {
+            return ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex,
+                    ContainerSlotOrder.range(BrewingStandTileEntity.SIZE,
+                            BrewingStandTileEntity.SIZE + Inventory.MAIN_SIZE));
+        }
+        return false;
+    }
+
+    private int[] playerInventoryShiftClickDestinations() {
+        return ContainerSlotOrder.playerInventoryReverse(BrewingStandTileEntity.SIZE, Inventory.MAIN_SIZE,
+                Inventory.HOTBAR_SIZE);
+    }
+
+    private void placeCursorIntoEmptySlot(int slotIndex, ItemStack cursorItem) {
+        int amount = Math.min(maxStackSizeForSlot(slotIndex, cursorItem), cursorItem.getCount());
+        if (amount == cursorItem.getCount()) {
+            setItemInSlot(slotIndex, cursorItem);
+            inventory.setCursorItem(null);
+            return;
+        }
+        setItemInSlot(slotIndex, ItemStackOps.split(cursorItem, amount));
+        if (cursorItem.isEmpty()) {
+            inventory.setCursorItem(null);
+        }
+    }
+
+    private int mergeIntoSlot(int slotIndex, ItemStack target, ItemStack source, int amount) {
+        if (amount <= 0 || !ItemStackOps.canMerge(target, source)) {
+            return 0;
+        }
+        int max = Math.min(target.getMaxStackSize(), maxStackSizeForSlot(slotIndex, source));
+        int space = max - target.getCount();
+        if (space <= 0) {
+            return 0;
+        }
+        int moved = Math.min(Math.min(space, source.getCount()), amount);
+        target.add(moved);
+        source.remove(moved);
+        return moved;
     }
 
     private boolean canPlace(int slotIndex, ItemStack stack) {
@@ -246,7 +415,18 @@ public class BrewingStandScreen {
         if (slotIndex == BrewingStandTileEntity.SLOT_INGREDIENT) {
             return BrewingRecipeRegistry.isIngredient(stack);
         }
-        return stack.getType() == ItemType.POTION;
+        return isBottleSlotItem(stack);
+    }
+
+    private boolean isBottleSlotItem(ItemStack stack) {
+        return BrewingRecipeRegistry.isBottleSlotItem(stack);
+    }
+
+    private int maxStackSizeForSlot(int slotIndex, ItemStack stack) {
+        if (slotIndex >= 0 && slotIndex < BrewingStandTileEntity.SLOT_INGREDIENT) {
+            return 1;
+        }
+        return stack == null || stack.isEmpty() ? 0 : stack.getMaxStackSize();
     }
 
     public ItemStack getItemInSlot(int slotIndex) {
@@ -263,7 +443,11 @@ public class BrewingStandScreen {
 
     private void setItemInSlot(int slotIndex, ItemStack stack) {
         if (slotIndex < BrewingStandTileEntity.SIZE) {
+            ItemStack previous = brewingStand.getInventory()[slotIndex];
             brewingStand.getInventory()[slotIndex] = stack;
+            if (previous != stack) {
+                recordBrewedPotionTaken(slotIndex, previous);
+            }
             brewingStand.markDirty();
             return;
         }
@@ -282,6 +466,67 @@ public class BrewingStandScreen {
         if (slotIndex < BrewingStandTileEntity.SIZE) {
             brewingStand.markDirty();
         }
+    }
+
+    private void recordBrewedPotionTaken(int slotIndex, ItemStack stack) {
+        if (achievementTracker == null || !isBottleSlot(slotIndex) || !isBrewedPotion(stack)) {
+            return;
+        }
+        achievementTracker.recordBrewedPotionTaken();
+    }
+
+    private boolean isBottleSlot(int slotIndex) {
+        return slotIndex >= BrewingStandTileEntity.SLOT_BOTTLE_0
+                && slotIndex <= BrewingStandTileEntity.SLOT_BOTTLE_2;
+    }
+
+    private boolean isBrewedPotion(ItemStack stack) {
+        if (stack == null || stack.isEmpty() || stack.getType() != ItemType.POTION) {
+            return false;
+        }
+        PotionData potion = stack.getPotionData();
+        return potion != null && potion.type() != PotionType.WATER;
+    }
+
+    public void setAchievementTracker(AchievementTracker achievementTracker) {
+        this.achievementTracker = achievementTracker;
+    }
+
+    private boolean isShiftDown() {
+        return Input.isKeyDown(GLFW_KEY_LEFT_SHIFT) || Input.isKeyDown(GLFW_KEY_RIGHT_SHIFT);
+    }
+
+    private void markDraggedBrewingSlotsDirty() {
+        for (int slot : draggedSlots) {
+            if (slot < BrewingStandTileEntity.SIZE) {
+                brewingStand.markDirty();
+                return;
+            }
+        }
+    }
+
+    private ContainerDragDistributor.Slots dragSlotAccess() {
+        return new ContainerDragDistributor.Slots() {
+            @Override
+            public ItemStack get(int slotIndex) {
+                return getItemInSlot(slotIndex);
+            }
+
+            @Override
+            public void set(int slotIndex, ItemStack stack) {
+                setItemInSlot(slotIndex, stack);
+            }
+
+            @Override
+            public boolean canPlace(int slotIndex, ItemStack stack) {
+                return BrewingStandScreen.this.canPlace(slotIndex, stack);
+            }
+
+            @Override
+            public int maxStackSize(int slotIndex, ItemStack stack) {
+                return maxStackSizeForSlot(slotIndex, stack);
+            }
+        };
     }
 
     public List<ItemStack> getAndClearItemsToThrow() {

@@ -1,12 +1,15 @@
 package com.craftzero.entity;
 
 import com.craftzero.inventory.ItemStack;
+import com.craftzero.inventory.ItemType;
 import com.craftzero.world.BlockType;
+import com.craftzero.world.Chunk;
 
 /**
  * Release-style falling sand/gravel entity.
  */
 public class FallingBlockEntity extends Entity {
+    private static final int OUT_OF_WORLD_DROP_TICKS = 100;
     private static final int MAX_AGE_TICKS = 600;
 
     private final BlockType blockType;
@@ -21,7 +24,8 @@ public class FallingBlockEntity extends Entity {
     @Override
     public void tick() {
         super.tick();
-        if (ticksExisted > MAX_AGE_TICKS || y < -1.0f) {
+        if (ticksExisted > MAX_AGE_TICKS
+                || (ticksExisted > OUT_OF_WORLD_DROP_TICKS && isOutsideVerticalWorld())) {
             dropAsItem();
             remove();
         }
@@ -63,16 +67,6 @@ public class FallingBlockEntity extends Entity {
         return 0.86f;
     }
 
-    @Override
-    protected boolean usesDefaultWaterBobbing() {
-        return false;
-    }
-
-    @Override
-    protected boolean shouldSurfaceFloatInWater() {
-        return false;
-    }
-
     private void settle() {
         int blockX = (int) Math.floor(x);
         int blockY = (int) Math.floor(y);
@@ -90,8 +84,15 @@ public class FallingBlockEntity extends Entity {
         if (world == null) {
             return;
         }
-        ItemStack drop = new ItemStack(blockType.getDroppedItem(), 1);
-        world.spawnThrownStack(x, y + 0.25f, z, drop, 0.0f, 0.1f, 0.0f);
+        ItemType droppedItem = ItemType.fromBlock(blockType, metadata);
+        if (droppedItem != null) {
+            world.spawnThrownStack(x, y + 0.25f, z, new ItemStack(droppedItem, 1), 0.0f, 0.1f, 0.0f);
+        }
+    }
+
+    private boolean isOutsideVerticalWorld() {
+        int blockY = (int) Math.floor(y);
+        return blockY < 1 || blockY > Chunk.HEIGHT;
     }
 
     public BlockType getBlockType() {

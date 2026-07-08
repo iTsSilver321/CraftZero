@@ -4,6 +4,7 @@ import com.craftzero.entity.LivingEntity;
 import com.craftzero.entity.ai.pathfinding.MoveControl;
 import com.craftzero.entity.ai.pathfinding.Navigator;
 import com.craftzero.entity.ai.pathfinding.PathNode;
+import com.craftzero.world.World;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -31,9 +32,11 @@ public class MobAI {
 
     // Target tracking
     private LivingEntity target;
+    private World.RemotePlayerTarget remotePlayerTarget;
     private float targetX, targetY, targetZ;
     private boolean hasTarget;
     private int lastNavigationBlockX = Integer.MIN_VALUE;
+    private int lastNavigationBlockY = Integer.MIN_VALUE;
     private int lastNavigationBlockZ = Integer.MIN_VALUE;
     private boolean pendingDirectMove;
     private float pendingMoveYaw;
@@ -60,6 +63,9 @@ public class MobAI {
             this.navigator = new Navigator(mob, mob.getWorld());
             this.moveControl = new MoveControl(mob);
             navigationInitialized = true;
+            if (hasTarget) {
+                retargetNavigatorToCurrentTarget();
+            }
         }
     }
 
@@ -73,6 +79,54 @@ public class MobAI {
             goals.add(new PrioritizedGoal(priority, goal));
         }
         goals.sort(Comparator.comparingInt(Goal::getPriority));
+    }
+
+    public boolean isGoalActive(Goal goal) {
+        if (goal == null) {
+            return false;
+        }
+        for (Goal active : activeGoals) {
+            Goal unwrapped = unwrap(active);
+            if (active == goal || unwrapped == goal) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public <T extends Goal> T getGoal(Class<T> type) {
+        if (type == null) {
+            return null;
+        }
+        for (Goal goal : goals) {
+            Goal unwrapped = unwrap(goal);
+            if (type.isInstance(unwrapped)) {
+                return type.cast(unwrapped);
+            }
+        }
+        return null;
+    }
+
+    public void stopGoals(List<Class<? extends Goal>> goalTypes) {
+        if (goalTypes == null || goalTypes.isEmpty()) {
+            return;
+        }
+        java.util.Iterator<Goal> activeIterator = activeGoals.iterator();
+        while (activeIterator.hasNext()) {
+            Goal goal = activeIterator.next();
+            Goal unwrapped = unwrap(goal);
+            for (Class<? extends Goal> type : goalTypes) {
+                if (type != null && type.isInstance(unwrapped)) {
+                    goal.stop();
+                    activeIterator.remove();
+                    break;
+                }
+            }
+        }
+    }
+
+    private static Goal unwrap(Goal goal) {
+        return goal instanceof PrioritizedGoal prioritized ? prioritized.wrapped : goal;
     }
 
     /**
@@ -164,17 +218,20 @@ public class MobAI {
      * Navigate to a position using A* pathfinding.
      */
     public void navigateTo(float x, float y, float z) {
+        if (!allFinite(x, y, z)) {
+            stopNavigation();
+            return;
+        }
         this.targetX = x;
         this.targetY = y;
         this.targetZ = z;
         this.hasTarget = true;
 
         int blockX = (int) Math.floor(x);
+        int blockY = (int) Math.floor(y);
         int blockZ = (int) Math.floor(z);
-        if (navigator != null && shouldRetargetNavigation(blockX, blockZ)) {
-            navigator.moveTo(x, y, z);
-            lastNavigationBlockX = blockX;
-            lastNavigationBlockZ = blockZ;
+        if (navigator != null && shouldRetargetNavigation(blockX, blockY, blockZ)) {
+            retargetNavigatorToCurrentTarget();
         }
     }
 
@@ -184,6 +241,7 @@ public class MobAI {
     public void stopNavigation() {
         this.hasTarget = false;
         this.lastNavigationBlockX = Integer.MIN_VALUE;
+        this.lastNavigationBlockY = Integer.MIN_VALUE;
         this.lastNavigationBlockZ = Integer.MIN_VALUE;
         if (navigator != null) {
             navigator.stop();
@@ -232,6 +290,44 @@ public class MobAI {
         this.pendingStop = false;
     }
 
+    public boolean requestSafeMoveDirection(float yaw, float speed, float cliffCheckDistance) {
+        if (!Float.isFinite(yaw) || !Float.isFinite(speed) || speed <= 0.0f) {
+            requestStopMoving();
+            return false;
+        }
+        World world = mob.getWorld();
+        float checkDistance = Math.max(0.5f, cliffCheckDistance);
+        if (world != null && LineOfSightUtil.isCliffAhead(world,
+                mob.getX(), mob.getY(), mob.getZ(), yaw, checkDistance)) {
+            float safeYaw = LineOfSightUtil.findSafeDirection(world,
+                    mob.getX(), mob.getY(), mob.getZ(), yaw, checkDistance);
+            if (LineOfSightUtil.isCliffAhead(world, mob.getX(), mob.getY(), mob.getZ(), safeYaw, checkDistance)) {
+                requestStopMoving();
+                return false;
+            }
+            yaw = safeYaw;
+        }
+        requestMoveDirection(yaw, speed);
+        return true;
+    }
+
+    public boolean requestMoveToward(float x, float z, float speed, float stopDistance, float cliffCheckDistance) {
+        if (!Float.isFinite(x) || !Float.isFinite(z)) {
+            requestStopMoving();
+            return false;
+        }
+        float dx = x - mob.getX();
+        float dz = z - mob.getZ();
+        float distanceSq = dx * dx + dz * dz;
+        float stop = Math.max(0.0f, stopDistance);
+        if (distanceSq <= stop * stop) {
+            requestStopMoving();
+            return false;
+        }
+        float yaw = (float) Math.toDegrees(Math.atan2(dx, -dz));
+        return requestSafeMoveDirection(yaw, speed, cliffCheckDistance);
+    }
+
     public void requestStopMoving() {
         this.pendingStop = true;
         this.pendingDirectMove = false;
@@ -247,21 +343,58 @@ public class MobAI {
      * Set the current attack target.
      */
     public void setTarget(LivingEntity target) {
+        if (!isValidAttackTarget(target)) {
+            clearTarget();
+            return;
+        }
+        this.remotePlayerTarget = null;
         this.target = target;
+    }
+
+    public void setRemotePlayerTarget(World.RemotePlayerTarget target) {
+        if (target == null || !target.valid()) {
+            this.remotePlayerTarget = null;
+            return;
+        }
+        this.target = null;
+        this.remotePlayerTarget = target;
     }
 
     /**
      * Get the current attack target.
      */
     public LivingEntity getTarget() {
+        if (!isValidAttackTarget(target)) {
+            target = null;
+        }
         return target;
+    }
+
+    public World.RemotePlayerTarget getRemotePlayerTarget() {
+        if (remotePlayerTarget == null || mob.getWorld() == null) {
+            remotePlayerTarget = null;
+            return null;
+        }
+        remotePlayerTarget = mob.getWorld().remotePlayerTargetById(remotePlayerTarget.playerId());
+        if (remotePlayerTarget == null || !remotePlayerTarget.valid()) {
+            remotePlayerTarget = null;
+        }
+        return remotePlayerTarget;
     }
 
     /**
      * Check if there's a valid target.
      */
     public boolean hasTarget() {
-        return target != null && !target.isDead() && !target.isRemoved();
+        return getTarget() != null;
+    }
+
+    public boolean hasAttackTarget() {
+        return getTarget() != null || getRemotePlayerTarget() != null;
+    }
+
+    public boolean hasRemotePlayerTarget() {
+        return getRemotePlayerTarget() != null;
     }
 
     /**
@@ -269,6 +402,18 @@ public class MobAI {
      */
     public void clearTarget() {
         this.target = null;
+        this.remotePlayerTarget = null;
+    }
+
+    public void clearRemotePlayerTarget() {
+        this.remotePlayerTarget = null;
+    }
+
+    private boolean isValidAttackTarget(LivingEntity candidate) {
+        return candidate != null
+                && candidate != mob
+                && !candidate.isDead()
+                && !candidate.isRemoved();
     }
 
     // ==================== Legacy Movement Target ====================
@@ -278,29 +423,59 @@ public class MobAI {
      * Set movement target position (legacy - use navigateTo instead).
      */
     public void setMoveTarget(float x, float z) {
+        setMoveTarget(x, mob.getY(), z);
+    }
+
+    public void setMoveTarget(float x, float y, float z) {
+        if (!allFinite(x, y, z)) {
+            clearMoveTarget();
+            return;
+        }
         this.targetX = x;
+        this.targetY = y;
         this.targetZ = z;
         this.hasTarget = true;
 
         // Also trigger navigation
         int blockX = (int) Math.floor(x);
+        int blockY = (int) Math.floor(y);
         int blockZ = (int) Math.floor(z);
-        if (navigator != null && shouldRetargetNavigation(blockX, blockZ)) {
-            navigator.moveTo(x, mob.getY(), z);
-            lastNavigationBlockX = blockX;
-            lastNavigationBlockZ = blockZ;
+        if (navigator != null && shouldRetargetNavigation(blockX, blockY, blockZ)) {
+            retargetNavigatorToCurrentTarget();
         }
     }
 
-    private boolean shouldRetargetNavigation(int blockX, int blockZ) {
-        if (blockX == lastNavigationBlockX && blockZ == lastNavigationBlockZ) {
+    private void retargetNavigatorToCurrentTarget() {
+        if (navigator == null) {
+            return;
+        }
+        navigator.moveTo(targetX, targetY, targetZ);
+        lastNavigationBlockX = (int) Math.floor(targetX);
+        lastNavigationBlockY = (int) Math.floor(targetY);
+        lastNavigationBlockZ = (int) Math.floor(targetZ);
+    }
+
+    private boolean shouldRetargetNavigation(int blockX, int blockY, int blockZ) {
+        if (blockX == lastNavigationBlockX && blockY == lastNavigationBlockY && blockZ == lastNavigationBlockZ) {
             return false;
         }
         int dx = blockX - lastNavigationBlockX;
+        int dy = blockY - lastNavigationBlockY;
         int dz = blockZ - lastNavigationBlockZ;
         return lastNavigationBlockX == Integer.MIN_VALUE
+                || lastNavigationBlockY == Integer.MIN_VALUE
+                || dy != 0
                 || dx * dx + dz * dz >= 2
                 || !isNavigating();
+    }
+
+    private static boolean allFinite(float... values) {
+        for (float value : values) {
+            if (!Float.isFinite(value)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -320,6 +495,10 @@ public class MobAI {
 
     public float getTargetX() {
         return targetX;
+    }
+
+    public float getTargetY() {
+        return targetY;
     }
 
     public float getTargetZ() {

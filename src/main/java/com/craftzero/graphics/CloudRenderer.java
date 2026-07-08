@@ -3,186 +3,173 @@ package com.craftzero.graphics;
 import com.craftzero.world.DayCycleManager;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
+
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL15.*;
 import static org.lwjgl.opengl.GL20.*;
 import static org.lwjgl.opengl.GL30.*;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Random;
-
 /**
- * Renders Minecraft-style clouds as solid white blocky shapes.
- * Uses its own simple shader that just outputs white - no texture sampling.
+ * Renders the classic Release-era cloud sheet as a wrapped, textured layer.
  */
 public class CloudRenderer {
 
-        private ShaderProgram cloudShader;
-        private int vao, vbo, ebo;
-        private int vertexCount;
-        private List<float[]> cloudBlocks;
+    static final String CLOUD_TEXTURE_RESOURCE = "/textures/environment/clouds.png";
+    static final float RELEASE_CLOUD_HEIGHT = 108.0f;
+    static final float CLOUD_TILE_SIZE = 256.0f;
+    static final float CLOUD_SPEED = 0.6f;
+    static final int CLOUD_TILE_RADIUS = 3;
 
-        private static final float CLOUD_HEIGHT = 192.0f;
-        private static final float CLOUD_AREA = 600.0f;
-        private static final float CLOUD_SPEED = 0.5f;
-        private static final int CLOUD_CLUSTER_COUNT = 30;
+    private ShaderProgram cloudShader;
+    private Texture cloudTexture;
+    private int vao, vbo, ebo;
+    private int vertexCount;
+    private float cloudOffsetX = 0.0f;
 
-        private float cloudOffsetX = 0;
+    public void init() throws Exception {
+        cloudShader = new ShaderProgram();
+        cloudShader.createVertexShader(
+                "#version 330 core\n" +
+                        "layout (location = 0) in vec3 aPos;\n" +
+                        "layout (location = 1) in vec2 aTexCoord;\n" +
+                        "out vec2 fragTexCoord;\n" +
+                        "uniform mat4 projectionMatrix;\n" +
+                        "uniform mat4 viewMatrix;\n" +
+                        "uniform mat4 modelMatrix;\n" +
+                        "void main() {\n" +
+                        "    fragTexCoord = aTexCoord;\n" +
+                        "    gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(aPos, 1.0);\n" +
+                        "}");
+        cloudShader.createFragmentShader(
+                "#version 330 core\n" +
+                        "in vec2 fragTexCoord;\n" +
+                        "out vec4 fragColor;\n" +
+                        "uniform sampler2D cloudTexture;\n" +
+                        "uniform float cloudBrightness;\n" +
+                        "void main() {\n" +
+                        "    vec4 tex = texture(cloudTexture, fragTexCoord);\n" +
+                        "    if (tex.a < 0.05) discard;\n" +
+                        "    fragColor = vec4(tex.rgb * cloudBrightness, tex.a * 0.85);\n" +
+                        "}");
+        cloudShader.link();
+        cloudShader.createUniform("projectionMatrix");
+        cloudShader.createUniform("viewMatrix");
+        cloudShader.createUniform("modelMatrix");
+        cloudShader.createUniform("cloudTexture");
+        cloudShader.createUniform("cloudBrightness");
 
-        public void init() throws Exception {
-                // Create simple shader that outputs solid white
-                cloudShader = new ShaderProgram();
-                cloudShader.createVertexShader(
-                                "#version 330 core\n" +
-                                                "layout (location = 0) in vec3 aPos;\n" +
-                                                "uniform mat4 projectionMatrix;\n" +
-                                                "uniform mat4 viewMatrix;\n" +
-                                                "uniform mat4 modelMatrix;\n" +
-                                                "void main() {\n" +
-                                                "    gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(aPos, 1.0);\n"
-                                                +
-                                                "}");
-                cloudShader.createFragmentShader(
-                                "#version 330 core\n" +
-                                                "out vec4 fragColor;\n" +
-                                                "uniform vec3 cloudColor;\n" +
-                                                "void main() {\n" +
-                                                "    fragColor = vec4(cloudColor, 1.0);\n" + // Solid color, fully
-                                                                                             // opaque
-                                                "}");
-                cloudShader.link();
-                cloudShader.createUniform("projectionMatrix");
-                cloudShader.createUniform("viewMatrix");
-                cloudShader.createUniform("modelMatrix");
-                cloudShader.createUniform("cloudColor");
+        cloudTexture = new Texture(CLOUD_TEXTURE_RESOURCE);
+        cloudTexture.bind(0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        cloudTexture.unbind();
 
-                // Generate cloud blocks as clusters
-                cloudBlocks = new ArrayList<>();
-                Random random = new Random(42);
+        float[] vertices = {
+                -0.5f, 0.0f, -0.5f, 0.0f, 1.0f,
+                -0.5f, 0.0f, 0.5f, 0.0f, 0.0f,
+                0.5f, 0.0f, 0.5f, 1.0f, 0.0f,
+                0.5f, 0.0f, -0.5f, 1.0f, 1.0f
+        };
+        int[] indices = { 0, 1, 3, 3, 1, 2 };
+        vertexCount = indices.length;
 
-                for (int i = 0; i < CLOUD_CLUSTER_COUNT; i++) {
-                        float clusterX = (random.nextFloat() - 0.5f) * CLOUD_AREA * 2;
-                        float clusterZ = (random.nextFloat() - 0.5f) * CLOUD_AREA * 2;
+        vao = glGenVertexArrays();
+        glBindVertexArray(vao);
 
-                        int blocksInCluster = 4 + random.nextInt(10);
+        vbo = glGenBuffers();
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
 
-                        float currentX = clusterX;
-                        float currentZ = clusterZ;
+        int stride = 5 * Float.BYTES;
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, false, stride, 0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, false, stride, (long) 3 * Float.BYTES);
 
-                        for (int j = 0; j < blocksInCluster; j++) {
-                                float blockSize = 12.0f;
-                                cloudBlocks.add(new float[] { currentX, currentZ, blockSize, blockSize });
+        ebo = glGenBuffers();
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices, GL_STATIC_DRAW);
 
-                                int dir = random.nextInt(4);
-                                switch (dir) {
-                                        case 0:
-                                                currentX += blockSize;
-                                                break;
-                                        case 1:
-                                                currentX -= blockSize;
-                                                break;
-                                        case 2:
-                                                currentZ += blockSize;
-                                                break;
-                                        case 3:
-                                                currentZ -= blockSize;
-                                                break;
-                                }
-                        }
-                }
+        glBindVertexArray(0);
+    }
 
-                // Create simple quad VAO
-                float[] vertices = {
-                                -0.5f, 0, -0.5f,
-                                -0.5f, 0, 0.5f,
-                                0.5f, 0, 0.5f,
-                                0.5f, 0, -0.5f
-                };
-                int[] indices = { 0, 1, 3, 3, 1, 2 };
-                vertexCount = indices.length;
+    public void render(Renderer renderer, DayCycleManager dayCycle, Camera camera, float deltaTime,
+            float brightnessMultiplier) {
+        cloudOffsetX = normalizedScrollOffset(cloudOffsetX - CLOUD_SPEED * deltaTime);
 
-                vao = glGenVertexArrays();
-                glBindVertexArray(vao);
+        Vector3f camPos = camera.getPosition();
 
-                vbo = glGenBuffers();
-                glBindBuffer(GL_ARRAY_BUFFER, vbo);
-                glBufferData(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
-                glEnableVertexAttribArray(0);
-                glVertexAttribPointer(0, 3, GL_FLOAT, false, 0, 0);
+        glDisable(GL_CULL_FACE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(false);
 
-                ebo = glGenBuffers();
-                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
-                glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices, GL_STATIC_DRAW);
+        cloudShader.bind();
+        cloudShader.setUniform("projectionMatrix", camera.getProjectionMatrix());
+        cloudShader.setUniform("viewMatrix", camera.getViewMatrix());
+        cloudShader.setUniform("cloudBrightness", cloudBrightness(dayCycle.getSunBrightness(), brightnessMultiplier));
+        cloudShader.setUniform("cloudTexture", 0);
+        cloudTexture.bind(0);
 
-                glBindVertexArray(0);
+        glBindVertexArray(vao);
+
+        Matrix4f modelMatrix = new Matrix4f();
+        for (int tileX = -CLOUD_TILE_RADIUS; tileX <= CLOUD_TILE_RADIUS; tileX++) {
+            float renderX = cloudTileCenter(camPos.x, cloudOffsetX, tileX);
+            for (int tileZ = -CLOUD_TILE_RADIUS; tileZ <= CLOUD_TILE_RADIUS; tileZ++) {
+                float renderZ = cloudTileCenter(camPos.z, 0.0f, tileZ);
+
+                modelMatrix.identity();
+                modelMatrix.translate(renderX, RELEASE_CLOUD_HEIGHT, renderZ);
+                modelMatrix.scale(CLOUD_TILE_SIZE, 1.0f, CLOUD_TILE_SIZE);
+
+                cloudShader.setUniform("modelMatrix", modelMatrix);
+                glDrawElements(GL_TRIANGLES, vertexCount, GL_UNSIGNED_INT, 0);
+            }
         }
 
-        public void render(Renderer renderer, DayCycleManager dayCycle, Camera camera, float deltaTime) {
-                cloudOffsetX -= CLOUD_SPEED * deltaTime;
-                if (cloudOffsetX < -CLOUD_AREA * 2) {
-                        cloudOffsetX += CLOUD_AREA * 2;
-                }
+        glBindVertexArray(0);
+        cloudShader.unbind();
 
-                Vector3f camPos = camera.getPosition();
+        glDepthMask(true);
+        glEnable(GL_CULL_FACE);
+    }
 
-                glDisable(GL_CULL_FACE);
+    public void render(Renderer renderer, DayCycleManager dayCycle, Camera camera, float deltaTime) {
+        render(renderer, dayCycle, camera, deltaTime, 1.0f);
+    }
 
-                cloudShader.bind();
-                cloudShader.setUniform("projectionMatrix", camera.getProjectionMatrix());
-                cloudShader.setUniform("viewMatrix", camera.getViewMatrix());
+    static float cloudBrightness(float sunBrightness, float brightnessMultiplier) {
+        return 0.95f * clamp01(sunBrightness) * clamp01(brightnessMultiplier);
+    }
 
-                // Apply time-based lighting to clouds (darken at night)
-                float brightness = dayCycle.getSunBrightness();
-                float cloudBrightness = 0.95f * brightness;
-                cloudShader.setUniform("cloudColor", new Vector3f(cloudBrightness, cloudBrightness, cloudBrightness));
-
-                glBindVertexArray(vao);
-
-                Matrix4f modelMatrix = new Matrix4f();
-
-                for (float[] cloud : cloudBlocks) {
-                        float baseX = cloud[0];
-                        float baseZ = cloud[1];
-                        float width = cloud[2];
-                        float depth = cloud[3];
-
-                        float worldX = baseX + cloudOffsetX;
-
-                        float relX = worldX - camPos.x;
-                        while (relX > CLOUD_AREA)
-                                relX -= CLOUD_AREA * 2;
-                        while (relX < -CLOUD_AREA)
-                                relX += CLOUD_AREA * 2;
-
-                        float relZ = baseZ - camPos.z;
-                        while (relZ > CLOUD_AREA)
-                                relZ -= CLOUD_AREA * 2;
-                        while (relZ < -CLOUD_AREA)
-                                relZ += CLOUD_AREA * 2;
-
-                        float renderX = camPos.x + relX;
-                        float renderZ = camPos.z + relZ;
-
-                        modelMatrix.identity();
-                        modelMatrix.translate(renderX, CLOUD_HEIGHT, renderZ);
-                        modelMatrix.scale(width, 1, depth);
-
-                        cloudShader.setUniform("modelMatrix", modelMatrix);
-                        glDrawElements(GL_TRIANGLES, vertexCount, GL_UNSIGNED_INT, 0);
-                }
-
-                glBindVertexArray(0);
-                cloudShader.unbind();
-
-                glEnable(GL_CULL_FACE);
+    static float normalizedScrollOffset(float offset) {
+        float wrapped = offset % CLOUD_TILE_SIZE;
+        if (wrapped > 0.0f) {
+            wrapped -= CLOUD_TILE_SIZE;
         }
+        return wrapped;
+    }
 
-        public void cleanup() {
-                if (cloudShader != null)
-                        cloudShader.cleanup();
-                glDeleteBuffers(vbo);
-                glDeleteBuffers(ebo);
-                glDeleteVertexArrays(vao);
+    static float cloudTileCenter(float cameraCoord, float scrollOffset, int tileOffset) {
+        float baseCenter = (float) Math.floor((cameraCoord - scrollOffset) / CLOUD_TILE_SIZE) * CLOUD_TILE_SIZE
+                + scrollOffset;
+        return baseCenter + tileOffset * CLOUD_TILE_SIZE;
+    }
+
+    private static float clamp01(float value) {
+        return Math.max(0.0f, Math.min(1.0f, value));
+    }
+
+    public void cleanup() {
+        if (cloudShader != null) {
+            cloudShader.cleanup();
         }
+        if (cloudTexture != null) {
+            cloudTexture.cleanup();
+        }
+        glDeleteBuffers(vbo);
+        glDeleteBuffers(ebo);
+        glDeleteVertexArrays(vao);
+    }
 }

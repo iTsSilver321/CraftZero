@@ -29,6 +29,11 @@ public class Chunk {
     public static final int HEIGHT = 128;
     public static final int DEPTH = 16;
     public static final int TOTAL_BLOCKS = WIDTH * HEIGHT * DEPTH;
+    public static final int LIGHT_DATA_BYTES = TOTAL_BLOCKS / 2 + 1;
+    public static final int HEIGHT_MAP_SIZE = WIDTH * DEPTH;
+    private static final int[] LIGHT_DX = { 1, -1, 0, 0, 0, 0 };
+    private static final int[] LIGHT_DY = { 0, 0, 1, -1, 0, 0 };
+    private static final int[] LIGHT_DZ = { 0, 0, 0, 0, 1, -1 };
 
     private final int chunkX;
     private final int chunkZ;
@@ -39,6 +44,7 @@ public class Chunk {
     private Mesh transparentMesh; // Transparent (glass, water, ice)
     private boolean dirty;
     private boolean modified;
+    private boolean loadedFromStorage;
     private long modificationVersion;
     private boolean empty;
 
@@ -62,11 +68,12 @@ public class Chunk {
         this.chunkZ = chunkZ;
         this.blocks = new short[TOTAL_BLOCKS];
         this.metadata = new byte[TOTAL_BLOCKS];
-        this.skyLight = new byte[TOTAL_BLOCKS / 2 + 1]; // Nibble storage
-        this.blockLight = new byte[TOTAL_BLOCKS / 2 + 1];
-        this.heightMap = new int[WIDTH * DEPTH];
+        this.skyLight = new byte[LIGHT_DATA_BYTES]; // Nibble storage
+        this.blockLight = new byte[LIGHT_DATA_BYTES];
+        this.heightMap = new int[HEIGHT_MAP_SIZE];
         this.dirty = true;
         this.modified = false;
+        this.loadedFromStorage = false;
         this.modificationVersion = 0L;
         this.lightDirty = true;
         this.empty = true;
@@ -103,6 +110,52 @@ public class Chunk {
             return 0;
         }
         return metadata[getIndex(x, y, z)] & 0xFF;
+    }
+
+    private Chunk neighborChunkFor(int x, int z) {
+        boolean west = x < 0;
+        boolean east = x >= WIDTH;
+        boolean north = z < 0;
+        boolean south = z >= DEPTH;
+        if (!west && !east && !north && !south) {
+            return this;
+        }
+
+        Chunk throughX = west ? westNeighbor : east ? eastNeighbor : null;
+        if (throughX != null) {
+            if (north && throughX.northNeighbor != null) {
+                return throughX.northNeighbor;
+            }
+            if (south && throughX.southNeighbor != null) {
+                return throughX.southNeighbor;
+            }
+            if (!north && !south) {
+                return throughX;
+            }
+        }
+
+        Chunk throughZ = north ? northNeighbor : south ? southNeighbor : null;
+        if (throughZ != null) {
+            if (west && throughZ.westNeighbor != null) {
+                return throughZ.westNeighbor;
+            }
+            if (east && throughZ.eastNeighbor != null) {
+                return throughZ.eastNeighbor;
+            }
+            if (!west && !east) {
+                return throughZ;
+            }
+        }
+
+        return null;
+    }
+
+    private static int wrapLocalX(int x) {
+        return Math.floorMod(x, WIDTH);
+    }
+
+    private static int wrapLocalZ(int z) {
+        return Math.floorMod(z, DEPTH);
     }
 
     /**
@@ -142,6 +195,18 @@ public class Chunk {
         return java.util.Arrays.copyOf(metadata, metadata.length);
     }
 
+    public byte[] copySkyLight() {
+        return java.util.Arrays.copyOf(skyLight, skyLight.length);
+    }
+
+    public byte[] copyBlockLight() {
+        return java.util.Arrays.copyOf(blockLight, blockLight.length);
+    }
+
+    public int[] copyHeightMap() {
+        return java.util.Arrays.copyOf(heightMap, heightMap.length);
+    }
+
     public void loadBlockIds(short[] blockIds, boolean modified) {
         loadBlockData(blockIds, new byte[blockIds.length], modified);
     }
@@ -162,6 +227,28 @@ public class Chunk {
         recalculateEmptyFlag();
     }
 
+    public void loadBlockData(short[] blockIds, byte[] metadataValues, byte[] skyLightValues,
+            byte[] blockLightValues, int[] heightMapValues, boolean modified) {
+        loadBlockData(blockIds, metadataValues, modified);
+        if (skyLightValues == null || blockLightValues == null || heightMapValues == null) {
+            this.lightDirty = true;
+            return;
+        }
+        if (skyLightValues.length != skyLight.length) {
+            throw new IllegalArgumentException("Invalid sky light array length: " + skyLightValues.length);
+        }
+        if (blockLightValues.length != blockLight.length) {
+            throw new IllegalArgumentException("Invalid block light array length: " + blockLightValues.length);
+        }
+        if (heightMapValues.length != heightMap.length) {
+            throw new IllegalArgumentException("Invalid height map length: " + heightMapValues.length);
+        }
+        System.arraycopy(skyLightValues, 0, skyLight, 0, skyLight.length);
+        System.arraycopy(blockLightValues, 0, blockLight, 0, blockLight.length);
+        System.arraycopy(heightMapValues, 0, heightMap, 0, heightMap.length);
+        this.lightDirty = false;
+    }
+
     /**
      * Get block ID at local coordinates.
      */
@@ -177,17 +264,8 @@ public class Chunk {
             return 0;
         }
 
-        if (x < 0) {
-            return westNeighbor != null ? westNeighbor.getBlockMetadata(WIDTH + x, y, z) : 0;
-        } else if (x >= WIDTH) {
-            return eastNeighbor != null ? eastNeighbor.getBlockMetadata(x - WIDTH, y, z) : 0;
-        } else if (z < 0) {
-            return northNeighbor != null ? northNeighbor.getBlockMetadata(x, y, DEPTH + z) : 0;
-        } else if (z >= DEPTH) {
-            return southNeighbor != null ? southNeighbor.getBlockMetadata(x, y, z - DEPTH) : 0;
-        }
-
-        return getBlockMetadata(x, y, z);
+        Chunk chunk = neighborChunkFor(x, z);
+        return chunk != null ? chunk.getBlockMetadata(wrapLocalX(x), y, wrapLocalZ(z)) : 0;
     }
 
     /**
@@ -429,6 +507,14 @@ public class Chunk {
         return modified;
     }
 
+    public boolean isLoadedFromStorage() {
+        return loadedFromStorage;
+    }
+
+    public void markLoadedFromStorage() {
+        loadedFromStorage = true;
+    }
+
     public void clearModified() {
         modified = false;
     }
@@ -610,8 +696,7 @@ public class Chunk {
         java.util.Arrays.fill(skyLight, (byte) 0);
         java.util.Arrays.fill(blockLight, (byte) 0);
 
-        // Queue for BFS flood fill: each entry is {x, y, z, lightLevel}
-        java.util.Queue<int[]> lightQueue = new java.util.LinkedList<>();
+        LightQueue lightQueue = new LightQueue(TOTAL_BLOCKS);
 
         // Step 1: Calculate height map and seed ALL sky-exposed blocks
         for (int x = 0; x < WIDTH; x++) {
@@ -631,9 +716,7 @@ public class Chunk {
                 // AND add them all to the queue so light propagates everywhere
                 for (int y = HEIGHT - 1; y > height; y--) {
                     setSkyLight(x, y, z, 15);
-                    // Add ALL sky-exposed air to queue - this ensures light
-                    // can propagate into caves from any opening
-                    lightQueue.add(new int[] { x, y, z, 15 });
+                    lightQueue.add(x, y, z, 15);
                 }
             }
         }
@@ -642,22 +725,18 @@ public class Chunk {
         // This allows light to propagate from lit areas in neighbors into this chunk
         seedLightFromNeighbors(lightQueue);
 
-        // Step 2: BFS Flood Fill - spread light in all 6 directions
-        int[][] directions = {
-                { 1, 0, 0 }, { -1, 0, 0 }, // East, West
-                { 0, 1, 0 }, { 0, -1, 0 }, // Up, Down
-                { 0, 0, 1 }, { 0, 0, -1 } // South, North
-        };
-
         while (!lightQueue.isEmpty()) {
-            int[] current = lightQueue.poll();
-            int cx = current[0], cy = current[1], cz = current[2], currentLight = current[3];
+            int current = lightQueue.poll();
+            int cx = LightQueue.x(current);
+            int cy = LightQueue.y(current);
+            int cz = LightQueue.z(current);
+            int currentLight = LightQueue.light(current);
 
             // Spread to all 6 neighbors
-            for (int[] dir : directions) {
-                int nx = cx + dir[0];
-                int ny = cy + dir[1];
-                int nz = cz + dir[2];
+            for (int dir = 0; dir < LIGHT_DX.length; dir++) {
+                int nx = cx + LIGHT_DX[dir];
+                int ny = cy + LIGHT_DY[dir];
+                int nz = cz + LIGHT_DZ[dir];
 
                 // Bounds check
                 if (!isInBounds(nx, ny, nz))
@@ -683,7 +762,7 @@ public class Chunk {
                 int existingLight = getSkyLight(nx, ny, nz);
                 if (newLight > existingLight) {
                     setSkyLight(nx, ny, nz, newLight);
-                    lightQueue.add(new int[] { nx, ny, nz, newLight });
+                    lightQueue.add(nx, ny, nz, newLight);
                 }
             }
         }
@@ -693,7 +772,7 @@ public class Chunk {
     }
 
     private void calculateBlockLight() {
-        java.util.Queue<int[]> lightQueue = new java.util.LinkedList<>();
+        LightQueue lightQueue = new LightQueue(TOTAL_BLOCKS / 4);
 
         for (int y = 0; y < HEIGHT; y++) {
             for (int z = 0; z < DEPTH; z++) {
@@ -701,7 +780,7 @@ public class Chunk {
                     int emission = getBlock(x, y, z).getLightEmission();
                     if (emission > 0) {
                         setBlockLight(x, y, z, emission);
-                        lightQueue.add(new int[] { x, y, z, emission });
+                        lightQueue.add(x, y, z, emission);
                     }
                 }
             }
@@ -709,19 +788,16 @@ public class Chunk {
 
         seedBlockLightFromNeighbors(lightQueue);
 
-        int[][] directions = {
-                { 1, 0, 0 }, { -1, 0, 0 },
-                { 0, 1, 0 }, { 0, -1, 0 },
-                { 0, 0, 1 }, { 0, 0, -1 }
-        };
-
         while (!lightQueue.isEmpty()) {
-            int[] current = lightQueue.poll();
-            int cx = current[0], cy = current[1], cz = current[2], currentLight = current[3];
-            for (int[] dir : directions) {
-                int nx = cx + dir[0];
-                int ny = cy + dir[1];
-                int nz = cz + dir[2];
+            int current = lightQueue.poll();
+            int cx = LightQueue.x(current);
+            int cy = LightQueue.y(current);
+            int cz = LightQueue.z(current);
+            int currentLight = LightQueue.light(current);
+            for (int dir = 0; dir < LIGHT_DX.length; dir++) {
+                int nx = cx + LIGHT_DX[dir];
+                int ny = cy + LIGHT_DY[dir];
+                int nz = cz + LIGHT_DZ[dir];
                 if (!isInBounds(nx, ny, nz)) {
                     continue;
                 }
@@ -738,7 +814,7 @@ public class Chunk {
 
                 if (newLight > getBlockLight(nx, ny, nz)) {
                     setBlockLight(nx, ny, nz, newLight);
-                    lightQueue.add(new int[] { nx, ny, nz, newLight });
+                    lightQueue.add(nx, ny, nz, newLight);
                 }
             }
         }
@@ -757,7 +833,7 @@ public class Chunk {
      * Seed light from neighbor chunks at chunk borders.
      * This allows light to propagate from lit neighbor areas into this chunk.
      */
-    private void seedLightFromNeighbors(java.util.Queue<int[]> lightQueue) {
+    private void seedLightFromNeighbors(LightQueue lightQueue) {
         // Check each border and pull light from neighbors
 
         // North border (z = 0, check neighbor at z-1)
@@ -771,7 +847,7 @@ public class Chunk {
                             int newLight = neighborLight - 1;
                             if (newLight > getSkyLight(x, y, 0)) {
                                 setSkyLight(x, y, 0, newLight);
-                                lightQueue.add(new int[] { x, y, 0, newLight });
+                                lightQueue.add(x, y, 0, newLight);
                             }
                         }
                     }
@@ -790,7 +866,7 @@ public class Chunk {
                             int newLight = neighborLight - 1;
                             if (newLight > getSkyLight(x, y, DEPTH - 1)) {
                                 setSkyLight(x, y, DEPTH - 1, newLight);
-                                lightQueue.add(new int[] { x, y, DEPTH - 1, newLight });
+                                lightQueue.add(x, y, DEPTH - 1, newLight);
                             }
                         }
                     }
@@ -809,7 +885,7 @@ public class Chunk {
                             int newLight = neighborLight - 1;
                             if (newLight > getSkyLight(WIDTH - 1, y, z)) {
                                 setSkyLight(WIDTH - 1, y, z, newLight);
-                                lightQueue.add(new int[] { WIDTH - 1, y, z, newLight });
+                                lightQueue.add(WIDTH - 1, y, z, newLight);
                             }
                         }
                     }
@@ -828,7 +904,7 @@ public class Chunk {
                             int newLight = neighborLight - 1;
                             if (newLight > getSkyLight(0, y, z)) {
                                 setSkyLight(0, y, z, newLight);
-                                lightQueue.add(new int[] { 0, y, z, newLight });
+                                lightQueue.add(0, y, z, newLight);
                             }
                         }
                     }
@@ -837,7 +913,7 @@ public class Chunk {
         }
     }
 
-    private void seedBlockLightFromNeighbors(java.util.Queue<int[]> lightQueue) {
+    private void seedBlockLightFromNeighbors(LightQueue lightQueue) {
         if (northNeighbor != null) {
             for (int x = 0; x < WIDTH; x++) {
                 for (int y = 0; y < HEIGHT; y++) {
@@ -868,14 +944,66 @@ public class Chunk {
         }
     }
 
-    private void seedBlockBorder(java.util.Queue<int[]> lightQueue, int x, int y, int z, int neighborLight) {
+    private void seedBlockBorder(LightQueue lightQueue, int x, int y, int z, int neighborLight) {
         if (neighborLight <= 1 || getBlock(x, y, z).occludesFace()) {
             return;
         }
         int newLight = neighborLight - 1;
         if (newLight > getBlockLight(x, y, z)) {
             setBlockLight(x, y, z, newLight);
-            lightQueue.add(new int[] { x, y, z, newLight });
+            lightQueue.add(x, y, z, newLight);
+        }
+    }
+
+    private static final class LightQueue {
+        private int[] values;
+        private int head;
+        private int tail;
+
+        LightQueue(int initialCapacity) {
+            values = new int[Math.max(16, initialCapacity)];
+        }
+
+        boolean isEmpty() {
+            return head == tail;
+        }
+
+        void add(int x, int y, int z, int light) {
+            if (tail >= values.length) {
+                if (head > 0) {
+                    int size = tail - head;
+                    System.arraycopy(values, head, values, 0, size);
+                    tail = size;
+                    head = 0;
+                } else {
+                    values = java.util.Arrays.copyOf(values, values.length * 2);
+                }
+            }
+            values[tail++] = pack(x, y, z, light);
+        }
+
+        int poll() {
+            return values[head++];
+        }
+
+        private static int pack(int x, int y, int z, int light) {
+            return (x & 15) | ((z & 15) << 4) | ((y & 127) << 8) | ((light & 15) << 15);
+        }
+
+        static int x(int packed) {
+            return packed & 15;
+        }
+
+        static int z(int packed) {
+            return (packed >>> 4) & 15;
+        }
+
+        static int y(int packed) {
+            return (packed >>> 8) & 127;
+        }
+
+        static int light(int packed) {
+            return (packed >>> 15) & 15;
         }
     }
 
@@ -912,17 +1040,8 @@ public class Chunk {
             return BlockType.AIR;
         }
 
-        if (x < 0) {
-            return westNeighbor != null ? westNeighbor.getBlock(WIDTH + x, y, z) : BlockType.AIR;
-        } else if (x >= WIDTH) {
-            return eastNeighbor != null ? eastNeighbor.getBlock(x - WIDTH, y, z) : BlockType.AIR;
-        } else if (z < 0) {
-            return northNeighbor != null ? northNeighbor.getBlock(x, y, DEPTH + z) : BlockType.AIR;
-        } else if (z >= DEPTH) {
-            return southNeighbor != null ? southNeighbor.getBlock(x, y, z - DEPTH) : BlockType.AIR;
-        }
-
-        return getBlock(x, y, z);
+        Chunk chunk = neighborChunkFor(x, z);
+        return chunk != null ? chunk.getBlock(wrapLocalX(x), y, wrapLocalZ(z)) : BlockType.AIR;
     }
 
     /**
@@ -934,17 +1053,8 @@ public class Chunk {
             return y >= HEIGHT ? 15 : 0;
         }
 
-        if (x < 0) {
-            return westNeighbor != null ? westNeighbor.getSkyLight(WIDTH + x, y, z) : 15;
-        } else if (x >= WIDTH) {
-            return eastNeighbor != null ? eastNeighbor.getSkyLight(x - WIDTH, y, z) : 15;
-        } else if (z < 0) {
-            return northNeighbor != null ? northNeighbor.getSkyLight(x, y, DEPTH + z) : 15;
-        } else if (z >= DEPTH) {
-            return southNeighbor != null ? southNeighbor.getSkyLight(x, y, z - DEPTH) : 15;
-        }
-
-        return getSkyLight(x, y, z);
+        Chunk chunk = neighborChunkFor(x, z);
+        return chunk != null ? chunk.getSkyLight(wrapLocalX(x), y, wrapLocalZ(z)) : 15;
     }
 
     public int getBlockLightWithNeighbors(int x, int y, int z) {
@@ -952,17 +1062,8 @@ public class Chunk {
             return 0;
         }
 
-        if (x < 0) {
-            return westNeighbor != null ? westNeighbor.getBlockLight(WIDTH + x, y, z) : 0;
-        } else if (x >= WIDTH) {
-            return eastNeighbor != null ? eastNeighbor.getBlockLight(x - WIDTH, y, z) : 0;
-        } else if (z < 0) {
-            return northNeighbor != null ? northNeighbor.getBlockLight(x, y, DEPTH + z) : 0;
-        } else if (z >= DEPTH) {
-            return southNeighbor != null ? southNeighbor.getBlockLight(x, y, z - DEPTH) : 0;
-        }
-
-        return getBlockLight(x, y, z);
+        Chunk chunk = neighborChunkFor(x, z);
+        return chunk != null ? chunk.getBlockLight(wrapLocalX(x), y, wrapLocalZ(z)) : 0;
     }
 
     public int getCombinedLightWithNeighbors(int x, int y, int z) {

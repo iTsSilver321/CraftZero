@@ -27,6 +27,7 @@ public class Squid extends Mob {
         this.moveSpeed = MobDefinition.SQUID.moveSpeed();
         this.experienceValue = MobDefinition.SQUID.experienceValue();
         this.swimTimer = 0;
+        this.airTicks = MAX_AIR_TICKS;
     }
 
     @Override
@@ -39,7 +40,7 @@ public class Squid extends Mob {
         boolean water = world != null && world.getBlockIfLoaded((int) Math.floor(x), (int) Math.floor(y + 0.2f),
                 (int) Math.floor(z), BlockType.AIR).isWater();
         if (water) {
-            airTicks = 0;
+            airTicks = MAX_AIR_TICKS;
             if (swimTimer-- <= 0) {
                 chooseSwimVector();
                 swimTimer = 40 + random.nextInt(80);
@@ -57,21 +58,26 @@ public class Squid extends Mob {
             squidRotation += 0.12f + horizontalSpeed * 1.8f;
             tentacleAngle = (float) Math.sin(squidRotation) * 0.55f + 0.35f;
         } else {
-            airTicks++;
-            squidPitch += (-90.0f - squidPitch) * 0.08f;
-            tentacleAngle = (float) Math.sin(ticksExisted * 0.25f) * 0.25f;
-            motionX *= 0.7f;
-            motionZ *= 0.7f;
-            if (onGround && ticksExisted % 20 == 0) {
-                motionY += 0.22f;
-                motionX += (random.nextFloat() - 0.5f) * 0.08f;
-                motionZ += (random.nextFloat() - 0.5f) * 0.08f;
-            }
-            if (airTicks > 300 && airTicks % 20 == 0) {
-                damage(1.0f, DamageSource.generic());
-            }
+            squidRotation += 0.12f;
+            squidPitch += (-90.0f - squidPitch) * 0.02f;
+            pitch = squidPitch;
+            tentacleAngle = Math.abs((float) Math.sin(squidRotation)) * (float) Math.PI * 0.25f;
+            motionX = 0.0f;
+            motionZ = 0.0f;
+            tickDryOutAir();
         }
         tickWithoutAi();
+    }
+
+    private void tickDryOutAir() {
+        if (dead) {
+            return;
+        }
+        airTicks--;
+        if (airTicks <= DROWN_DAMAGE_AIR_TICKS) {
+            airTicks = 0;
+            damage(DROWN_DAMAGE, DamageSource.point(DamageSource.Type.DROWN, x, y, z, 0.0f, 0.0f));
+        }
     }
 
     private void chooseSwimVector() {
@@ -83,7 +89,7 @@ public class Squid extends Mob {
         if (world != null) {
             BlockType below = world.getBlockIfLoaded((int) Math.floor(x), (int) Math.floor(y - 0.7f),
                     (int) Math.floor(z), BlockType.AIR);
-            BlockType above = world.getBlockIfLoaded((int) Math.floor(x), (int) Math.floor(y + height + 0.6f),
+            BlockType above = world.getBlockIfLoaded((int) Math.floor(x), (int) Math.floor(y + getHeight() + 0.6f),
                     (int) Math.floor(z), BlockType.AIR);
             if (!below.isWater()) {
                 swimY = Math.max(swimY, 0.25f);
@@ -117,18 +123,14 @@ public class Squid extends Mob {
     }
 
     @Override
-    protected boolean usesDefaultWaterBobbing() {
-        return false;
-    }
-
-    @Override
-    protected boolean shouldSurfaceFloatInWater() {
-        return false;
+    protected boolean canBreatheUnderwater() {
+        return true;
     }
 
     @Override
     public void dropLoot() {
-        dropItems(ItemType.INK_SAC, 1, 3);
+        int looting = Math.max(0, getRecentPlayerLootingLevel());
+        dropItem(ItemType.INK_SAC, 1 + random.nextInt(3 + looting));
     }
 
     @Override
@@ -155,6 +157,76 @@ public class Squid extends Mob {
 
     public float getRenderSquidRotation(float partialTick) {
         return prevSquidRotation + (squidRotation - prevSquidRotation) * partialTick;
+    }
+
+    public int getSwimTimer() {
+        return swimTimer;
+    }
+
+    public int getAirTicks() {
+        return airTicks;
+    }
+
+    public float getSwimX() {
+        return swimX;
+    }
+
+    public float getSwimY() {
+        return swimY;
+    }
+
+    public float getSwimZ() {
+        return swimZ;
+    }
+
+    public float getSquidPitch() {
+        return squidPitch;
+    }
+
+    public float getPrevSquidPitch() {
+        return prevSquidPitch;
+    }
+
+    public float getSquidYaw() {
+        return squidYaw;
+    }
+
+    public float getPrevSquidYaw() {
+        return prevSquidYaw;
+    }
+
+    public float getSquidRotation() {
+        return squidRotation;
+    }
+
+    public float getPrevSquidRotation() {
+        return prevSquidRotation;
+    }
+
+    public float getTentacleAngle() {
+        return tentacleAngle;
+    }
+
+    public float getPrevTentacleAngle() {
+        return prevTentacleAngle;
+    }
+
+    public void setSwimState(int swimTimer, int airTicks, float swimX, float swimY, float swimZ,
+            float squidPitch, float prevSquidPitch, float squidYaw, float prevSquidYaw,
+            float squidRotation, float prevSquidRotation, float tentacleAngle, float prevTentacleAngle) {
+        this.swimTimer = Math.max(0, swimTimer);
+        this.airTicks = Math.max(DROWN_DAMAGE_AIR_TICKS, Math.min(MAX_AIR_TICKS, airTicks));
+        this.swimX = swimX;
+        this.swimY = swimY;
+        this.swimZ = swimZ;
+        this.squidPitch = squidPitch;
+        this.prevSquidPitch = prevSquidPitch;
+        this.squidYaw = squidYaw;
+        this.prevSquidYaw = prevSquidYaw;
+        this.squidRotation = squidRotation;
+        this.prevSquidRotation = prevSquidRotation;
+        this.tentacleAngle = tentacleAngle;
+        this.prevTentacleAngle = prevTentacleAngle;
     }
 
     private static float wrapDegreesLocal(float angle) {

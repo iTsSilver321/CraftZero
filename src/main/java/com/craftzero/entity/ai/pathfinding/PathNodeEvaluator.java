@@ -1,5 +1,6 @@
 package com.craftzero.entity.ai.pathfinding;
 
+import com.craftzero.physics.AABB;
 import com.craftzero.world.BlockType;
 import com.craftzero.world.Chunk;
 import com.craftzero.world.World;
@@ -31,6 +32,11 @@ public class PathNodeEvaluator {
         int x = node.x;
         int y = node.y;
         int z = node.z;
+
+        if (world == null || y <= 0 || y >= Chunk.HEIGHT || !world.isChunkGeneratedForBlock(x, z)) {
+            node.type = PathNode.NodeType.BLOCKED;
+            return;
+        }
 
         // Check if entity can stand here
         BlockType groundBlock = getBlock(x, y - 1, z);
@@ -94,6 +100,14 @@ public class PathNodeEvaluator {
                 node.penalty = 2; // Slightly slower
             }
         }
+    }
+
+    public boolean canUseForPath(PathNode node) {
+        return node != null
+                && node.type != PathNode.NodeType.BLOCKED
+                && node.type != PathNode.NodeType.DANGEROUS
+                && node.type != PathNode.NodeType.OPEN_BELOW
+                && node.type != PathNode.NodeType.FENCE;
     }
 
     /**
@@ -175,6 +189,8 @@ public class PathNodeEvaluator {
         float halfWidth = Math.max(0.0f, entityWidth * 0.5f - 0.001f);
         float centerX = x + 0.5f;
         float centerZ = z + 0.5f;
+        AABB bounds = new AABB(centerX - halfWidth, y, centerZ - halfWidth,
+                centerX + halfWidth, y + entityHeight, centerZ + halfWidth);
         int minX = (int) Math.floor(centerX - halfWidth);
         int maxX = (int) Math.floor(centerX + halfWidth);
         int minZ = (int) Math.floor(centerZ - halfWidth);
@@ -184,9 +200,20 @@ public class PathNodeEvaluator {
         for (int bx = minX; bx <= maxX; bx++) {
             for (int bz = minZ; bz <= maxZ; bz++) {
                 for (int by = y; by < y + heightBlocks; by++) {
-                    BlockType block = getBlock(bx, by, bz);
-                    if (block != null && block.isSolid() && !isDoor(block)) {
+                    if (by < 0 || by >= Chunk.HEIGHT || !world.isChunkGeneratedForBlock(bx, bz)) {
                         return false;
+                    }
+                    BlockType block = getBlock(bx, by, bz);
+                    if (block == BlockType.WOODEN_DOOR) {
+                        continue;
+                    }
+                    if (block != null && (isDangerous(block) || block.isFluid() && !isWater(block))) {
+                        return false;
+                    }
+                    for (AABB collision : world.getCollisionBoxesIfLoaded(bx, by, bz)) {
+                        if (bounds.intersects(collision)) {
+                            return false;
+                        }
                     }
                 }
             }
@@ -207,9 +234,7 @@ public class PathNodeEvaluator {
             return false; // Too far to drop
 
         // Check if destination is walkable
-        if (to.type == PathNode.NodeType.BLOCKED)
-            return false;
-        if (to.type == PathNode.NodeType.DANGEROUS)
+        if (!canUseForPath(to))
             return false;
 
         int dx = Integer.compare(to.x, from.x);
@@ -217,13 +242,13 @@ public class PathNodeEvaluator {
         if (dx != 0 && dz != 0) {
             PathNode sideA = new PathNode(from.x + dx, to.y, from.z);
             evaluateNode(sideA);
-            if (sideA.type == PathNode.NodeType.BLOCKED || sideA.type == PathNode.NodeType.DANGEROUS) {
+            if (!canUseForPath(sideA)) {
                 return false;
             }
 
             PathNode sideB = new PathNode(from.x, to.y, from.z + dz);
             evaluateNode(sideB);
-            if (sideB.type == PathNode.NodeType.BLOCKED || sideB.type == PathNode.NodeType.DANGEROUS) {
+            if (!canUseForPath(sideB)) {
                 return false;
             }
         }

@@ -5,14 +5,21 @@ public final class WorldGenerators {
     }
 
     public static WorldGenerator create(String generatorId, long seed) {
-        return create(generatorId, seed, null);
+        return create(generatorId, seed, null, true);
     }
 
     public static WorldGenerator create(String generatorId, long seed, Dimension dimension) {
-        Dimension effectiveDimension = dimension != null ? dimension : dimensionFromGeneratorId(generatorId);
+        return create(generatorId, seed, dimension, true);
+    }
+
+    public static WorldGenerator create(String generatorId, long seed, Dimension dimension,
+            boolean generateStructures) {
+        Dimension effectiveDimension = isReleaseDimensionGenerator(generatorId)
+                ? dimensionFromGeneratorId(generatorId)
+                : dimension != null ? dimension : Dimension.OVERWORLD;
         if (WorldGenerator.RELEASE_ONE.equals(generatorId) || generatorId == null || generatorId.isBlank()
                 || isReleaseDimensionGenerator(generatorId)) {
-            return new ReleaseOneWorldGenerator(seed, effectiveDimension);
+            return new ReleaseOneWorldGenerator(seed, effectiveDimension, generateStructures);
         }
         return null;
     }
@@ -23,6 +30,12 @@ public final class WorldGenerators {
             case NETHER -> "minecraft_java_1_0_nether";
             case THE_END -> "minecraft_java_1_0_end";
         };
+    }
+
+    public static boolean isSupportedGeneratorId(String generatorId) {
+        return WorldGenerator.RELEASE_ONE.equals(generatorId)
+                || WorldGenerator.LEGACY_CRAFTZERO.equals(generatorId)
+                || isReleaseDimensionGenerator(generatorId);
     }
 
     private static boolean isReleaseDimensionGenerator(String generatorId) {

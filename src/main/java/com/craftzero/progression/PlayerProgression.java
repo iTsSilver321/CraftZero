@@ -48,7 +48,15 @@ public class PlayerProgression {
         if (current < levels) {
             return false;
         }
-        totalExperience = experienceForLevel(current - levels);
+        int newLevel = current - levels;
+        int currentBase = experienceForLevel(current);
+        int currentSpan = experienceForLevel(current + 1) - currentBase;
+        int newBase = experienceForLevel(newLevel);
+        int newSpan = experienceForLevel(newLevel + 1) - newBase;
+        int intoLevel = totalExperience - currentBase;
+        int preservedIntoLevel = currentSpan <= 0 ? 0
+                : (int) (((long) intoLevel * newSpan) / currentSpan);
+        totalExperience = newBase + Math.min(preservedIntoLevel, newSpan - 1);
         return true;
     }
 

@@ -3,125 +3,161 @@ package com.craftzero.world;
 import java.util.Random;
 
 /**
- * Generates large vertical cracks (ravines) in the world.
- * Similar to cave worms but scaled vertically and squashed horizontally.
+ * Release-era ravine carver adapted from MapGenRavine.
  */
 public class RavineGenerator {
+    private static final int RANGE = 8;
+    private static final int MAX_CARVE_Y = 120;
+    private static final int LAVA_Y = 10;
+    private static final float SOURCE_PI = 3.141593F;
 
-    private static final int SEARCH_RADIUS = 2;
-    private static final int RAVINE_CHANCE = 50; // 1 in 50 chunks (rare)
-    private static final int SEA_LEVEL = ReleaseOneWorldGenerator.SEA_LEVEL;
-    private static final int LAVA_LEVEL = ReleaseOneWorldGenerator.LAVA_LEVEL;
+    private final Random rand = new Random();
+    private final float[] verticalScale = new float[1024];
 
     public void generate(Chunk chunk, long worldSeed) {
         int chunkX = chunk.getX();
         int chunkZ = chunk.getZ();
+        rand.setSeed(worldSeed);
+        long xSeed = rand.nextLong();
+        long zSeed = rand.nextLong();
 
-        for (int ox = chunkX - SEARCH_RADIUS; ox <= chunkX + SEARCH_RADIUS; ox++) {
-            for (int oz = chunkZ - SEARCH_RADIUS; oz <= chunkZ + SEARCH_RADIUS; oz++) {
-
-                long seed = worldSeed + (long) ox * 341873128712L + (long) oz * 132897987541L;
-                Random rand = new Random(seed);
-
-                if (rand.nextInt(RAVINE_CHANCE) == 0) {
-
-                    double x = ox * Chunk.WIDTH + rand.nextInt(Chunk.WIDTH);
-                    double y = rand.nextInt(20) + 20; // 20-40 (start lowish)
-                    double z = oz * Chunk.DEPTH + rand.nextInt(Chunk.DEPTH);
-
-                    float yaw = rand.nextFloat() * (float) Math.PI * 2.0f;
-                    float pitch = (rand.nextFloat() - 0.5f) * 0.2f; // Very flat pitch
-                    float width = rand.nextFloat() * 3.0f + 3.0f; // 3-6 radius width (narrow)
-
-                    int length = rand.nextInt(50) + 80; // 80-130 blocks long
-
-                    runRavine(chunk, rand, x, y, z, yaw, pitch, width, length);
-                }
+        for (int originX = chunkX - RANGE; originX <= chunkX + RANGE; originX++) {
+            for (int originZ = chunkZ - RANGE; originZ <= chunkZ + RANGE; originZ++) {
+                rand.setSeed((long) originX * xSeed ^ (long) originZ * zSeed ^ worldSeed);
+                recursiveGenerate(chunk, originX, originZ, chunkX, chunkZ);
             }
         }
     }
 
-    private void runRavine(Chunk chunk, Random rand, double x, double y, double z,
-            float yaw, float pitch, float width, int length) {
+    protected void generateRavine(long seed, Chunk chunk, int targetChunkX, int targetChunkZ,
+            double x, double y, double z, float radius, float yaw, float pitch,
+            int step, int maxSteps, double yScale) {
+        Random random = new Random(seed);
+        double targetCenterX = targetChunkX * 16 + 8;
+        double targetCenterZ = targetChunkZ * 16 + 8;
+        float yawVelocity = 0.0F;
+        float pitchVelocity = 0.0F;
 
-        int chunkX = chunk.getX();
-        int chunkZ = chunk.getZ();
-        int minX = chunkX * Chunk.WIDTH;
-        int maxX = minX + Chunk.WIDTH;
-        int minZ = chunkZ * Chunk.DEPTH;
-        int maxZ = minZ + Chunk.DEPTH;
+        if (maxSteps <= 0) {
+            int fullLength = RANGE * 16 - 16;
+            maxSteps = fullLength - random.nextInt(fullLength / 4);
+        }
 
-        float yScale = 3.0f; // Stretch height by 3x (1 radius width = 3 height)
-        // e.g. Width 4 -> Height 12 (Total ravine depth ~24 blocks)
+        boolean singleNode = false;
+        if (step == -1) {
+            step = maxSteps / 2;
+            singleNode = true;
+        }
 
-        for (int step = 0; step < length; step++) {
-            double hScale = Math.cos(pitch);
-            x += Math.cos(yaw) * hScale;
-            z += Math.sin(yaw) * hScale;
-            y += Math.sin(pitch);
+        float scale = 1.0F;
+        for (int i = 0; i < Chunk.HEIGHT; i++) {
+            if (i == 0 || random.nextInt(3) == 0) {
+                scale = 1.0F + random.nextFloat() * random.nextFloat();
+            }
+            verticalScale[i] = scale * scale;
+        }
 
-            // Wiggle
-            pitch *= 0.7f; // Flatten strongly
-            pitch += (rand.nextFloat() - rand.nextFloat()) * 0.05f;
-            yaw += (rand.nextFloat() - rand.nextFloat()) * 0.1f; // Slow turns
+        for (; step < maxSteps; step++) {
+            double horizontalRadius = 1.5D
+                    + ReleaseOneMath.sin((float) step * SOURCE_PI / (float) maxSteps) * radius;
+            double verticalRadius = horizontalRadius * yScale;
+            horizontalRadius *= random.nextFloat() * 0.25D + 0.75D;
+            verticalRadius *= random.nextFloat() * 0.25D + 0.75D;
+            float cosPitch = ReleaseOneMath.cos(pitch);
+            float sinPitch = ReleaseOneMath.sin(pitch);
+            x += ReleaseOneMath.cos(yaw) * cosPitch;
+            y += sinPitch;
+            z += ReleaseOneMath.sin(yaw) * cosPitch;
+            pitch *= 0.7F;
+            pitch += pitchVelocity * 0.05F;
+            yaw += yawVelocity * 0.05F;
+            pitchVelocity *= 0.8F;
+            yawVelocity *= 0.5F;
+            pitchVelocity += (random.nextFloat() - random.nextFloat()) * random.nextFloat() * 2.0F;
+            yawVelocity += (random.nextFloat() - random.nextFloat()) * random.nextFloat() * 4.0F;
 
-            // Width varies smoothly
-            float currentWidth = width * (1.0f + (float) Math.sin(step * 0.2f) * 0.3f);
-            float currentHeight = currentWidth * yScale;
-
-            // Optimization bounds check (extended for height)
-            if (x < minX - currentWidth || x > maxX + currentWidth || z < minZ - currentWidth
-                    || z > maxZ + currentWidth) {
+            if (!singleNode && random.nextInt(4) == 0) {
                 continue;
             }
 
-            carveColumn(chunk, (int) x, (int) y, (int) z, currentWidth, currentHeight);
+            double dx = x - targetCenterX;
+            double dz = z - targetCenterZ;
+            double remaining = maxSteps - step;
+            double reach = radius + 2.0F + 16.0F;
+            if (dx * dx + dz * dz - remaining * remaining > reach * reach) {
+                return;
+            }
+
+            if (x < targetCenterX - 16.0D - horizontalRadius * 2.0D
+                    || z < targetCenterZ - 16.0D - horizontalRadius * 2.0D
+                    || x > targetCenterX + 16.0D + horizontalRadius * 2.0D
+                    || z > targetCenterZ + 16.0D + horizontalRadius * 2.0D) {
+                continue;
+            }
+
+            carveRavineEllipsoid(chunk, targetChunkX, targetChunkZ, x, y, z,
+                    horizontalRadius, verticalRadius);
+
+            if (singleNode) {
+                break;
+            }
         }
     }
 
-    private void carveColumn(Chunk chunk, int centerX, int centerY, int centerZ, float widthRadius,
-            float heightRadius) {
-        // Defines an elliptical column: (dx/w)^2 + (dy/h)^2 + (dz/w)^2 < 1
+    private void recursiveGenerate(Chunk chunk, int originChunkX, int originChunkZ,
+            int targetChunkX, int targetChunkZ) {
+        if (rand.nextInt(50) != 0) {
+            return;
+        }
 
-        int wR = (int) Math.ceil(widthRadius);
-        int hR = (int) Math.ceil(heightRadius);
+        double x = originChunkX * 16 + rand.nextInt(16);
+        double y = rand.nextInt(rand.nextInt(40) + 8) + 20;
+        double z = originChunkZ * 16 + rand.nextInt(16);
+        float yaw = rand.nextFloat() * SOURCE_PI * 2.0F;
+        float pitch = ((rand.nextFloat() - 0.5F) * 2.0F) / 8.0F;
+        float radius = (rand.nextFloat() * 2.0F + rand.nextFloat()) * 2.0F;
+        generateRavine(rand.nextLong(), chunk, targetChunkX, targetChunkZ,
+                x, y, z, radius, yaw, pitch, 0, 0, 3.0D);
+    }
 
-        for (int x = centerX - wR; x <= centerX + wR; x++) {
-            for (int z = centerZ - wR; z <= centerZ + wR; z++) {
+    private void carveRavineEllipsoid(Chunk chunk, int chunkX, int chunkZ,
+            double x, double y, double z, double horizontalRadius, double verticalRadius) {
+        int minX = clamp((int) Math.floor(x - horizontalRadius) - chunkX * 16 - 1, 0, 16);
+        int maxX = clamp((int) Math.floor(x + horizontalRadius) - chunkX * 16 + 1, 0, 16);
+        int minY = clamp((int) Math.floor(y - verticalRadius) - 1, 1, MAX_CARVE_Y);
+        int maxY = clamp((int) Math.floor(y + verticalRadius) + 1, 1, MAX_CARVE_Y);
+        int minZ = clamp((int) Math.floor(z - horizontalRadius) - chunkZ * 16 - 1, 0, 16);
+        int maxZ = clamp((int) Math.floor(z + horizontalRadius) - chunkZ * 16 + 1, 0, 16);
 
-                double dx = x - centerX;
-                double dz = z - centerZ;
-                double distSqHorizontal = (dx * dx) + (dz * dz);
+        if (touchesWater(chunk, minX, maxX, minY, maxY, minZ, maxZ)) {
+            return;
+        }
 
-                // Optimized: Check horizontal first
-                if (distSqHorizontal < widthRadius * widthRadius) {
-
-                    for (int y = centerY - hR; y <= centerY + hR; y++) {
-
-                        // Ellipsoid check involving Y
-                        // (distH / w)^2 + (dy / h)^2 < 1
-                        double dy = y - centerY;
-                        double normalizedDist = (distSqHorizontal / (widthRadius * widthRadius)) +
-                                ((dy * dy) / (heightRadius * heightRadius));
-
-                        if (normalizedDist < 1.0) {
-
-                            int localX = x - (chunk.getX() * Chunk.WIDTH);
-                            int localZ = z - (chunk.getZ() * Chunk.DEPTH);
-
-                            if (localX >= 0 && localX < Chunk.WIDTH &&
-                                    localZ >= 0 && localZ < Chunk.DEPTH &&
-                                    y >= 0 && y < Chunk.HEIGHT) {
-
-                                BlockType current = chunk.getBlock(localX, y, localZ);
-                                if (isProtectedFromCarving(chunk, localX, y, localZ, current))
-                                    continue;
-
-                                if (y < LAVA_LEVEL) {
-                                    chunk.setBlock(localX, y, localZ, BlockType.LAVA);
-                                } else if (current != BlockType.AIR && !current.isLava()) {
-                                    chunk.setBlock(localX, y, localZ, BlockType.AIR);
-                                }
+        for (int localX = minX; localX < maxX; localX++) {
+            double normX = ((localX + chunkX * 16) + 0.5D - x) / horizontalRadius;
+            for (int localZ = minZ; localZ < maxZ; localZ++) {
+                double normZ = ((localZ + chunkZ * 16) + 0.5D - z) / horizontalRadius;
+                if (normX * normX + normZ * normZ >= 1.0D) {
+                    continue;
+                }
+                boolean foundGrass = false;
+                for (int yy = maxY - 1; yy >= minY; yy--) {
+                    double normY = (yy + 0.5D - y) / verticalRadius;
+                    if ((normX * normX + normZ * normZ) * verticalScale[yy]
+                            + (normY * normY) / 6.0D >= 1.0D) {
+                        continue;
+                    }
+                    BlockType block = chunk.getBlock(localX, yy, localZ);
+                    if (block == BlockType.GRASS) {
+                        foundGrass = true;
+                    }
+                    if (isCarvable(block)) {
+                        if (yy < LAVA_Y) {
+                            chunk.setBlock(localX, yy, localZ, BlockType.LAVA);
+                        } else {
+                            chunk.setBlock(localX, yy, localZ, BlockType.AIR);
+                            if (foundGrass && yy > 0 && chunk.getBlock(localX, yy - 1, localZ) == BlockType.DIRT) {
+                                chunk.setBlock(localX, yy - 1, localZ, BlockType.GRASS);
                             }
                         }
                     }
@@ -130,29 +166,32 @@ public class RavineGenerator {
         }
     }
 
-    private boolean isProtectedFromCarving(Chunk chunk, int localX, int y, int localZ, BlockType current) {
-        if (current == BlockType.BEDROCK || current.isWater() || current == BlockType.ICE) {
-            return true;
-        }
-        if (y <= SEA_LEVEL) {
-            if (hasWaterAbove(chunk, localX, y, localZ)) {
-                return true;
+    private static boolean touchesWater(Chunk chunk, int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
+        for (int localX = minX; localX < maxX; localX++) {
+            for (int localZ = minZ; localZ < maxZ; localZ++) {
+                for (int y = maxY + 1; y >= minY - 1; y--) {
+                    if (y < 0 || y >= Chunk.HEIGHT) {
+                        continue;
+                    }
+                    BlockType block = chunk.getBlock(localX, y, localZ);
+                    if (block.isWater()) {
+                        return true;
+                    }
+                    if (y != minY - 1 && localX != minX && localX != maxX - 1
+                            && localZ != minZ && localZ != maxZ - 1) {
+                        y = minY;
+                    }
+                }
             }
         }
         return false;
     }
 
-    private boolean hasWaterAbove(Chunk chunk, int localX, int y, int localZ) {
-        int maxY = Math.min(Chunk.HEIGHT - 1, SEA_LEVEL + 4);
-        for (int checkY = y + 1; checkY <= maxY; checkY++) {
-            BlockType above = chunk.getBlock(localX, checkY, localZ);
-            if (above.isWater() || above == BlockType.ICE) {
-                return true;
-            }
-            if (above.isSolid() && checkY > SEA_LEVEL) {
-                return false;
-            }
-        }
-        return false;
+    private static boolean isCarvable(BlockType block) {
+        return block == BlockType.STONE || block == BlockType.DIRT || block == BlockType.GRASS;
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
     }
 }

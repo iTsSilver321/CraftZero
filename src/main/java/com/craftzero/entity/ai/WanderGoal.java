@@ -1,8 +1,6 @@
 package com.craftzero.entity.ai;
 
-import com.craftzero.entity.LivingEntity;
-
-import java.util.Random;
+import com.craftzero.entity.mob.Mob;
 
 /**
  * AI Goal: Wander randomly within a radius.
@@ -10,11 +8,10 @@ import java.util.Random;
  */
 public class WanderGoal implements Goal {
 
-    private final LivingEntity mob;
+    private final Mob mob;
     private final MobAI ai;
     private final float radius;
     private final float speed;
-    private final Random random;
 
     private float targetX, targetZ;
     private int wanderCooldown;
@@ -26,12 +23,11 @@ public class WanderGoal implements Goal {
     private static final int MAX_COOLDOWN = 200; // 10 seconds
     private static final int MAX_TARGET_ATTEMPTS = 5; // How many times to try picking safe target
 
-    public WanderGoal(LivingEntity mob, MobAI ai, float radius, float speed) {
+    public WanderGoal(Mob mob, MobAI ai, float radius, float speed) {
         this.mob = mob;
         this.ai = ai;
         this.radius = radius;
         this.speed = speed;
-        this.random = new Random();
         this.wanderCooldown = 0;
         this.hasTarget = false;
     }
@@ -55,7 +51,7 @@ public class WanderGoal implements Goal {
         }
 
         // Random chance to start wandering
-        if (random.nextFloat() < 0.02f) { // 2% chance per tick
+        if (mob.getRandom().nextFloat() < 0.02f) { // 2% chance per tick
             if (pickSafeTarget()) {
                 return true;
             }
@@ -165,7 +161,7 @@ public class WanderGoal implements Goal {
     @Override
     public void stop() {
         hasTarget = false;
-        wanderCooldown = MIN_COOLDOWN + random.nextInt(MAX_COOLDOWN - MIN_COOLDOWN);
+        wanderCooldown = MIN_COOLDOWN + mob.getRandom().nextInt(MAX_COOLDOWN - MIN_COOLDOWN);
         ai.requestStopMoving();
     }
 
@@ -174,8 +170,8 @@ public class WanderGoal implements Goal {
      */
     private boolean pickSafeTarget() {
         for (int attempt = 0; attempt < MAX_TARGET_ATTEMPTS; attempt++) {
-            float angle = random.nextFloat() * (float) Math.PI * 2;
-            float distance = random.nextFloat() * radius + 2.0f;
+            float angle = mob.getRandom().nextFloat() * (float) Math.PI * 2;
+            float distance = mob.getRandom().nextFloat() * radius + 2.0f;
 
             float testX = mob.getX() + (float) Math.cos(angle) * distance;
             float testZ = mob.getZ() + (float) Math.sin(angle) * distance;

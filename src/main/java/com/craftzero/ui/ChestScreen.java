@@ -1,17 +1,20 @@
 package com.craftzero.ui;
 
 import com.craftzero.engine.Input;
+import com.craftzero.entity.ChestMinecartEntity;
 import com.craftzero.inventory.Inventory;
 import com.craftzero.inventory.ItemStack;
 import com.craftzero.inventory.ItemStackOps;
-import com.craftzero.inventory.SlotAccess;
+import com.craftzero.main.Player;
+import com.craftzero.world.BlockType;
 import com.craftzero.world.World;
 import com.craftzero.world.tile.ChestTileEntity;
 
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 
 import static org.lwjgl.glfw.GLFW.*;
 
@@ -29,27 +32,67 @@ public class ChestScreen {
     public static final int TEX_HOTBAR_X = 8;
     public static final int COLS = 9;
     public static final int MAIN_ROWS = 3;
+    private static final long DOUBLE_CLICK_NANOS = 350_000_000L;
 
     private final Inventory inventory;
     private boolean open;
+    private World boundWorld;
     private ChestTileEntity firstChest;
     private ChestTileEntity secondChest;
+    private ChestMinecartEntity minecart;
+    private ItemStack[] minecartInventory;
+    private boolean minecartDirty;
     private int hoveredSlot = -1;
     private int windowX;
     private int windowY;
     private int windowHeight;
-    private boolean isRightClickDragging;
-    private final Set<Integer> draggedSlots = new HashSet<>();
+    private boolean isMouseDragging;
+    private boolean mouseDragRightClick;
+    private int dragStartSlot = -1;
+    private final Set<Integer> draggedSlots = new LinkedHashSet<>();
     private final List<ItemStack> itemsToThrow = new ArrayList<>();
+    private final BooleanSupplier inventoryCloseRequested;
+    private int lastClickSlot = -1;
+    private long lastClickNanos = 0L;
+    private boolean lastClickRightClick = false;
+    private final BooleanSupplier dropRequested;
 
     public ChestScreen(Inventory inventory) {
+        this(inventory, null, null);
+    }
+
+    public ChestScreen(Inventory inventory, BooleanSupplier inventoryCloseRequested) {
+        this(inventory, inventoryCloseRequested, null);
+    }
+
+    public ChestScreen(Inventory inventory, BooleanSupplier inventoryCloseRequested,
+            BooleanSupplier dropRequested) {
         this.inventory = inventory;
+        this.inventoryCloseRequested = ContainerScreenControls.closeRequester(inventoryCloseRequested);
+        this.dropRequested = ContainerScreenControls.dropRequester(dropRequested);
     }
 
     public void open(World world, ChestTileEntity chest, int screenWidth, int screenHeight) {
         if (open) {
             close();
         }
+        bindChests(world, chest);
+        firstChest.open();
+        if (secondChest != null) {
+            secondChest.open();
+        }
+        boundWorld = world;
+        open = true;
+        windowHeight = (int) ((114 + getContainerRows() * 18) * GUI_SCALE);
+        windowX = (screenWidth - WINDOW_WIDTH) / 2;
+        windowY = (screenHeight - windowHeight) / 2;
+        hoveredSlot = -1;
+        Input.setCursorLocked(false);
+    }
+
+    void bindChests(World world, ChestTileEntity chest) {
+        minecart = null;
+        minecartInventory = null;
         ChestTileEntity adjacent = world.getAdjacentChest(chest);
         if (adjacent != null && comesBefore(adjacent, chest)) {
             firstChest = adjacent;
@@ -58,10 +101,18 @@ public class ChestScreen {
             firstChest = chest;
             secondChest = adjacent;
         }
-        firstChest.open();
-        if (secondChest != null) {
-            secondChest.open();
+    }
+
+    public void openMinecart(ChestMinecartEntity minecart, int screenWidth, int screenHeight) {
+        if (open) {
+            close();
         }
+        firstChest = null;
+        secondChest = null;
+        this.minecart = minecart;
+        minecartInventory = minecart.getInventory();
+        minecartDirty = false;
+        boundWorld = null;
         open = true;
         windowHeight = (int) ((114 + getContainerRows() * 18) * GUI_SCALE);
         windowX = (screenWidth - WINDOW_WIDTH) / 2;
@@ -91,6 +142,10 @@ public class ChestScreen {
             itemsToThrow.add(inventory.getCursorItem());
             inventory.setCursorItem(null);
         }
+        minecart = null;
+        minecartInventory = null;
+        minecartDirty = false;
+        boundWorld = null;
         open = false;
         hoveredSlot = -1;
         Input.setCursorLocked(true);
@@ -100,38 +155,176 @@ public class ChestScreen {
         if (!open) {
             return;
         }
-        if (Input.isKeyPressed(GLFW_KEY_ESCAPE) || Input.isKeyPressed(GLFW_KEY_E)) {
+        if (ContainerScreenControls.shouldClose(inventoryCloseRequested)) {
             close();
             return;
         }
 
         hoveredSlot = getSlotAtPosition((int) Input.getMouseX(), (int) Input.getMouseY());
 
-        if (Input.isButtonPressed(GLFW_MOUSE_BUTTON_LEFT)) {
-            if (hoveredSlot == -1 && inventory.getCursorItem() != null) {
-                itemsToThrow.add(inventory.getCursorItem());
-                inventory.setCursorItem(null);
-            } else {
-                handleClick(hoveredSlot, false);
+        ContainerKeyboardDrop.DropResult keyboardDrop =
+                ContainerKeyboardDrop.dropOne(dropRequested, inventory, dragSlotAccess(), hoveredSlot, itemsToThrow);
+        if (keyboardDrop.dropped()) {
+            if (keyboardDrop.sourceSlot() >= 0 && keyboardDrop.sourceSlot() < getContainerSize()) {
+                markChestsDirty();
             }
+            return;
         }
 
-        if (Input.isButtonDown(GLFW_MOUSE_BUTTON_RIGHT)) {
-            if (!isRightClickDragging) {
-                isRightClickDragging = true;
-                draggedSlots.clear();
-                handleClick(hoveredSlot, true);
-                if (hoveredSlot != -1) {
-                    draggedSlots.add(hoveredSlot);
-                }
-            } else if (hoveredSlot != -1 && !draggedSlots.contains(hoveredSlot)) {
-                handleClick(hoveredSlot, true);
-                draggedSlots.add(hoveredSlot);
-            }
-        } else {
-            isRightClickDragging = false;
-            draggedSlots.clear();
+        if (ContainerHotbarSwap.trySwapWithHotbar(inventory, dragSlotAccess(), hoveredSlot,
+                getContainerSize() + Inventory.MAIN_SIZE)) {
+            return;
         }
+
+        handleMouseButton(GLFW_MOUSE_BUTTON_LEFT, false);
+        handleMouseButton(GLFW_MOUSE_BUTTON_RIGHT, true);
+    }
+
+    private void handleMouseButton(int button, boolean rightClick) {
+        if (Input.isButtonPressed(button)) {
+            startMouseDrag(rightClick);
+        }
+        if (isMouseDragging && mouseDragRightClick == rightClick && Input.isButtonDown(button)) {
+            continueMouseDrag();
+        }
+        if (isMouseDragging && mouseDragRightClick == rightClick && Input.isButtonReleased(button)) {
+            finishMouseDrag();
+        }
+    }
+
+    private void startMouseDrag(boolean rightClick) {
+        if (hoveredSlot == -1) {
+            resetDoubleClickTracking();
+            ContainerCursorDrop.dropOutside(inventory, itemsToThrow, rightClick);
+            return;
+        }
+        if (isShiftDown()) {
+            recordClick(hoveredSlot, rightClick);
+            handleClick(hoveredSlot, rightClick);
+            return;
+        }
+        if (isDoubleLeftClick(hoveredSlot, rightClick) && canHandleDoubleClick(hoveredSlot)) {
+            handleDoubleClick(hoveredSlot);
+            return;
+        }
+        ItemStack cursorItem = inventory.getCursorItem();
+        if (ItemStackOps.isEmpty(cursorItem) || !ContainerDragDistributor.canDragInto(dragSlotAccess(), hoveredSlot,
+                cursorItem)) {
+            handleClick(hoveredSlot, rightClick);
+            return;
+        }
+        isMouseDragging = true;
+        mouseDragRightClick = rightClick;
+        dragStartSlot = hoveredSlot;
+        draggedSlots.clear();
+        draggedSlots.add(hoveredSlot);
+    }
+
+    private boolean isDoubleLeftClick(int slotIndex, boolean rightClick) {
+        long now = System.nanoTime();
+        boolean doubleClick = !rightClick && !lastClickRightClick && slotIndex == lastClickSlot
+                && now - lastClickNanos <= DOUBLE_CLICK_NANOS;
+        recordClick(slotIndex, rightClick, now);
+        return doubleClick;
+    }
+
+    private void recordClick(int slotIndex, boolean rightClick) {
+        recordClick(slotIndex, rightClick, System.nanoTime());
+    }
+
+    private void recordClick(int slotIndex, boolean rightClick, long now) {
+        lastClickSlot = slotIndex;
+        lastClickRightClick = rightClick;
+        lastClickNanos = now;
+    }
+
+    private void resetDoubleClickTracking() {
+        lastClickSlot = -1;
+        lastClickRightClick = false;
+        lastClickNanos = 0L;
+    }
+
+    private boolean handleDoubleClick(int slotIndex) {
+        if (!canHandleDoubleClick(slotIndex)) {
+            return false;
+        }
+        boolean collected = ContainerDoubleClickCollector.collectMatching(dragSlotAccess(), doubleClickCollectSlots(slotIndex),
+                inventory.getCursorItem());
+        if (collected) {
+            markChestsDirty();
+        }
+        return collected;
+    }
+
+    private boolean canHandleDoubleClick(int slotIndex) {
+        return slotIndex >= 0 && slotIndex < getContainerSize() + Inventory.MAIN_SIZE + Inventory.HOTBAR_SIZE
+                && !ItemStackOps.isEmpty(inventory.getCursorItem());
+    }
+
+    private int[] doubleClickCollectSlots(int clickedSlot) {
+        int containerSize = getContainerSize();
+        int[] containerSlots = ContainerSlotOrder.range(0, containerSize);
+        int[] playerSlots = ContainerSlotOrder.range(containerSize,
+                containerSize + Inventory.MAIN_SIZE + Inventory.HOTBAR_SIZE);
+        return ContainerSlotOrder.clickedGroupFirst(clickedSlot, 0, containerSize, containerSlots, playerSlots);
+    }
+
+    private void continueMouseDrag() {
+        ItemStack cursorItem = inventory.getCursorItem();
+        if (hoveredSlot != -1 && !draggedSlots.contains(hoveredSlot)
+                && ContainerDragDistributor.canDragInto(dragSlotAccess(), hoveredSlot, cursorItem)) {
+            draggedSlots.add(hoveredSlot);
+        }
+    }
+
+    private void finishMouseDrag() {
+        if (draggedSlots.size() <= 1) {
+            handleClick(dragStartSlot, mouseDragRightClick);
+        } else {
+            ItemStack cursorItem = inventory.getCursorItem();
+            int moved = ContainerDragDistributor.distribute(dragSlotAccess(), draggedSlots, cursorItem,
+                    mouseDragRightClick);
+            if (moved == 0) {
+                handleClick(dragStartSlot, mouseDragRightClick);
+            } else {
+                markDraggedContainerSlotsDirty();
+                if (ItemStackOps.isEmpty(cursorItem)) {
+                    inventory.setCursorItem(null);
+                }
+            }
+        }
+        clearMouseDrag();
+    }
+
+    private void clearMouseDrag() {
+        isMouseDragging = false;
+        mouseDragRightClick = false;
+        dragStartSlot = -1;
+        draggedSlots.clear();
+    }
+
+    public boolean isStillUsable(Player player) {
+        if (!open) {
+            return false;
+        }
+        if (minecartInventory != null) {
+            return minecart != null && !minecart.isRemoved() && player != null
+                    && distanceSquared(player, minecart) <= 64.0f;
+        }
+        if (boundWorld == null || firstChest == null || player == null) {
+            return false;
+        }
+        return BlockContainerValidity.sameTileWithinUseDistance(boundWorld, firstChest, player, BlockType.CHEST)
+                && (secondChest == null
+                        || BlockContainerValidity.sameTileWithinUseDistance(boundWorld, secondChest, player,
+                                BlockType.CHEST));
+    }
+
+    private static float distanceSquared(Player player, ChestMinecartEntity minecart) {
+        float dx = player.getPosition().x - minecart.getX();
+        float dy = player.getPosition().y - minecart.getY();
+        float dz = player.getPosition().z - minecart.getZ();
+        return dx * dx + dy * dy + dz * dz;
     }
 
     private int getSlotAtPosition(int mx, int my) {
@@ -174,7 +367,7 @@ public class ChestScreen {
         ItemStack cursorItem = inventory.getCursorItem();
         ItemStack slotItem = getItemInSlot(slotIndex);
 
-        if (Input.isKeyDown(GLFW_KEY_LEFT_SHIFT) || Input.isKeyDown(GLFW_KEY_RIGHT_SHIFT)) {
+        if (isShiftDown()) {
             shiftClick(slotIndex, slotItem);
             return;
         }
@@ -219,32 +412,20 @@ public class ChestScreen {
             return;
         }
         if (slotIndex < getContainerSize()) {
-            if (inventory.addItem(slotItem)) {
-                setItemInSlot(slotIndex, null);
+            if (ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex, playerInventoryShiftClickDestinations())) {
+                markChestsDirty();
             }
             return;
         }
 
-        if (addToContainer(slotItem)) {
-            setItemInSlot(slotIndex, null);
+        if (ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex, ContainerSlotOrder.range(0, getContainerSize()))) {
+            markChestsDirty();
         }
     }
 
-    private boolean addToContainer(ItemStack stack) {
-        int moved = ItemStackOps.mergeIntoSlots(SlotAccess.of(firstChest.getInventory()), stack);
-        if (secondChest != null && !stack.isEmpty()) {
-            moved += ItemStackOps.mergeIntoSlots(SlotAccess.of(secondChest.getInventory()), stack);
-        }
-        if (!stack.isEmpty()) {
-            moved += ItemStackOps.placeIntoEmptySlots(SlotAccess.of(firstChest.getInventory()), stack);
-        }
-        if (secondChest != null && !stack.isEmpty()) {
-            moved += ItemStackOps.placeIntoEmptySlots(SlotAccess.of(secondChest.getInventory()), stack);
-        }
-        if (moved > 0) {
-            markChestsDirty();
-        }
-        return stack.isEmpty();
+    private int[] playerInventoryShiftClickDestinations() {
+        return ContainerSlotOrder.playerInventoryReverse(getContainerSize(), Inventory.MAIN_SIZE,
+                Inventory.HOTBAR_SIZE);
     }
 
     public ItemStack getItemInSlot(int slotIndex) {
@@ -277,6 +458,9 @@ public class ChestScreen {
     }
 
     private ItemStack getContainerStack(int slotIndex) {
+        if (minecartInventory != null) {
+            return slotIndex >= 0 && slotIndex < minecartInventory.length ? minecartInventory[slotIndex] : null;
+        }
         if (slotIndex < ChestTileEntity.SIZE) {
             return firstChest.getInventory()[slotIndex];
         }
@@ -284,6 +468,12 @@ public class ChestScreen {
     }
 
     private void setContainerStack(int slotIndex, ItemStack stack) {
+        if (minecartInventory != null) {
+            if (slotIndex >= 0 && slotIndex < minecartInventory.length) {
+                minecartInventory[slotIndex] = stack;
+            }
+            return;
+        }
         if (slotIndex < ChestTileEntity.SIZE) {
             firstChest.getInventory()[slotIndex] = stack;
         } else if (secondChest != null) {
@@ -292,12 +482,53 @@ public class ChestScreen {
     }
 
     private void markChestsDirty() {
+        if (minecartInventory != null) {
+            minecartDirty = true;
+            return;
+        }
         if (firstChest != null) {
             firstChest.markDirty();
         }
         if (secondChest != null) {
             secondChest.markDirty();
         }
+    }
+
+    private boolean isShiftDown() {
+        return Input.isKeyDown(GLFW_KEY_LEFT_SHIFT) || Input.isKeyDown(GLFW_KEY_RIGHT_SHIFT);
+    }
+
+    private void markDraggedContainerSlotsDirty() {
+        for (int slot : draggedSlots) {
+            if (slot < getContainerSize()) {
+                markChestsDirty();
+                return;
+            }
+        }
+    }
+
+    private ContainerDragDistributor.Slots dragSlotAccess() {
+        return new ContainerDragDistributor.Slots() {
+            @Override
+            public ItemStack get(int slotIndex) {
+                return getItemInSlot(slotIndex);
+            }
+
+            @Override
+            public void set(int slotIndex, ItemStack stack) {
+                setItemInSlot(slotIndex, stack);
+            }
+
+            @Override
+            public boolean canPlace(int slotIndex, ItemStack stack) {
+                return slotIndex >= 0 && slotIndex < getContainerSize() + Inventory.MAIN_SIZE + Inventory.HOTBAR_SIZE;
+            }
+
+            @Override
+            public int maxStackSize(int slotIndex, ItemStack stack) {
+                return stack == null || stack.isEmpty() ? 0 : stack.getMaxStackSize();
+            }
+        };
     }
 
     public List<ItemStack> getAndClearItemsToThrow() {
@@ -346,4 +577,23 @@ public class ChestScreen {
         return inventory;
     }
 
+    public ChestTileEntity getFirstChest() {
+        return firstChest;
+    }
+
+    public ChestTileEntity getSecondChest() {
+        return secondChest;
+    }
+
+    public ChestMinecartEntity getMinecart() {
+        return minecart;
+    }
+
+    public boolean isMinecartDirty() {
+        return minecartDirty;
+    }
+
+    public void clearMinecartDirty() {
+        minecartDirty = false;
+    }
 }

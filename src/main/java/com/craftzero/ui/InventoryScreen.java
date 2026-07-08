@@ -1,16 +1,21 @@
 package com.craftzero.ui;
 
 import com.craftzero.engine.Input;
+import com.craftzero.inventory.CraftingGridOps;
 import com.craftzero.inventory.Inventory;
 import com.craftzero.inventory.ItemStackOps;
 import com.craftzero.inventory.ItemStack;
-import com.craftzero.inventory.SlotAccess;
 import com.craftzero.crafting.CraftingRecipe;
 import com.craftzero.crafting.CraftingRegistry;
+import com.craftzero.progression.ArmorMaterial;
+import com.craftzero.progression.ArmorSlot;
 import com.craftzero.world.BlockType;
 
-import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 
 import static org.lwjgl.glfw.GLFW.*;
 
@@ -54,6 +59,17 @@ public class InventoryScreen {
     public static final int TEX_CRAFT_OUTPUT_X = 144;
     public static final int TEX_CRAFT_OUTPUT_Y = 36;
 
+    // Armor slots: helmet, chestplate, leggings, boots.
+    public static final int TEX_ARMOR_X = 8;
+    public static final int TEX_ARMOR_Y = 8;
+
+    public static final int MAIN_SLOT_START = 0;
+    public static final int HOTBAR_SLOT_START = 27;
+    public static final int CRAFTING_SLOT_START = 36;
+    public static final int CRAFTING_OUTPUT_SLOT = 40;
+    public static final int ARMOR_SLOT_START = 41;
+    public static final int ARMOR_SLOT_COUNT = 4;
+
     // Grid dimensions
     public static final int COLS = 9;
     public static final int MAIN_ROWS = 3;
@@ -64,6 +80,7 @@ public class InventoryScreen {
     // Legacy constants for compatibility (can be removed later)
     public static final int SLOT_SPACING = 0; // Slots are adjacent in texture
     public static final int PADDING = 0; // No padding, texture handles it
+    private static final long DOUBLE_CLICK_NANOS = 350_000_000L;
 
     private boolean isOpen = false;
     private Inventory inventory;
@@ -72,36 +89,48 @@ public class InventoryScreen {
     private int hoveredSlot = -1; // -1 = no slot hovered
 
     // Dragging state
-    private boolean isRightClickDragging = false;
-    private Set<Integer> draggedSlots = new HashSet<>();
+    private boolean isMouseDragging = false;
+    private boolean mouseDragRightClick = false;
+    private int dragStartSlot = -1;
+    private final Set<Integer> draggedSlots = new LinkedHashSet<>();
+    private int lastClickSlot = -1;
+    private long lastClickNanos = 0L;
+    private boolean lastClickRightClick = false;
 
     // Window position (centered, calculated on open)
     private int windowX;
     private int windowY;
     private int screenWidth;
     private int screenHeight;
+    private final BooleanSupplier dropRequested;
 
     public InventoryScreen(Inventory inventory) {
+        this(inventory, null);
+    }
+
+    public InventoryScreen(Inventory inventory, BooleanSupplier dropRequested) {
         this.inventory = inventory;
+        this.dropRequested = ContainerScreenControls.dropRequester(dropRequested);
     }
 
     /**
      * Toggle the inventory screen open/closed.
      */
     public void toggle(int screenWidth, int screenHeight) {
-        isOpen = !isOpen;
         this.screenWidth = screenWidth;
         this.screenHeight = screenHeight;
 
         if (isOpen) {
-            // Center the window
-            windowX = (screenWidth - WINDOW_WIDTH) / 2;
-            windowY = (screenHeight - WINDOW_HEIGHT) / 2;
-            Input.setCursorLocked(false);
-        } else {
-            Input.setCursorLocked(true);
-            hoveredSlot = -1;
+            close();
+            return;
         }
+
+        isOpen = true;
+        // Center the window
+        windowX = (screenWidth - WINDOW_WIDTH) / 2;
+        windowY = (screenHeight - WINDOW_HEIGHT) / 2;
+        Input.setCursorLocked(false);
+        hoveredSlot = -1;
     }
 
     public void open(int screenWidth, int screenHeight) {
@@ -116,12 +145,16 @@ public class InventoryScreen {
             Input.setCursorLocked(true);
             hoveredSlot = -1;
 
-            // If holding an item, try to merge it back into inventory. Keep any
-            // leftover on the cursor so closing the screen never deletes items.
-            if (inventory.getCursorItem() != null) {
-                if (inventory.addItem(inventory.getCursorItem())) {
-                    inventory.setCursorItem(null);
+            ItemStack[] craftingGrid = inventory.getCraftingGrid();
+            for (int i = 0; i < craftingGrid.length; i++) {
+                if (craftingGrid[i] != null && !craftingGrid[i].isEmpty()) {
+                    itemsToThrow.add(craftingGrid[i]);
+                    craftingGrid[i] = null;
                 }
+            }
+            if (inventory.getCursorItem() != null) {
+                itemsToThrow.add(inventory.getCursorItem());
+                inventory.setCursorItem(null);
             }
         }
     }
@@ -141,50 +174,152 @@ public class InventoryScreen {
         // Determine which slot (if any) the mouse is over
         hoveredSlot = getSlotAtPosition((int) mx, (int) my);
 
-        // Handle clicks
-        if (Input.isButtonPressed(GLFW_MOUSE_BUTTON_LEFT)) {
-            if (hoveredSlot == -1 && inventory.getCursorItem() != null) {
-                // Click outside with cursor item - throw it
-                itemToThrow = inventory.getCursorItem();
-                inventory.setCursorItem(null);
-            } else {
-                handleClick(hoveredSlot, false);
-            }
+        if (ContainerKeyboardDrop.dropOne(dropRequested, inventory, dragSlotAccess(), hoveredSlot,
+                itemsToThrow).dropped()) {
+            return;
         }
 
-        // Handle Right-Click (Single & Drag)
-        if (Input.isButtonDown(GLFW_MOUSE_BUTTON_RIGHT)) {
-            if (!isRightClickDragging) {
-                // Just started clicking/dragging
-                isRightClickDragging = true;
-                draggedSlots.clear();
-                handleClick(hoveredSlot, true);
-                if (hoveredSlot != -1)
-                    draggedSlots.add(hoveredSlot);
-            } else {
-                // Continuing to drag
-                if (hoveredSlot != -1 && !draggedSlots.contains(hoveredSlot)) {
-                    handleClick(hoveredSlot, true); // distribute item
-                    draggedSlots.add(hoveredSlot);
-                }
-            }
-        } else {
-            // Released right click
-            isRightClickDragging = false;
-            draggedSlots.clear();
+        if (ContainerHotbarSwap.trySwapWithHotbar(inventory, dragSlotAccess(), hoveredSlot, HOTBAR_SLOT_START)) {
+            return;
         }
+
+        handleMouseButton(GLFW_MOUSE_BUTTON_LEFT, false);
+        handleMouseButton(GLFW_MOUSE_BUTTON_RIGHT, true);
     }
 
-    // Item to be thrown (set when clicking outside with cursor item)
-    private ItemStack itemToThrow = null;
+    // Items to be thrown after click-out or close behavior.
+    private final List<ItemStack> itemsToThrow = new ArrayList<>();
+    private final List<CraftAction> craftActions = new ArrayList<>();
 
     /**
      * Get and clear the item to throw (for Main to handle).
      */
     public ItemStack getAndClearItemToThrow() {
-        ItemStack item = itemToThrow;
-        itemToThrow = null;
-        return item;
+        if (itemsToThrow.isEmpty()) {
+            return null;
+        }
+        return itemsToThrow.remove(0);
+    }
+
+    public List<ItemStack> getAndClearItemsToThrow() {
+        List<ItemStack> items = new ArrayList<>(itemsToThrow);
+        itemsToThrow.clear();
+        return items;
+    }
+
+    private void handleMouseButton(int button, boolean rightClick) {
+        if (Input.isButtonPressed(button)) {
+            startMouseDrag(rightClick);
+        }
+        if (isMouseDragging && mouseDragRightClick == rightClick && Input.isButtonDown(button)) {
+            continueMouseDrag();
+        }
+        if (isMouseDragging && mouseDragRightClick == rightClick && Input.isButtonReleased(button)) {
+            finishMouseDrag();
+        }
+    }
+
+    private void startMouseDrag(boolean rightClick) {
+        if (hoveredSlot == -1) {
+            resetDoubleClickTracking();
+            ContainerCursorDrop.dropOutside(inventory, itemsToThrow, rightClick);
+            return;
+        }
+        if (isShiftDown()) {
+            recordClick(hoveredSlot, rightClick);
+            handleClick(hoveredSlot, rightClick);
+            return;
+        }
+        if (isDoubleLeftClick(hoveredSlot, rightClick) && canHandleDoubleClick(hoveredSlot)) {
+            handleDoubleClick(hoveredSlot);
+            return;
+        }
+        ItemStack cursorItem = inventory.getCursorItem();
+        if (ItemStackOps.isEmpty(cursorItem) || !ContainerDragDistributor.canDragInto(dragSlotAccess(), hoveredSlot,
+                cursorItem)) {
+            handleClick(hoveredSlot, rightClick);
+            return;
+        }
+        isMouseDragging = true;
+        mouseDragRightClick = rightClick;
+        dragStartSlot = hoveredSlot;
+        draggedSlots.clear();
+        draggedSlots.add(hoveredSlot);
+    }
+
+    private boolean isDoubleLeftClick(int slotIndex, boolean rightClick) {
+        long now = System.nanoTime();
+        boolean doubleClick = !rightClick && !lastClickRightClick && slotIndex == lastClickSlot
+                && now - lastClickNanos <= DOUBLE_CLICK_NANOS;
+        recordClick(slotIndex, rightClick, now);
+        return doubleClick;
+    }
+
+    private void recordClick(int slotIndex, boolean rightClick) {
+        recordClick(slotIndex, rightClick, System.nanoTime());
+    }
+
+    private void recordClick(int slotIndex, boolean rightClick, long now) {
+        lastClickSlot = slotIndex;
+        lastClickRightClick = rightClick;
+        lastClickNanos = now;
+    }
+
+    private void resetDoubleClickTracking() {
+        lastClickSlot = -1;
+        lastClickRightClick = false;
+        lastClickNanos = 0L;
+    }
+
+    private boolean handleDoubleClick(int slotIndex) {
+        if (!canHandleDoubleClick(slotIndex)) {
+            return false;
+        }
+        return ContainerDoubleClickCollector.collectMatching(dragSlotAccess(), doubleClickCollectSlots(slotIndex),
+                inventory.getCursorItem());
+    }
+
+    private boolean canHandleDoubleClick(int slotIndex) {
+        return slotIndex >= MAIN_SLOT_START && slotIndex < CRAFTING_OUTPUT_SLOT
+                && !ItemStackOps.isEmpty(inventory.getCursorItem());
+    }
+
+    private int[] doubleClickCollectSlots(int clickedSlot) {
+        int[] playerSlots = ContainerSlotOrder.range(MAIN_SLOT_START, CRAFTING_SLOT_START);
+        int[] craftingSlots = ContainerSlotOrder.range(CRAFTING_SLOT_START, CRAFTING_OUTPUT_SLOT);
+        return ContainerSlotOrder.clickedGroupFirst(clickedSlot,
+                CRAFTING_SLOT_START, CRAFTING_OUTPUT_SLOT, craftingSlots, playerSlots);
+    }
+
+    private void continueMouseDrag() {
+        ItemStack cursorItem = inventory.getCursorItem();
+        if (hoveredSlot != -1 && !draggedSlots.contains(hoveredSlot)
+                && ContainerDragDistributor.canDragInto(dragSlotAccess(), hoveredSlot, cursorItem)) {
+            draggedSlots.add(hoveredSlot);
+        }
+    }
+
+    private void finishMouseDrag() {
+        if (draggedSlots.size() <= 1) {
+            handleClick(dragStartSlot, mouseDragRightClick);
+        } else {
+            ItemStack cursorItem = inventory.getCursorItem();
+            int moved = ContainerDragDistributor.distribute(dragSlotAccess(), draggedSlots, cursorItem,
+                    mouseDragRightClick);
+            if (moved == 0) {
+                handleClick(dragStartSlot, mouseDragRightClick);
+            } else if (ItemStackOps.isEmpty(cursorItem)) {
+                inventory.setCursorItem(null);
+            }
+        }
+        clearMouseDrag();
+    }
+
+    private void clearMouseDrag() {
+        isMouseDragging = false;
+        mouseDragRightClick = false;
+        dragStartSlot = -1;
+        draggedSlots.clear();
     }
 
     /**
@@ -197,6 +332,7 @@ public class InventoryScreen {
      * - Slots 27-35: Hotbar (1 row x 9 cols) at TEX_HOTBAR
      * - Slots 36-39: Crafting grid (2x2) at TEX_CRAFT_GRID
      * - Slot 40: Crafting output at TEX_CRAFT_OUTPUT
+     * - Slots 41-44: Armor slots at TEX_ARMOR
      */
     private int getSlotAtPosition(int mx, int my) {
         // Check if inside window bounds
@@ -209,20 +345,29 @@ public class InventoryScreen {
         float texX = (mx - windowX) / GUI_SCALE;
         float texY = (my - windowY) / GUI_SCALE;
 
+        // Check armor slots (41-44)
+        if (texX >= TEX_ARMOR_X && texX < TEX_ARMOR_X + TEX_SLOT_SIZE &&
+                texY >= TEX_ARMOR_Y && texY < TEX_ARMOR_Y + ARMOR_SLOT_COUNT * TEX_SLOT_SIZE) {
+            int row = (int) ((texY - TEX_ARMOR_Y) / TEX_SLOT_SIZE);
+            if (row < ARMOR_SLOT_COUNT) {
+                return ARMOR_SLOT_START + row;
+            }
+        }
+
         // Check crafting grid (2x2) - slots 36-39
         if (texX >= TEX_CRAFT_GRID_X && texX < TEX_CRAFT_GRID_X + CRAFTING_COLS * TEX_SLOT_SIZE &&
                 texY >= TEX_CRAFT_GRID_Y && texY < TEX_CRAFT_GRID_Y + CRAFTING_ROWS * TEX_SLOT_SIZE) {
             int col = (int) ((texX - TEX_CRAFT_GRID_X) / TEX_SLOT_SIZE);
             int row = (int) ((texY - TEX_CRAFT_GRID_Y) / TEX_SLOT_SIZE);
             if (col < CRAFTING_COLS && row < CRAFTING_ROWS) {
-                return 36 + row * CRAFTING_COLS + col;
+                return CRAFTING_SLOT_START + row * CRAFTING_COLS + col;
             }
         }
 
         // Check crafting output - slot 40
         if (texX >= TEX_CRAFT_OUTPUT_X && texX < TEX_CRAFT_OUTPUT_X + TEX_SLOT_SIZE &&
                 texY >= TEX_CRAFT_OUTPUT_Y && texY < TEX_CRAFT_OUTPUT_Y + TEX_SLOT_SIZE) {
-            return 40;
+            return CRAFTING_OUTPUT_SLOT;
         }
 
         // Check main inventory (3 rows x 9 cols) - slots 0-26
@@ -240,7 +385,7 @@ public class InventoryScreen {
                 texY >= TEX_HOTBAR_Y && texY < TEX_HOTBAR_Y + TEX_SLOT_SIZE) {
             int col = (int) ((texX - TEX_HOTBAR_X) / TEX_SLOT_SIZE);
             if (col < COLS) {
-                return 27 + col;
+                return HOTBAR_SLOT_START + col;
             }
         }
 
@@ -261,21 +406,14 @@ public class InventoryScreen {
         ItemStack slotItem = getItemInSlot(slotIndex);
 
         // Special handling for crafting output slot (40)
-        if (slotIndex == 40) {
+        if (slotIndex == CRAFTING_OUTPUT_SLOT) {
+            ItemStack[] gridBefore = snapshotCraftingGrid();
+            ItemStack cursorBefore = copyStack(inventory.getCursorItem());
             // SHIFT+CLICK Output
-            if (Input.isKeyDown(GLFW_KEY_LEFT_SHIFT) || Input.isKeyDown(GLFW_KEY_RIGHT_SHIFT)) {
-                for (int i = 0; i < 64; i++) { // Max stack size safety loop
-                    ItemStack output = getItemInSlot(40);
-                    if (output == null)
-                        break;
-
-                    // Try to add to inventory (main or hotbar)
-                    if (!inventory.canAddItem(output)) {
-                        break; // Inventory full
-                    }
-                    inventory.addItem(output);
-                    inventory.consumeCraftingIngredients();
-                }
+            if (isShiftDown()) {
+                int crafted = CraftingGridOps.quickMoveOutputToInventory(inventory, inventory.getCraftingGrid(),
+                        () -> CraftingRegistry.findRecipe(inventory.getCraftingGrid()), itemsToThrow);
+                recordCraftAction(gridBefore, cursorBefore, true, crafted);
                 return;
             }
 
@@ -283,32 +421,21 @@ public class InventoryScreen {
                 return;
 
             // Regular click on output
-            if (cursorItem == null) {
-                // Pick up result
-                inventory.setCursorItem(slotItem);
-                inventory.consumeCraftingIngredients();
-            } else if (ItemStackOps.canMerge(cursorItem, slotItem)) {
-                // Stack result onto cursor
-                if (cursorItem.getCount() + slotItem.getCount() <= cursorItem.getMaxStackSize()) {
-                    cursorItem.add(slotItem.getCount());
-                    inventory.consumeCraftingIngredients();
-                }
+            CraftingRecipe recipe = CraftingRegistry.findRecipe(inventory.getCraftingGrid());
+            if (CraftingGridOps.takeOutputToCursor(inventory, inventory.getCraftingGrid(), recipe, itemsToThrow)) {
+                recordCraftAction(gridBefore, cursorBefore, false, 1);
             }
             return;
         }
 
-        // Shift-click: Quick-move between hotbar and main inventory
-        if (Input.isKeyDown(GLFW_KEY_LEFT_SHIFT) || Input.isKeyDown(GLFW_KEY_RIGHT_SHIFT)) {
-            if (slotItem != null && !slotItem.isEmpty()) {
-                boolean isHotbarSlot = slotIndex >= 27;
-                ItemStack[] targetSlots = isHotbarSlot ? inventory.getMainInventory() : inventory.getHotbar();
+        if (isShiftDown()) {
+            shiftClick(slotIndex, slotItem);
+            return;
+        }
 
-                ItemStackOps.moveIntoSlots(SlotAccess.of(targetSlots), slotItem);
-                if (slotItem.isEmpty()) {
-                    setItemInSlot(slotIndex, null);
-                }
-            }
-            return; // Don't do regular click behavior
+        if (isArmorSlot(slotIndex)) {
+            handleArmorSlotClick(slotIndex, slotItem, cursorItem, isRightClick);
+            return;
         }
 
         if (isRightClick) {
@@ -360,19 +487,102 @@ public class InventoryScreen {
         }
     }
 
+    private void shiftClick(int slotIndex, ItemStack slotItem) {
+        if (slotItem == null || slotItem.isEmpty()) {
+            return;
+        }
+
+        if (isArmorSlot(slotIndex)) {
+            ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex, playerInventoryShiftClickDestinations());
+            return;
+        }
+
+        ArmorSlot armorSlot = ArmorMaterial.slotOf(slotItem.getType());
+        if (armorSlot != null && tryEquipArmorStack(slotItem, armorSlot)) {
+            if (slotItem.isEmpty()) {
+                setItemInSlot(slotIndex, null);
+            }
+            return;
+        }
+
+        if (slotIndex >= CRAFTING_SLOT_START && slotIndex < CRAFTING_SLOT_START + Inventory.CRAFTING_SIZE) {
+            ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex, playerInventoryShiftClickDestinations());
+        } else if (slotIndex >= HOTBAR_SLOT_START) {
+            ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex,
+                    ContainerSlotOrder.range(MAIN_SLOT_START, HOTBAR_SLOT_START));
+        } else {
+            ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex,
+                    ContainerSlotOrder.range(HOTBAR_SLOT_START, HOTBAR_SLOT_START + Inventory.HOTBAR_SIZE));
+        }
+    }
+
+    private int[] playerInventoryShiftClickDestinations() {
+        return ContainerSlotOrder.playerInventoryReverse(MAIN_SLOT_START, Inventory.MAIN_SIZE, Inventory.HOTBAR_SIZE);
+    }
+
+    private void handleArmorSlotClick(int slotIndex, ItemStack slotItem, ItemStack cursorItem, boolean isRightClick) {
+        if (cursorItem == null || cursorItem.isEmpty()) {
+            if (slotItem == null || slotItem.isEmpty()) {
+                return;
+            }
+            ItemStack picked = isRightClick ? ItemStackOps.splitHalf(slotItem) : slotItem;
+            if (isRightClick && slotItem.isEmpty()) {
+                setItemInSlot(slotIndex, null);
+            } else if (!isRightClick) {
+                setItemInSlot(slotIndex, null);
+            }
+            inventory.setCursorItem(picked);
+            return;
+        }
+
+        if (!isValidArmorForSlot(slotIndex, cursorItem)) {
+            return;
+        }
+
+        if (slotItem == null || slotItem.isEmpty()) {
+            setItemInSlot(slotIndex, isRightClick ? ItemStackOps.splitOne(cursorItem) : cursorItem);
+            if (!isRightClick || cursorItem.isEmpty()) {
+                inventory.setCursorItem(null);
+            }
+            return;
+        }
+
+        setItemInSlot(slotIndex, cursorItem);
+        inventory.setCursorItem(slotItem);
+    }
+
+    private boolean tryEquipArmorStack(ItemStack stack, ArmorSlot armorSlot) {
+        if (stack == null || stack.isEmpty() || armorSlot == null) {
+            return false;
+        }
+        ItemStack[] armor = inventory.getArmor();
+        int index = armorSlot.getIndex();
+        if (index < 0 || index >= armor.length || armor[index] != null) {
+            return false;
+        }
+        armor[index] = ItemStackOps.splitOne(stack);
+        return true;
+    }
+
+    private boolean isShiftDown() {
+        return Input.isKeyDown(GLFW_KEY_LEFT_SHIFT) || Input.isKeyDown(GLFW_KEY_RIGHT_SHIFT);
+    }
+
     /**
      * Get item from combined slot index.
      */
     private ItemStack getItemInSlot(int slotIndex) {
-        if (slotIndex >= 36 && slotIndex <= 39) {
+        if (isArmorSlot(slotIndex)) {
+            return inventory.getArmor()[slotIndex - ARMOR_SLOT_START];
+        } else if (slotIndex >= CRAFTING_SLOT_START && slotIndex < CRAFTING_SLOT_START + Inventory.CRAFTING_SIZE) {
             // Crafting grid
-            return inventory.getCraftingGrid()[slotIndex - 36];
-        } else if (slotIndex == 40) {
+            return inventory.getCraftingGrid()[slotIndex - CRAFTING_SLOT_START];
+        } else if (slotIndex == CRAFTING_OUTPUT_SLOT) {
             // Crafting output - return recipe result
-            CraftingRecipe recipe = CraftingRegistry.findRecipe(inventory.getCraftingPattern());
+            CraftingRecipe recipe = CraftingRegistry.findRecipe(inventory.getCraftingGrid());
             return recipe != null ? recipe.getOutput() : null;
-        } else if (slotIndex >= 27) {
-            return inventory.getHotbar()[slotIndex - 27];
+        } else if (slotIndex >= HOTBAR_SLOT_START) {
+            return inventory.getHotbar()[slotIndex - HOTBAR_SLOT_START];
         } else {
             return inventory.getMainInventory()[slotIndex];
         }
@@ -382,17 +592,63 @@ public class InventoryScreen {
      * Set item in combined slot index.
      */
     private void setItemInSlot(int slotIndex, ItemStack item) {
-        if (slotIndex >= 36 && slotIndex <= 39) {
+        if (isArmorSlot(slotIndex)) {
+            if (item == null || item.isEmpty() || isValidArmorForSlot(slotIndex, item)) {
+                inventory.getArmor()[slotIndex - ARMOR_SLOT_START] = item;
+            }
+        } else if (slotIndex >= CRAFTING_SLOT_START && slotIndex < CRAFTING_SLOT_START + Inventory.CRAFTING_SIZE) {
             // Crafting grid
-            inventory.getCraftingGrid()[slotIndex - 36] = item;
-        } else if (slotIndex == 40) {
+            inventory.getCraftingGrid()[slotIndex - CRAFTING_SLOT_START] = item;
+        } else if (slotIndex == CRAFTING_OUTPUT_SLOT) {
             // Output slot - cannot directly set
             return;
-        } else if (slotIndex >= 27) {
-            inventory.getHotbar()[slotIndex - 27] = item;
+        } else if (slotIndex >= HOTBAR_SLOT_START) {
+            inventory.getHotbar()[slotIndex - HOTBAR_SLOT_START] = item;
         } else {
             inventory.getMainInventory()[slotIndex] = item;
         }
+    }
+
+    private static boolean isArmorSlot(int slotIndex) {
+        return slotIndex >= ARMOR_SLOT_START && slotIndex < ARMOR_SLOT_START + ARMOR_SLOT_COUNT;
+    }
+
+    private static boolean isValidArmorForSlot(int slotIndex, ItemStack stack) {
+        if (!isArmorSlot(slotIndex) || stack == null || stack.isEmpty()) {
+            return false;
+        }
+        ArmorSlot expected = ArmorSlot.values()[slotIndex - ARMOR_SLOT_START];
+        return ArmorMaterial.slotOf(stack.getType()) == expected;
+    }
+
+    private ContainerDragDistributor.Slots dragSlotAccess() {
+        return new ContainerDragDistributor.Slots() {
+            @Override
+            public ItemStack get(int slotIndex) {
+                return getItemInSlot(slotIndex);
+            }
+
+            @Override
+            public void set(int slotIndex, ItemStack stack) {
+                setItemInSlot(slotIndex, stack);
+            }
+
+            @Override
+            public boolean canPlace(int slotIndex, ItemStack stack) {
+                if (slotIndex == CRAFTING_OUTPUT_SLOT) {
+                    return false;
+                }
+                if (isArmorSlot(slotIndex)) {
+                    return isValidArmorForSlot(slotIndex, stack);
+                }
+                return slotIndex >= MAIN_SLOT_START && slotIndex < CRAFTING_OUTPUT_SLOT;
+            }
+
+            @Override
+            public int maxStackSize(int slotIndex, ItemStack stack) {
+                return isArmorSlot(slotIndex) ? 1 : stack.getMaxStackSize();
+            }
+        };
     }
 
     // Getters for renderer
@@ -414,5 +670,30 @@ public class InventoryScreen {
 
     public Inventory getInventory() {
         return inventory;
+    }
+
+    public List<CraftAction> drainCraftActions() {
+        List<CraftAction> actions = new ArrayList<>(craftActions);
+        craftActions.clear();
+        return actions;
+    }
+
+    private ItemStack[] snapshotCraftingGrid() {
+        ItemStack[] grid = inventory.getCraftingGrid();
+        ItemStack[] snapshot = new ItemStack[Inventory.CRAFTING_SIZE];
+        for (int i = 0; i < snapshot.length; i++) {
+            snapshot[i] = grid[i] == null ? null : grid[i].copy();
+        }
+        return snapshot;
+    }
+
+    private ItemStack copyStack(ItemStack stack) {
+        return stack == null ? null : stack.copy();
+    }
+
+    private void recordCraftAction(ItemStack[] gridBefore, ItemStack cursorBefore, boolean quickMove, int crafted) {
+        if (crafted > 0) {
+            craftActions.add(new CraftAction(2, quickMove, crafted, gridBefore, cursorBefore, null));
+        }
     }
 }

@@ -15,7 +15,9 @@ class MenuPrimitivesTest {
     @DisplayName("MenuButton should hit test and fire only when released inside")
     void buttonFiresOnReleaseInside() {
         AtomicInteger clicks = new AtomicInteger();
+        AtomicInteger sounds = new AtomicInteger();
         MenuButton button = new MenuButton("play", "Play", new Rect(10, 20, 100, 20), clicks::incrementAndGet);
+        button.setClickSound(sounds::incrementAndGet);
 
         assertTrue(button.hitTest(10, 20));
         assertTrue(button.hitTest(109, 39));
@@ -28,10 +30,21 @@ class MenuPrimitivesTest {
         assertTrue(button.isPressed());
         assertTrue(button.mouseReleased(200, 200, MouseButton.LEFT));
         assertEquals(0, clicks.get());
+        assertEquals(0, sounds.get());
 
         assertTrue(button.mousePressed(15, 25, MouseButton.LEFT));
         assertTrue(button.mouseReleased(15, 25, MouseButton.LEFT));
         assertEquals(1, clicks.get());
+        assertEquals(1, sounds.get());
+
+        button.click();
+        assertEquals(2, clicks.get());
+        assertEquals(2, sounds.get());
+
+        button.setTextColor(1.0f, 0.25f, 0.25f, 1.0f);
+        assertArrayEquals(new float[] { 1.0f, 0.25f, 0.25f, 1.0f }, button.textColor(), 0.0001f);
+        button.clearTextColor();
+        assertNull(button.textColor());
     }
 
     @Test

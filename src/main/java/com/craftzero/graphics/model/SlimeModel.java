@@ -16,12 +16,23 @@ public class SlimeModel {
         root.buildMesh();
     }
 
-    public void animate(float ageInTicks) {
-        float squish = 1.0f + (float) Math.sin(ageInTicks * 0.35f) * 0.04f;
-        body.setScale(1.0f + (squish - 1.0f) * 0.5f, 2.0f - squish, 1.0f + (squish - 1.0f) * 0.5f);
+    public void animate(float squishAmount, int size) {
+        SquishScale scale = scaleFor(squishAmount, size);
+        body.setScale(scale.horizontal(), scale.vertical(), scale.horizontal());
+    }
+
+    public static SquishScale scaleFor(float squishAmount, int size) {
+        float safeSize = Math.max(1, size);
+        float normalized = squishAmount / (safeSize * 0.5f + 1.0f);
+        normalized = Math.max(-0.9f, normalized);
+        float horizontal = 1.0f / (normalized + 1.0f);
+        return new SquishScale(horizontal, 1.0f / horizontal);
     }
 
     public void cleanup() {
         root.cleanup();
+    }
+
+    public record SquishScale(float horizontal, float vertical) {
     }
 }

@@ -3,14 +3,30 @@ package com.craftzero.graphics;
 import com.craftzero.engine.Window;
 import com.craftzero.main.PlayerStats;
 import com.craftzero.inventory.Inventory;
+import com.craftzero.inventory.ItemRenderProfile;
 import com.craftzero.inventory.ItemStack;
 import com.craftzero.inventory.ItemType;
+import com.craftzero.inventory.MapItemData;
+import com.craftzero.main.Player;
+import com.craftzero.progression.AchievementTracker;
+import com.craftzero.progression.AchievementType;
 import com.craftzero.progression.ArmorCalculator;
+import com.craftzero.progression.ArmorSlot;
 import com.craftzero.progression.PlayerProgression;
+import com.craftzero.progression.StatusEffectInstance;
+import com.craftzero.progression.StatusEffectType;
+import com.craftzero.progression.StatusEffectVisuals;
+import com.craftzero.world.Block;
+import com.craftzero.world.BlockType;
+import com.craftzero.world.World;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.FloatBuffer;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Locale;
 
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL15.*;
@@ -36,27 +52,168 @@ public class SurvivalHudRenderer {
     private static final int ICON_SIZE = 18;
     private static final int SPACING = 20;
 
-    // Hotbar: Contiguous 9 slots matching Top Row Width (432px)
-    // 432px / 9 slots = 48px per slot exactly.
+    // Procedural fallback hotbar; textured rendering below derives from gui.png pixels.
     private static final int HOTBAR_SLOT_SIZE = 48;
     private static final int HOTBAR_SPACING = 48; // No gaps
     private static final int HOTBAR_WIDTH = 9 * HOTBAR_SPACING;
+    private static final int HOTBAR_TEXTURE_WIDTH = 182;
+    private static final int HOTBAR_TEXTURE_HEIGHT = 22;
+    private static final int HOTBAR_SELECTION_TEXTURE_SIZE = 24;
+    private static final int HOTBAR_SLOT_TEXTURE_PITCH = 20;
+    private static final int HOTBAR_ITEM_TEXTURE_SIZE = 16;
+    private static final int HOTBAR_ITEM_TEXTURE_INSET = 3;
+    private static final int HOTBAR_SELECTION_TEXTURE_OFFSET = -1;
+    private static final float ITEM_ICON_UV_INSET = 0.5f / 256.0f;
+    private static final float BLOCK_ICON_HALF_WIDTH = 0.46f;
+    private static final float BLOCK_ICON_TOP_HALF_HEIGHT = 0.23f;
+    private static final float BLOCK_ICON_SIDE_HEIGHT = 0.52f;
+    private static final float BLOCK_ICON_CENTER_X = 0.50f;
+    private static final float BLOCK_ICON_CENTER_X_BIAS = -0.03f;
+    private static final float BLOCK_ICON_CENTER_Y = 0.22f;
+    private static final float BLOCK_ICON_TOP_BRIGHTNESS = 1.00f;
+    private static final float BLOCK_ICON_LEFT_BRIGHTNESS = 0.60f;
+    private static final float BLOCK_ICON_RIGHT_BRIGHTNESS = 0.45f;
+    private static final int BOSS_BAR_TEXTURE_WIDTH = 182;
+    private static final int BOSS_BAR_TEXTURE_HEIGHT = 5;
+    private static final int BOSS_BAR_SCALE = 2;
 
     private TextRenderer textRenderer;
 
-    // Item Name Animation State
-    private String currentItemName = "";
-    private float animationTime = 0f;
-    private int lastSelectedSlot = -1;
+    private World dynamicItemWorld;
+    private Player dynamicItemPlayer;
+    private float portalOverlayStrength;
+    private float portalOverlayTime;
+    private float waterOverlayTime;
 
     // Bubble Animation State
     private float[] bubblePopTimers = new float[10];
     private float lastAir = PlayerStats.MAX_AIR_SECONDS;
 
-    private static final float FADE_IN_DURATION = 0.4f;
-    private static final float STAY_DURATION = 1.5f;
-    private static final float FADE_OUT_DURATION = 0.4f;
-    private static final float TOTAL_DURATION = FADE_IN_DURATION + STAY_DURATION + FADE_OUT_DURATION;
+    private static final int HELD_MAP_TOP_MARGIN = 18;
+    private static final int HELD_MAP_SIDE_MARGIN = 24;
+    private static final int HELD_MAP_BOTTOM_GAP = 18;
+    private static final int HELD_MAP_MAX_CELL_SIZE = 3;
+    private static final int HELD_MAP_MIN_DISPLAY_PIXELS = 32;
+    private static final int STATUS_EFFECT_ICON_SIZE = 32;
+    private static final int STATUS_EFFECT_SPACING = 4;
+    private static final int STATUS_EFFECT_RIGHT_MARGIN = 8;
+    private static final int STATUS_EFFECT_TOP_MARGIN = 8;
+    private static final int STATUS_EFFECT_ICON_BORDER = 2;
+    private static final int STATUS_EFFECT_DURATION_BAR_HEIGHT = 3;
+    private static final int STATUS_EFFECT_ITEM_INSET = 6;
+    private static final float STATUS_EFFECT_AMPLIFIER_SCALE = 0.70f;
+    private static final int STATUS_EFFECT_LOW_TIME_TICKS = 10 * 20;
+    private static final int ACHIEVEMENT_TOAST_WIDTH = 320;
+    private static final int ACHIEVEMENT_TOAST_HEIGHT = 64;
+    private static final int ACHIEVEMENT_TOAST_MARGIN = 8;
+    private static final int ACHIEVEMENT_TOAST_ICON_SIZE = 32;
+    private static final int ACHIEVEMENT_TOAST_ICON_SLOT = 40;
+    private static final int ACHIEVEMENT_TOAST_ICON_X = 12;
+    private static final int ACHIEVEMENT_TOAST_ICON_Y = 14;
+    private static final int ACHIEVEMENT_TEXTURE_SIZE = 256;
+    private static final int ACHIEVEMENT_PANEL_U = 97;
+    private static final int ACHIEVEMENT_PANEL_V = 203;
+    private static final int ACHIEVEMENT_PANEL_W = 158;
+    private static final int ACHIEVEMENT_PANEL_H = 23;
+    private static final int ACHIEVEMENT_SLOT_U = 3;
+    private static final int ACHIEVEMENT_SPECIAL_SLOT_U = 27;
+    private static final int ACHIEVEMENT_SLOT_V = 203;
+    private static final int ACHIEVEMENT_SLOT_SIZE = 24;
+    private static final int ACHIEVEMENT_SOURCE_SCALE = 2;
+    private static final float FIRE_OVERLAY_HEIGHT_RATIO = 0.58f;
+    private static final float FIRE_OVERLAY_WIDTH_RATIO = 0.76f;
+    private static final float FIRE_OVERLAY_BOTTOM_OVERSCAN_RATIO = 0.08f;
+    private static final float FIRE_OVERLAY_MIN_HEIGHT = 145.0f;
+    private static final float FIRE_OVERLAY_MAX_HEIGHT = 360.0f;
+    private static final float PUMPKIN_OVERLAY_ALPHA = 1.0f;
+    private static final float VIGNETTE_MIN_ALPHA = 0.18f;
+    private static final float VIGNETTE_MAX_ALPHA = 0.82f;
+    private static final float PORTAL_OVERLAY_MIN_ALPHA = 0.12f;
+    private static final float PORTAL_OVERLAY_MAX_ALPHA = 0.74f;
+    private static final float PORTAL_OVERLAY_BASE_REPEAT = 1.18f;
+    private static final float PORTAL_OVERLAY_EXTRA_REPEAT = 0.42f;
+    private static final float WATER_OVERLAY_ALPHA = 0.58f;
+    private static final float WATER_OVERLAY_REPEAT = 1.08f;
+
+    public record DebugOverlaySnapshot(
+            boolean visible,
+            String version,
+            int fps,
+            int windowWidth,
+            int windowHeight,
+            String dimension,
+            String generator,
+            long seed,
+            String gameMode,
+            String difficulty,
+            float x,
+            float y,
+            float z,
+            int blockX,
+            int blockY,
+            int blockZ,
+            int chunkX,
+            int chunkZ,
+            int localX,
+            int localY,
+            int localZ,
+            float yaw,
+            float pitch,
+            String facing,
+            String biome,
+            int skyLight,
+            int blockLight,
+            String targetBlock,
+            String weather,
+            float rainStrength,
+            float thunderStrength,
+            long worldTime,
+            int day,
+            int moonPhase,
+            int renderDistance,
+            int loadedChunks,
+            int entities,
+            int droppedItems,
+            int particles,
+            long usedMemoryBytes,
+            long totalMemoryBytes,
+            long maxMemoryBytes) {
+
+        private List<String> leftLines() {
+            return List.of(
+                    version + " (" + fps + " fps)",
+                    "Display: " + windowWidth + "x" + windowHeight,
+                    "World: " + dimension + " / " + generator + " / seed " + seed,
+                    "Mode: " + gameMode + " / " + difficulty,
+                    format("XYZ: %.3f / %.3f / %.3f", x, y, z),
+                    "Block: " + blockX + " " + blockY + " " + blockZ,
+                    "Chunk: " + chunkX + " " + chunkZ + " in " + localX + " " + localY + " " + localZ,
+                    format("Facing: %s (yaw %.1f / pitch %.1f)", facing, yaw, pitch),
+                    "Biome: " + biome,
+                    "Light: sky " + skyLight + " block " + blockLight,
+                    "Target: " + targetBlock);
+        }
+
+        private List<String> rightLines() {
+            return List.of(
+                    "Memory: " + mib(usedMemoryBytes) + "MB / " + mib(totalMemoryBytes)
+                            + "MB up to " + mib(maxMemoryBytes) + "MB",
+                    "Java: " + System.getProperty("java.version", "unknown"),
+                    "Time: " + worldTime + " day " + day + " moon " + moonPhase,
+                    format("Weather: %s rain %.2f thunder %.2f", weather, rainStrength, thunderStrength),
+                    "Chunks: " + loadedChunks + " loaded / render " + renderDistance,
+                    "Entities: " + entities + " mobs/items " + droppedItems,
+                    "Particles: " + particles);
+        }
+
+        private static String format(String pattern, Object... args) {
+            return String.format(Locale.ROOT, pattern, args);
+        }
+
+        private static long mib(long bytes) {
+            return Math.max(0L, bytes) / (1024L * 1024L);
+        }
+    }
 
     public void init(Window window) throws Exception {
         this.windowWidth = window.getWidth();
@@ -112,15 +269,20 @@ public class SurvivalHudRenderer {
                         "out vec4 fragColor;\n" +
                         "uniform sampler2D textureSampler;\n" +
                         "uniform float brightness;\n" +
+                        "uniform float alpha;\n" +
                         "void main() {\n" +
                         "    vec4 texColor = texture(textureSampler, texCoord);\n" +
                         "    if (texColor.a < 0.1) discard;\n" +
-                        "    fragColor = vec4(texColor.rgb * brightness, texColor.a);\n" +
+                        "    fragColor = vec4(texColor.rgb * brightness, texColor.a * alpha);\n" +
                         "}");
         texturedShader.link();
         texturedShader.createUniform("projection");
         texturedShader.createUniform("textureSampler");
         texturedShader.createUniform("brightness");
+        texturedShader.createUniform("alpha");
+        texturedShader.bind();
+        texturedShader.setUniform("alpha", 1.0f);
+        texturedShader.unbind();
 
         // Create VAO/VBO for textured drawing (pos + uv = 4 floats per vertex)
         texturedVao = glGenVertexArrays();
@@ -136,6 +298,14 @@ public class SurvivalHudRenderer {
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
 
+        achievementTexture = new Texture("/textures/achievement/bg.png");
+        pumpkinOverlayTexture = new Texture("/textures/misc/pumpkinblur.png");
+        vignetteTexture = new Texture("/textures/misc/vignette.png");
+        portalOverlayTexture = new Texture("/textures/misc/tunnel.png");
+        portalOverlayTexture.setRepeatWrapping();
+        waterOverlayTexture = new Texture("/textures/misc/water.png");
+        waterOverlayTexture.setRepeatWrapping();
+
         System.out.println("SurvivalHudRenderer initialized - Window: " + windowWidth + "x" + windowHeight);
     }
 
@@ -147,6 +317,11 @@ public class SurvivalHudRenderer {
     private Texture iconsTexture; // icons.png - hearts, hunger icons
     private Texture guiTexture; // gui.png - hotbar background
     private Texture itemsTexture; // items.png - sticks, tools
+    private Texture achievementTexture; // achievement/bg.png - toast frame pieces
+    private Texture pumpkinOverlayTexture; // misc/pumpkinblur.png - first-person helmet mask
+    private Texture vignetteTexture; // misc/vignette.png - first-person light falloff
+    private Texture portalOverlayTexture; // misc/tunnel.png - Nether portal screen wash
+    private Texture waterOverlayTexture; // misc/water.png - underwater first-person wash
 
     public void setGuiTextures(Texture icons, Texture gui) {
         this.iconsTexture = icons;
@@ -155,6 +330,15 @@ public class SurvivalHudRenderer {
 
     public void setItemsTexture(Texture items) {
         this.itemsTexture = items;
+    }
+
+    public void setDynamicItemContext(World world, Player player) {
+        this.dynamicItemWorld = world;
+        this.dynamicItemPlayer = player;
+    }
+
+    public void setPortalOverlayStrength(float strength) {
+        this.portalOverlayStrength = Math.max(0.0f, Math.min(1.0f, strength));
     }
 
     public void updateOrtho(int width, int height) {
@@ -167,8 +351,6 @@ public class SurvivalHudRenderer {
     }
 
     public void render(PlayerStats stats, Inventory inventory, float deltaTime) {
-        updateItemNameAnimation(inventory, deltaTime);
-
         // FORCE fresh state
         glDisable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
@@ -187,6 +369,30 @@ public class SurvivalHudRenderer {
         // Repositioned above large hotbar
         // Hotbar Top is ~Y-60. Hearts (18px) + padding -> Y-90
         int bottomY = windowHeight - 90;
+
+        // First-person held items render behind the normal HUD layer.
+        int hotbarY = windowHeight - 60; // 10px from bottom edge
+        drawHeldMapOverlay(inventory, hotbarY);
+        if (drawVignetteOverlay(ortho)) {
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+        if (drawWaterOverlay(ortho, deltaTime)) {
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+        if (drawPortalOverlay(ortho, deltaTime)) {
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+        if (drawPumpkinHelmetOverlay(inventory, ortho)) {
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+        if (drawFirstPersonFireOverlay(ortho)) {
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
 
         // Hearts go LEFT from just left of center
         int heartStartX = centerX - 216;
@@ -209,13 +415,12 @@ public class SurvivalHudRenderer {
         }
 
         // Hotbar goes BELOW hearts/hunger
-        int hotbarY = windowHeight - 60; // 10px from bottom edge
         drawExperience(stats.getProgression(), centerX, hotbarY - 16);
         drawHotbar(inventory, centerX, hotbarY);
+        drawStatusEffects(stats.getActiveEffects());
+        drawAchievementNotification(stats.getAchievements(), deltaTime);
 
         shader.unbind();
-
-        renderItemName(bubblesVisible);
 
         // Update lastAir for next frame comparison
         lastAir = stats.getCurrentAir();
@@ -226,8 +431,6 @@ public class SurvivalHudRenderer {
     }
 
     public void renderHotbarOnly(Inventory inventory, float deltaTime) {
-        updateItemNameAnimation(inventory, deltaTime);
-
         glDisable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -236,11 +439,89 @@ public class SurvivalHudRenderer {
         Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
         shader.bind();
         shader.setUniform("projection", ortho);
-        drawHotbar(inventory, windowWidth / 2, windowHeight - 60);
+        int hotbarY = windowHeight - 60;
+        drawHeldMapOverlay(inventory, hotbarY);
+        if (drawVignetteOverlay(ortho)) {
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+        if (drawWaterOverlay(ortho, deltaTime)) {
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+        if (drawPortalOverlay(ortho, deltaTime)) {
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+        if (drawPumpkinHelmetOverlay(inventory, ortho)) {
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+        if (drawFirstPersonFireOverlay(ortho)) {
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+        drawHotbar(inventory, windowWidth / 2, hotbarY);
         shader.unbind();
-
-        renderItemName(false);
         glEnable(GL_DEPTH_TEST);
+    }
+
+    public void renderDebugOverlay(DebugOverlaySnapshot snapshot) {
+        if (snapshot == null || !snapshot.visible() || textRenderer == null) {
+            return;
+        }
+        List<String> leftLines = snapshot.leftLines();
+        List<String> rightLines = snapshot.rightLines();
+        float scale = 1.0f;
+        int lineHeight = 9;
+        int margin = 2;
+        int leftWidth = debugTextWidth(leftLines, scale);
+        int rightWidth = debugTextWidth(rightLines, scale);
+        int leftX = margin;
+        int leftY = margin;
+        int rightX = windowWidth - margin;
+        int rightY = margin;
+        if (rightX - rightWidth < leftX + leftWidth + 8) {
+            rightX = margin + rightWidth;
+            rightY = leftY + debugTextHeight(leftLines, lineHeight) + 4;
+        }
+
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_CULL_FACE);
+
+        drawDebugLines(leftLines, leftX, leftY, lineHeight, scale);
+        drawDebugLinesRightAligned(rightLines, rightX, rightY, lineHeight, scale);
+        glEnable(GL_DEPTH_TEST);
+    }
+
+    private int debugTextWidth(List<String> lines, float scale) {
+        int width = 0;
+        for (String line : lines) {
+            width = Math.max(width, textRenderer.getStringWidth(line, scale));
+        }
+        return width;
+    }
+
+    private static int debugTextHeight(List<String> lines, int lineHeight) {
+        return lines.size() * lineHeight;
+    }
+
+    private void drawDebugLines(List<String> lines, int x, int y, int lineHeight, float scale) {
+        for (int i = 0; i < lines.size(); i++) {
+            drawHudTextShadowed(lines.get(i), x, y + i * lineHeight, scale,
+                    new float[] { 0.92f, 0.92f, 0.92f, 1.0f });
+        }
+    }
+
+    private void drawDebugLinesRightAligned(List<String> lines, int rightX, int y, int lineHeight, float scale) {
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            int textWidth = textRenderer.getStringWidth(line, scale);
+            drawHudTextShadowed(line, rightX - textWidth, y + i * lineHeight, scale,
+                    new float[] { 0.92f, 0.92f, 0.92f, 1.0f });
+        }
     }
 
     public void renderBossBar(String name, float healthFraction) {
@@ -256,58 +537,56 @@ public class SurvivalHudRenderer {
         Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
         shader.bind();
         shader.setUniform("projection", ortho);
-        int width = Math.min(182 * 2, windowWidth - 80);
-        int height = 10;
+        int width = Math.max(0, Math.min(BOSS_BAR_TEXTURE_WIDTH * BOSS_BAR_SCALE, windowWidth - 80));
+        if (width <= 0) {
+            shader.unbind();
+            glEnable(GL_DEPTH_TEST);
+            return;
+        }
+        int height = BOSS_BAR_TEXTURE_HEIGHT * BOSS_BAR_SCALE;
         int x = (windowWidth - width) / 2;
-        int y = 18;
-        drawRect(x - 1, y - 1, width + 2, height + 2, 0.0f, 0.0f, 0.0f, 0.85f);
-        drawRect(x, y, width, height, 0.18f, 0.0f, 0.18f, 1.0f);
-        drawRect(x, y, Math.round(width * clamped), height, 0.65f, 0.0f, 0.72f, 1.0f);
-        shader.unbind();
+        int y = 20;
+        if (!drawTexturedBossBar(x, y, width, height, clamped, ortho)) {
+            drawRect(x - 1, y - 1, width + 2, height + 2, 0.0f, 0.0f, 0.0f, 0.85f);
+            drawRect(x, y, width, height, 0.18f, 0.0f, 0.18f, 1.0f);
+            drawRect(x, y, Math.round(width * clamped), height, 0.65f, 0.0f, 0.72f, 1.0f);
+        }
         if (textRenderer != null) {
             float scale = 1.0f;
             int textWidth = textRenderer.getStringWidth(name, scale);
-            textRenderer.drawText(name, (windowWidth - textWidth) / 2.0f, y + 13, scale,
+            drawHudTextShadowed(name, (windowWidth - textWidth) / 2.0f, 8.0f, scale,
                     new float[] { 1.0f, 1.0f, 1.0f, 1.0f });
+            restoreColorShader();
         }
+        shader.unbind();
         glEnable(GL_DEPTH_TEST);
     }
 
-    private void updateItemNameAnimation(Inventory inventory, float deltaTime) {
-        if (inventory == null) {
-            currentItemName = "";
-            lastSelectedSlot = -1;
-            return;
+    private boolean drawTexturedBossBar(int x, int y, int width, int height, float healthFraction, Matrix4f ortho) {
+        if (iconsTexture == null || width <= 0 || height <= 0) {
+            return false;
         }
-
-        int currentSlot = inventory.getSelectedSlot();
-        if (currentSlot != lastSelectedSlot) {
-            lastSelectedSlot = currentSlot;
-            ItemStack item = inventory.getHotbar()[currentSlot];
-            if (item != null && !item.isEmpty()) {
-                currentItemName = displayName(item.getType());
-                animationTime = 0f;
-            } else {
-                currentItemName = "";
-            }
+        shader.unbind();
+        iconsTexture.bind(0);
+        texturedShader.bind();
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+        float[] background = GuiTexture.getBossBarBackgroundUV();
+        drawTexturedQuad(x, y, x + width, y, x + width, y + height, x, y + height,
+                background[0], background[1], background[2], background[3]);
+        int sourceFill = Math.round(BOSS_BAR_TEXTURE_WIDTH * healthFraction);
+        if (sourceFill > 0) {
+            int fillWidth = Math.round(width * (sourceFill / (float) BOSS_BAR_TEXTURE_WIDTH));
+            float[] fill = GuiTexture.getBossBarFillUV(sourceFill);
+            drawTexturedQuad(x, y, x + fillWidth, y, x + fillWidth, y + height, x, y + height,
+                    fill[0], fill[1], fill[2], fill[3]);
         }
-
-        if (!currentItemName.isEmpty()) {
-            animationTime += deltaTime;
-        }
-    }
-
-    private String displayName(ItemType type) {
-        String rawName = type.toString();
-        String[] words = rawName.split("_");
-        StringBuilder sb = new StringBuilder();
-        for (String word : words) {
-            if (sb.length() > 0) {
-                sb.append(" ");
-            }
-            sb.append(word.charAt(0)).append(word.substring(1).toLowerCase());
-        }
-        return sb.toString();
+        texturedShader.unbind();
+        iconsTexture.unbind();
+        shader.bind();
+        shader.setUniform("projection", ortho);
+        return true;
     }
 
     private boolean hasBubbleAnimation() {
@@ -319,34 +598,801 @@ public class SurvivalHudRenderer {
         return false;
     }
 
-    private void renderItemName(boolean bubblesVisible) {
-        if (currentItemName.isEmpty() || animationTime >= TOTAL_DURATION || textRenderer == null) {
+    private void drawStatusEffects(List<StatusEffectInstance> effects) {
+        List<StatusEffectHudEntry> entries = statusEffectHudEntries(effects, windowWidth, STATUS_EFFECT_TOP_MARGIN);
+        if (entries.isEmpty()) {
             return;
         }
 
-        float alpha = 1.0f;
-        if (animationTime < FADE_IN_DURATION) {
-            alpha = animationTime / FADE_IN_DURATION;
-        } else if (animationTime > FADE_IN_DURATION + STAY_DURATION) {
-            float fadeOutTime = animationTime - (FADE_IN_DURATION + STAY_DURATION);
-            alpha = 1.0f - (fadeOutTime / FADE_OUT_DURATION);
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        shader.bind();
+        shader.setUniform("projection", ortho);
+
+        for (StatusEffectHudEntry entry : entries) {
+            drawStatusEffectIcon(entry, ortho);
         }
 
-        if (alpha <= 0) {
+        if (textRenderer == null) {
             return;
         }
 
-        float textScale = 2.0f;
-        int textWidth = textRenderer.getStringWidth(currentItemName, textScale);
-        float textX = (windowWidth - textWidth) / 2.0f;
-        float textY = windowHeight - 120;
-        if (bubblesVisible) {
-            textY -= 26;
+        shader.unbind();
+        for (StatusEffectHudEntry entry : entries) {
+            drawStatusEffectAmplifier(entry);
+        }
+        shader.bind();
+        shader.setUniform("projection", ortho);
+    }
+
+    private void drawStatusEffectIcon(StatusEffectHudEntry entry, Matrix4f ortho) {
+        float alpha = Math.max(0.35f, Math.min(1.0f, entry.warningAlpha()));
+        int x = entry.x();
+        int y = entry.y();
+        int size = entry.iconSize();
+        int inner = size - STATUS_EFFECT_ICON_BORDER * 2;
+
+        drawRect(x - 1, y - 1, size + 2, size + 2, 0.0f, 0.0f, 0.0f, 0.52f * alpha);
+        drawRect(x, y, size, size, 0.36f, 0.36f, 0.36f, 0.92f * alpha);
+        drawRect(x + 1, y + 1, size - 2, 1, 0.76f, 0.76f, 0.68f, 0.50f * alpha);
+        drawRect(x + 1, y + 1, 1, size - 2, 0.70f, 0.70f, 0.64f, 0.42f * alpha);
+        drawRect(x + 1, y + size - 2, size - 2, 1, 0.02f, 0.02f, 0.02f, 0.62f * alpha);
+        drawRect(x + size - 2, y + 1, 1, size - 2, 0.02f, 0.02f, 0.02f, 0.55f * alpha);
+        drawRect(x + STATUS_EFFECT_ICON_BORDER, y + STATUS_EFFECT_ICON_BORDER, inner, inner,
+                entry.red() * 0.42f, entry.green() * 0.42f, entry.blue() * 0.42f, 0.96f * alpha);
+        drawRect(x + STATUS_EFFECT_ICON_BORDER + 1, y + STATUS_EFFECT_ICON_BORDER + 1,
+                Math.max(1, inner - 2), Math.max(1, inner / 2),
+                Math.min(1.0f, entry.red() * 0.75f + 0.16f),
+                Math.min(1.0f, entry.green() * 0.75f + 0.16f),
+                Math.min(1.0f, entry.blue() * 0.75f + 0.16f),
+                0.26f * alpha);
+
+        int barX = x + 4;
+        int barY = y + size - STATUS_EFFECT_DURATION_BAR_HEIGHT - 4;
+        int barWidth = size - 8;
+        drawRect(barX, barY, barWidth, STATUS_EFFECT_DURATION_BAR_HEIGHT, 0.0f, 0.0f, 0.0f, 0.58f * alpha);
+        drawRect(barX, barY,
+                statusEffectDurationBarWidth(entry.durationTicks(), barWidth),
+                STATUS_EFFECT_DURATION_BAR_HEIGHT,
+                0.95f, 0.95f, 0.95f, 0.86f * alpha);
+
+        if (entry.iconItem() != null) {
+            int itemSize = size - STATUS_EFFECT_ITEM_INSET * 2;
+            drawItemSprite(x + STATUS_EFFECT_ITEM_INSET, y + STATUS_EFFECT_ITEM_INSET - 1, itemSize, entry.iconItem());
+            shader.bind();
+            shader.setUniform("projection", ortho);
+        }
+    }
+
+    private void drawStatusEffectAmplifier(StatusEffectHudEntry entry) {
+        if (entry.amplifierText().isEmpty()) {
+            return;
+        }
+        float alpha = Math.max(0.35f, Math.min(1.0f, entry.warningAlpha()));
+        int textWidth = textRenderer.getStringWidth(entry.amplifierText(), STATUS_EFFECT_AMPLIFIER_SCALE);
+        float x = entry.x() + entry.iconSize() - textWidth - 3.0f;
+        float y = entry.y() + 2.0f;
+        drawHudTextShadowed(entry.amplifierText(), x, y, STATUS_EFFECT_AMPLIFIER_SCALE,
+                new float[] { 1.0f, 1.0f, 1.0f, alpha });
+    }
+
+    private void drawAchievementNotification(AchievementTracker tracker, float deltaTime) {
+        if (tracker == null) {
+            return;
+        }
+        tracker.updateNotifications(deltaTime);
+        AchievementType achievement = tracker.activeNotification();
+        if (achievement == null) {
+            return;
+        }
+        float alpha = AchievementTracker.notificationAlpha(tracker.activeNotificationAge());
+        if (alpha <= 0.0f) {
+            return;
         }
 
-        textRenderer.drawText(currentItemName, textX + 2, textY + 2, textScale,
-                new float[] { 0f, 0f, 0f, alpha });
-        textRenderer.drawText(currentItemName, textX, textY, textScale, new float[] { 1f, 1f, 1f, alpha });
+        int width = Math.min(ACHIEVEMENT_TOAST_WIDTH, Math.max(160, windowWidth - ACHIEVEMENT_TOAST_MARGIN * 2));
+        int height = ACHIEVEMENT_TOAST_HEIGHT;
+        int x = windowWidth - width - ACHIEVEMENT_TOAST_MARGIN
+                + Math.round((1.0f - alpha) * (width + ACHIEVEMENT_TOAST_MARGIN));
+        int y = ACHIEVEMENT_TOAST_MARGIN;
+
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        shader.bind();
+        shader.setUniform("projection", ortho);
+        drawAchievementToastFrame(x, y, width, height, alpha, achievement.special(), ortho);
+
+        int iconSlotX = x + ACHIEVEMENT_TOAST_ICON_X;
+        int iconSlotY = y + ACHIEVEMENT_TOAST_ICON_Y;
+        int iconX = iconSlotX + (ACHIEVEMENT_TOAST_ICON_SLOT - ACHIEVEMENT_TOAST_ICON_SIZE) / 2;
+        int iconY = iconSlotY + (ACHIEVEMENT_TOAST_ICON_SLOT - ACHIEVEMENT_TOAST_ICON_SIZE) / 2;
+        drawAchievementToastIconSlot(iconSlotX, iconSlotY, alpha, achievement.special(), ortho);
+        drawAchievementToastIcon(achievement, iconX, iconY, ACHIEVEMENT_TOAST_ICON_SIZE, alpha, ortho);
+
+        if (textRenderer == null) {
+            shader.bind();
+            shader.setUniform("projection", ortho);
+            return;
+        }
+
+        float labelScale = 0.9f;
+        float titleScale = 1.05f;
+        float textX = x + 62.0f;
+        float labelY = y + 12.0f;
+        float titleY = y + 32.0f;
+        int maxTitleWidth = Math.max(24, width - 72);
+        String title = truncateTextToWidth(achievement.title(), maxTitleWidth, titleScale);
+        drawHudTextShadowed("Achievement get!", textX, labelY, labelScale,
+                new float[] { 1.0f, 1.0f, 0.45f, alpha });
+        drawHudTextShadowed(title, textX, titleY, titleScale,
+                new float[] { 1.0f, 1.0f, 1.0f, alpha });
+
+        shader.bind();
+        shader.setUniform("projection", ortho);
+    }
+
+    private void drawAchievementToastFrame(int x, int y, int width, int height, float alpha, boolean special,
+            Matrix4f ortho) {
+        if (achievementTexture != null) {
+            int panelHeight = Math.min(height - 12, ACHIEVEMENT_PANEL_H * ACHIEVEMENT_SOURCE_SCALE);
+            int panelY = y + (height - panelHeight) / 2;
+            drawAchievementTextureRegion(x, panelY, width, panelHeight,
+                    ACHIEVEMENT_PANEL_U, ACHIEVEMENT_PANEL_V, ACHIEVEMENT_PANEL_W, ACHIEVEMENT_PANEL_H,
+                    alpha, ortho);
+            float accentR = special ? 0.72f : 0.24f;
+            float accentG = special ? 0.48f : 0.23f;
+            float accentB = special ? 0.94f : 0.19f;
+            drawRect(x + 2, panelY + 2, width - 4, 1, accentR, accentG, accentB, 0.30f * alpha);
+            drawRect(x + 2, panelY + panelHeight - 3, width - 4, 1,
+                    0.0f, 0.0f, 0.0f, 0.45f * alpha);
+            return;
+        }
+        float accentR = special ? 0.86f : 0.54f;
+        float accentG = special ? 0.56f : 0.46f;
+        float accentB = special ? 0.98f : 0.34f;
+        drawRect(x, y, width, height, 0.0f, 0.0f, 0.0f, 0.82f * alpha);
+        drawRect(x + 1, y + 1, width - 2, height - 2, accentR * 0.50f, accentG * 0.50f, accentB * 0.50f,
+                0.90f * alpha);
+        drawRect(x + 2, y + 2, width - 4, height - 4, 0.19f, 0.18f, 0.16f, 0.94f * alpha);
+        drawRect(x + 3, y + 3, width - 6, 2, 0.48f, 0.46f, 0.39f, 0.42f * alpha);
+        drawRect(x + 3, y + height - 5, width - 6, 2, 0.02f, 0.02f, 0.02f, 0.58f * alpha);
+        drawRect(x + 3, y + 5, 2, height - 10, 0.38f, 0.36f, 0.31f, 0.32f * alpha);
+        drawRect(x + width - 5, y + 5, 2, height - 10, 0.02f, 0.02f, 0.02f, 0.40f * alpha);
+    }
+
+    private void drawAchievementToastIconSlot(int x, int y, float alpha, boolean special, Matrix4f ortho) {
+        if (achievementTexture != null) {
+            int size = ACHIEVEMENT_SLOT_SIZE * ACHIEVEMENT_SOURCE_SCALE;
+            int slotX = x + (ACHIEVEMENT_TOAST_ICON_SLOT - size) / 2;
+            int slotY = y + (ACHIEVEMENT_TOAST_ICON_SLOT - size) / 2;
+            int u = special ? ACHIEVEMENT_SPECIAL_SLOT_U : ACHIEVEMENT_SLOT_U;
+            drawAchievementTextureRegion(slotX, slotY, size, size,
+                    u, ACHIEVEMENT_SLOT_V, ACHIEVEMENT_SLOT_SIZE, ACHIEVEMENT_SLOT_SIZE, alpha, ortho);
+            return;
+        }
+        float slotR = special ? 0.28f : 0.18f;
+        float slotG = special ? 0.20f : 0.18f;
+        float slotB = special ? 0.36f : 0.18f;
+        drawRect(x, y, ACHIEVEMENT_TOAST_ICON_SLOT, ACHIEVEMENT_TOAST_ICON_SLOT, 0.02f, 0.02f, 0.02f,
+                0.70f * alpha);
+        drawRect(x + 2, y + 2, ACHIEVEMENT_TOAST_ICON_SLOT - 4, ACHIEVEMENT_TOAST_ICON_SLOT - 4,
+                0.40f, 0.38f, 0.33f, 0.65f * alpha);
+        drawRect(x + 4, y + 4, ACHIEVEMENT_TOAST_ICON_SLOT - 8, ACHIEVEMENT_TOAST_ICON_SLOT - 8,
+                slotR, slotG, slotB, 0.84f * alpha);
+        drawRect(x + 5, y + 5, ACHIEVEMENT_TOAST_ICON_SLOT - 10, 1,
+                0.74f, 0.70f, 0.58f, 0.35f * alpha);
+        drawRect(x + 5, y + ACHIEVEMENT_TOAST_ICON_SLOT - 6, ACHIEVEMENT_TOAST_ICON_SLOT - 10, 1,
+                0.0f, 0.0f, 0.0f, 0.45f * alpha);
+    }
+
+    private void drawAchievementToastIcon(AchievementType achievement, int x, int y, int size, float alpha,
+            Matrix4f ortho) {
+        ItemType icon = achievement == null ? null : achievement.icon();
+        if (icon == null) {
+            return;
+        }
+        boolean textured = atlas != null || itemsTexture != null;
+        if (!textured) {
+            drawSimpleSquare(x, y, size, 0.82f, 0.58f, 0.14f, alpha);
+            return;
+        }
+        if (icon.getRenderProfile().modelKind() == ItemRenderProfile.ModelKind.BLOCK) {
+            if (atlas != null) {
+                drawIsometricBlockIcon(x, y, size, icon, alpha);
+            } else {
+                drawSimpleSquare(x, y, size, 0.45f, 0.45f, 0.45f, alpha);
+            }
+        } else {
+            drawItemSprite(x, y, size, icon, alpha);
+        }
+        shader.bind();
+        shader.setUniform("projection", ortho);
+    }
+
+    private void drawAchievementTextureRegion(int x, int y, int width, int height,
+            int u, int v, int sourceWidth, int sourceHeight, float alpha, Matrix4f ortho) {
+        if (achievementTexture == null || width <= 0 || height <= 0) {
+            return;
+        }
+        shader.unbind();
+        achievementTexture.bind(0);
+        texturedShader.bind();
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+        texturedShader.setUniform("alpha", Math.max(0.0f, Math.min(1.0f, alpha)));
+        drawTexturedQuad(x, y, x + width, y, x + width, y + height, x, y + height,
+                u / (float) ACHIEVEMENT_TEXTURE_SIZE,
+                v / (float) ACHIEVEMENT_TEXTURE_SIZE,
+                (u + sourceWidth) / (float) ACHIEVEMENT_TEXTURE_SIZE,
+                (v + sourceHeight) / (float) ACHIEVEMENT_TEXTURE_SIZE);
+        texturedShader.setUniform("alpha", 1.0f);
+        texturedShader.unbind();
+        achievementTexture.unbind();
+        shader.bind();
+        shader.setUniform("projection", ortho);
+    }
+
+    private String truncateTextToWidth(String text, int maxWidth, float scale) {
+        if (text == null) {
+            return "";
+        }
+        if (textRenderer == null || textRenderer.getStringWidth(text, scale) <= maxWidth) {
+            return text;
+        }
+        String ellipsis = "...";
+        String candidate = text;
+        while (!candidate.isEmpty()
+                && textRenderer.getStringWidth(candidate + ellipsis, scale) > maxWidth) {
+            candidate = candidate.substring(0, candidate.length() - 1);
+        }
+        return candidate.isEmpty() ? ellipsis : candidate + ellipsis;
+    }
+
+    private void drawHudTextShadowed(String text, float x, float y, float scale, float[] color) {
+        textRenderer.drawText(text, x + 1, y + 1, scale,
+                new float[] { 0.0f, 0.0f, 0.0f, color[3] });
+        textRenderer.drawText(text, x, y, scale, color);
+    }
+
+    private void drawHeldMapOverlay(Inventory inventory, int hotbarY) {
+        if (inventory == null) {
+            return;
+        }
+        ItemStack held = inventory.getItemInHand();
+        MapItemData.View view = MapItemData.view(held);
+        if (view == null || !view.initialized()) {
+            return;
+        }
+
+        HeldMapLayout layout = heldMapLayout(windowWidth, windowHeight, hotbarY);
+        int mapSize = layout.mapSize();
+        int frame = layout.frame();
+        int x = layout.mapX();
+        int y = layout.mapY();
+        HeldMapHandPose hands = heldMapHandPose(layout);
+
+        drawHeldMapForearms(hands);
+        drawRect(x - frame, y - frame, mapSize + frame * 2, mapSize + frame * 2,
+                0.58f, 0.49f, 0.33f, 0.94f);
+        drawRect(x - frame + 2, y - frame + 2, mapSize + frame * 2 - 4, mapSize + frame * 2 - 4,
+                0.84f, 0.76f, 0.56f, 0.95f);
+        drawRect(x, y, mapSize, mapSize, 0.78f, 0.70f, 0.50f, 1.0f);
+
+        byte[] colors = view.colors();
+        for (int py = 0; py < layout.displayPixels(); py++) {
+            int sourceY = py * layout.sourceStep();
+            for (int px = 0; px < layout.displayPixels(); px++) {
+                int sourceX = px * layout.sourceStep();
+                int palette = colors[sourceX + sourceY * MapItemData.MAP_SIZE] & 0xFF;
+                int rgb = MapItemData.rgbForPaletteIndex(palette);
+                float r = ((rgb >> 16) & 0xFF) / 255.0f;
+                float g = ((rgb >> 8) & 0xFF) / 255.0f;
+                float b = (rgb & 0xFF) / 255.0f;
+                drawRect(x + px * layout.cellSize(), y + py * layout.cellSize(),
+                        layout.cellSize(), layout.cellSize(), r, g, b, 1.0f);
+            }
+        }
+
+        HeldMapMarker markerPosition = heldMapMarker(layout, view);
+        if (markerPosition != null) {
+            int markerX = markerPosition.x();
+            int markerY = markerPosition.y();
+            int marker = Math.max(6, layout.cellSize() * 4);
+            MarkerVector vector = markerVector(view.playerRotation(), marker);
+            int markerBody = markerPosition.edgeClamped() ? 4 : 3;
+            drawRect(markerX - markerBody / 2, markerY - markerBody / 2, markerBody, markerBody,
+                    0.05f, 0.05f, 0.05f, 1.0f);
+            drawRect(markerX + vector.tipX() - 1, markerY + vector.tipY() - 1, 3, 3,
+                    0.05f, 0.05f, 0.05f, 1.0f);
+            drawRect(markerX - vector.sideX(), markerY - vector.sideY(), 2, 2,
+                    0.05f, 0.05f, 0.05f, 1.0f);
+            drawRect(markerX + 1, markerY + 1, 1, 1, 1.0f, 1.0f, 1.0f, 1.0f);
+        }
+        drawHeldMapGripHands(hands);
+    }
+
+    private boolean drawFirstPersonFireOverlay(Matrix4f ortho) {
+        if (dynamicItemPlayer == null || !dynamicItemPlayer.isOnFire() || atlas == null || texturedShader == null) {
+            return false;
+        }
+        float[] uv = BlockType.FIRE.getTextureCoords(Block.FACE_NORTH);
+        atlas.bind(0);
+        texturedShader.bind();
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+        texturedShader.setUniform("alpha", 1.0f);
+        for (HudQuad quad : firstPersonFireOverlayQuads(windowWidth, windowHeight)) {
+            drawTexturedQuad(quad.x1(), quad.y1(), quad.x2(), quad.y2(), quad.x3(), quad.y3(), quad.x4(), quad.y4(),
+                    uv[0], uv[1], uv[2], uv[3]);
+        }
+        texturedShader.unbind();
+        atlas.unbind();
+        return true;
+    }
+
+    private boolean drawPumpkinHelmetOverlay(Inventory inventory, Matrix4f ortho) {
+        if (!isWearingPumpkin(inventory) || pumpkinOverlayTexture == null || texturedShader == null) {
+            return false;
+        }
+        pumpkinOverlayTexture.bind(0);
+        texturedShader.bind();
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+        texturedShader.setUniform("alpha", PUMPKIN_OVERLAY_ALPHA);
+        drawTexturedQuad(0.0f, 0.0f,
+                windowWidth, 0.0f,
+                windowWidth, windowHeight,
+                0.0f, windowHeight,
+                0.0f, 0.0f, 1.0f, 1.0f);
+        texturedShader.unbind();
+        pumpkinOverlayTexture.unbind();
+        return true;
+    }
+
+    private boolean drawVignetteOverlay(Matrix4f ortho) {
+        if (vignetteTexture == null || texturedShader == null || windowWidth <= 0 || windowHeight <= 0) {
+            return false;
+        }
+        float alpha = vignetteAlpha();
+        if (alpha <= 0.01f) {
+            return false;
+        }
+        vignetteTexture.bind(0);
+        texturedShader.bind();
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+        texturedShader.setUniform("alpha", alpha);
+        drawTexturedQuad(0.0f, 0.0f,
+                windowWidth, 0.0f,
+                windowWidth, windowHeight,
+                0.0f, windowHeight,
+                0.0f, 0.0f, 1.0f, 1.0f);
+        texturedShader.setUniform("alpha", 1.0f);
+        texturedShader.unbind();
+        vignetteTexture.unbind();
+        return true;
+    }
+
+    private float vignetteAlpha() {
+        if (dynamicItemWorld == null || dynamicItemPlayer == null) {
+            return VIGNETTE_MIN_ALPHA;
+        }
+        int x = (int) Math.floor(dynamicItemPlayer.getPosition().x);
+        int y = Math.max(0, Math.min(255, (int) Math.floor(dynamicItemPlayer.getEyeY())));
+        int z = (int) Math.floor(dynamicItemPlayer.getPosition().z);
+        int light = Math.max(dynamicItemWorld.getSkyLight(x, y, z), dynamicItemWorld.getBlockLight(x, y, z));
+        float darkness = 1.0f - Math.max(0.0f, Math.min(1.0f, light / 15.0f));
+        float eased = darkness * darkness * (3.0f - 2.0f * darkness);
+        return VIGNETTE_MIN_ALPHA + (VIGNETTE_MAX_ALPHA - VIGNETTE_MIN_ALPHA) * eased;
+    }
+
+    private boolean drawPortalOverlay(Matrix4f ortho, float deltaTime) {
+        if (portalOverlayTexture == null || texturedShader == null || windowWidth <= 0 || windowHeight <= 0) {
+            return false;
+        }
+        if (portalOverlayStrength <= 0.001f) {
+            portalOverlayTime = 0.0f;
+            return false;
+        }
+
+        portalOverlayTime += Math.max(0.0f, deltaTime);
+        float eased = portalOverlayStrength * portalOverlayStrength;
+        float alpha = PORTAL_OVERLAY_MIN_ALPHA + (PORTAL_OVERLAY_MAX_ALPHA - PORTAL_OVERLAY_MIN_ALPHA) * eased;
+        float repeat = PORTAL_OVERLAY_BASE_REPEAT + PORTAL_OVERLAY_EXTRA_REPEAT * (1.0f - portalOverlayStrength);
+        float drift = portalOverlayTime * (0.13f + 0.09f * portalOverlayStrength);
+        float u1 = -repeat + drift;
+        float v1 = -repeat - drift * 0.65f;
+        float u2 = repeat + drift;
+        float v2 = repeat - drift * 0.65f;
+
+        portalOverlayTexture.bind(0);
+        texturedShader.bind();
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+        texturedShader.setUniform("alpha", alpha);
+        drawTexturedQuad(0.0f, 0.0f,
+                windowWidth, 0.0f,
+                windowWidth, windowHeight,
+                0.0f, windowHeight,
+                u1, v1, u2, v2);
+        texturedShader.setUniform("alpha", 1.0f);
+        texturedShader.unbind();
+        portalOverlayTexture.unbind();
+        return true;
+    }
+
+    private boolean drawWaterOverlay(Matrix4f ortho, float deltaTime) {
+        if (dynamicItemPlayer == null || !dynamicItemPlayer.isHeadInWater()
+                || waterOverlayTexture == null || texturedShader == null
+                || windowWidth <= 0 || windowHeight <= 0) {
+            waterOverlayTime = 0.0f;
+            return false;
+        }
+
+        waterOverlayTime += Math.max(0.0f, deltaTime);
+        float drift = waterOverlayTime * 0.045f;
+        float wobble = (float) Math.sin(waterOverlayTime * 0.8f) * 0.025f;
+        float u1 = -WATER_OVERLAY_REPEAT + drift;
+        float v1 = -WATER_OVERLAY_REPEAT + wobble;
+        float u2 = WATER_OVERLAY_REPEAT + drift;
+        float v2 = WATER_OVERLAY_REPEAT + wobble;
+
+        waterOverlayTexture.bind(0);
+        texturedShader.bind();
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+        texturedShader.setUniform("alpha", WATER_OVERLAY_ALPHA);
+        drawTexturedQuad(0.0f, 0.0f,
+                windowWidth, 0.0f,
+                windowWidth, windowHeight,
+                0.0f, windowHeight,
+                u1, v1, u2, v2);
+        texturedShader.setUniform("alpha", 1.0f);
+        texturedShader.unbind();
+        waterOverlayTexture.unbind();
+        return true;
+    }
+
+    private boolean isWearingPumpkin(Inventory inventory) {
+        if (inventory == null || inventory.getArmor() == null) {
+            return false;
+        }
+        int helmetSlot = ArmorSlot.HELMET.getIndex();
+        if (helmetSlot < 0 || helmetSlot >= inventory.getArmor().length) {
+            return false;
+        }
+        ItemStack helmet = inventory.getArmor()[helmetSlot];
+        return helmet != null && !helmet.isEmpty() && helmet.getType() == ItemType.PUMPKIN;
+    }
+
+    private void drawHeldMapForearms(HeldMapHandPose hands) {
+        drawHudQuad(hands.leftSleeve(), 0.21f, 0.16f, 0.12f, 0.98f);
+        drawHudQuad(hands.rightSleeve(), 0.21f, 0.16f, 0.12f, 0.98f);
+    }
+
+    private void drawHeldMapGripHands(HeldMapHandPose hands) {
+        drawHudQuad(hands.leftHand(), 0.78f, 0.58f, 0.40f, 1.0f);
+        drawHudQuad(hands.rightHand(), 0.78f, 0.58f, 0.40f, 1.0f);
+        drawShapeOutline(hands.leftHand().vertices(), 4, 0.24f, 0.14f, 0.08f, 0.85f);
+        drawShapeOutline(hands.rightHand().vertices(), 4, 0.24f, 0.14f, 0.08f, 0.85f);
+    }
+
+    private void drawHudQuad(HudQuad quad, float r, float g, float b, float a) {
+        drawShape(quad.vertices(), 4, r, g, b, a);
+    }
+
+    static HeldMapHandPose heldMapHandPose(HeldMapLayout layout) {
+        int mapSize = layout.mapSize();
+        float frame = layout.frame();
+        float outerLeft = layout.mapX() - frame;
+        float outerRight = layout.mapX() + mapSize + frame;
+        float outerBottom = layout.mapY() + mapSize + frame;
+        float gripY = layout.mapY() + mapSize - clamp(mapSize * 0.08f, 7.0f, 24.0f);
+
+        float sleeveWidth = clamp(mapSize * 0.16f, 18.0f, 58.0f);
+        float sleeveLength = clamp(mapSize * 0.30f, 36.0f, 112.0f);
+        float bottomSpread = clamp(mapSize * 0.15f, 18.0f, 58.0f);
+        float inset = clamp(mapSize * 0.045f, 6.0f, 18.0f);
+        float handWidth = clamp(mapSize * 0.095f, 11.0f, 28.0f);
+        float handHeight = clamp(mapSize * 0.085f, 10.0f, 24.0f);
+
+        float leftTopX = outerLeft + inset;
+        float leftBottomX = leftTopX - bottomSpread;
+        HudQuad leftSleeve = new HudQuad(
+                leftTopX, gripY + handHeight * 0.45f,
+                leftTopX + sleeveWidth, gripY + handHeight * 0.10f,
+                leftBottomX + sleeveWidth, outerBottom + sleeveLength,
+                leftBottomX, outerBottom + sleeveLength);
+        HudQuad leftHand = new HudQuad(
+                leftTopX + sleeveWidth * 0.28f, gripY - handHeight * 0.30f,
+                leftTopX + sleeveWidth * 0.28f + handWidth, gripY - handHeight * 0.05f,
+                leftTopX + sleeveWidth * 0.18f + handWidth, gripY + handHeight,
+                leftTopX + sleeveWidth * 0.18f, gripY + handHeight * 0.78f);
+
+        float rightTopX = outerRight - inset - sleeveWidth;
+        float rightBottomX = rightTopX + bottomSpread;
+        HudQuad rightSleeve = new HudQuad(
+                rightTopX, gripY + handHeight * 0.10f,
+                rightTopX + sleeveWidth, gripY + handHeight * 0.45f,
+                rightBottomX + sleeveWidth, outerBottom + sleeveLength,
+                rightBottomX, outerBottom + sleeveLength);
+        HudQuad rightHand = new HudQuad(
+                rightTopX + sleeveWidth * 0.72f - handWidth, gripY - handHeight * 0.05f,
+                rightTopX + sleeveWidth * 0.72f, gripY - handHeight * 0.30f,
+                rightTopX + sleeveWidth * 0.82f, gripY + handHeight * 0.78f,
+                rightTopX + sleeveWidth * 0.82f - handWidth, gripY + handHeight);
+
+        return new HeldMapHandPose(leftSleeve, leftHand, rightSleeve, rightHand);
+    }
+
+    private static float clamp(float value, float min, float max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    static HeldMapLayout heldMapLayout(int windowWidth, int windowHeight, int hotbarY) {
+        int bottomLimit = Math.max(HELD_MAP_TOP_MARGIN + HELD_MAP_MIN_DISPLAY_PIXELS,
+                Math.min(hotbarY, windowHeight - 8));
+
+        for (int displayPixels = MapItemData.MAP_SIZE;
+                displayPixels >= HELD_MAP_MIN_DISPLAY_PIXELS;
+                displayPixels /= 2) {
+            int sourceStep = Math.max(1, MapItemData.MAP_SIZE / displayPixels);
+            for (int cellSize = HELD_MAP_MAX_CELL_SIZE; cellSize >= 1; cellSize--) {
+                int frame = heldMapFrameForCell(cellSize);
+                int mapSize = displayPixels * cellSize;
+                boolean fitsWidth = mapSize + frame * 2 <= windowWidth - HELD_MAP_SIDE_MARGIN;
+                boolean fitsHeight = bottomLimit - (mapSize + frame * 2 + HELD_MAP_BOTTOM_GAP)
+                        >= HELD_MAP_TOP_MARGIN;
+                if (fitsWidth && fitsHeight) {
+                    int x = (windowWidth - mapSize) / 2;
+                    int y = bottomLimit - mapSize - frame * 2 - HELD_MAP_BOTTOM_GAP + frame;
+                    return new HeldMapLayout(x, y, displayPixels, sourceStep, cellSize, frame);
+                }
+            }
+        }
+
+        int fallbackFrame = heldMapFrameForCell(1);
+        int fallbackPixels = HELD_MAP_MIN_DISPLAY_PIXELS;
+        int x = Math.max(fallbackFrame, (windowWidth - fallbackPixels) / 2);
+        int y = Math.max(HELD_MAP_TOP_MARGIN + fallbackFrame, bottomLimit - fallbackPixels
+                - fallbackFrame - HELD_MAP_BOTTOM_GAP);
+        return new HeldMapLayout(x, y, fallbackPixels, MapItemData.MAP_SIZE / fallbackPixels, 1, fallbackFrame);
+    }
+
+    private static int heldMapFrameForCell(int cellSize) {
+        return Math.max(8, cellSize * 5);
+    }
+
+    static HeldMapMarker heldMapMarker(HeldMapLayout layout, MapItemData.View view) {
+        if (layout == null || view == null || view.playerRotation() < 0) {
+            return null;
+        }
+        int clampedX = clamp(view.playerPixelX(), 0, MapItemData.MAP_SIZE - 1);
+        int clampedZ = clamp(view.playerPixelZ(), 0, MapItemData.MAP_SIZE - 1);
+        boolean edgeClamped = clampedX != view.playerPixelX() || clampedZ != view.playerPixelZ();
+        int displayX = Math.min(layout.displayPixels() - 1, clampedX / layout.sourceStep());
+        int displayZ = Math.min(layout.displayPixels() - 1, clampedZ / layout.sourceStep());
+        return new HeldMapMarker(
+                layout.mapX() + displayX * layout.cellSize(),
+                layout.mapY() + displayZ * layout.cellSize(),
+                edgeClamped);
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    static List<HudQuad> firstPersonFireOverlayQuads(int windowWidth, int windowHeight) {
+        float screenWidth = Math.max(1.0f, windowWidth);
+        float screenHeight = Math.max(1.0f, windowHeight);
+        float height = clamp(screenHeight * FIRE_OVERLAY_HEIGHT_RATIO,
+                FIRE_OVERLAY_MIN_HEIGHT, FIRE_OVERLAY_MAX_HEIGHT);
+        float width = height * FIRE_OVERLAY_WIDTH_RATIO;
+        float centerX = screenWidth * 0.5f;
+        float innerGap = clamp(screenWidth * 0.055f, 24.0f, 72.0f);
+        float bottom = screenHeight + height * FIRE_OVERLAY_BOTTOM_OVERSCAN_RATIO;
+        float top = bottom - height;
+
+        HudQuad left = new HudQuad(
+                centerX - innerGap - width * 0.95f, top,
+                centerX - innerGap + width * 0.12f, top,
+                centerX - innerGap - width * 0.05f, bottom,
+                centerX - innerGap - width * 1.08f, bottom);
+        HudQuad right = new HudQuad(
+                centerX + innerGap - width * 0.12f, top,
+                centerX + innerGap + width * 0.95f, top,
+                centerX + innerGap + width * 1.08f, bottom,
+                centerX + innerGap + width * 0.05f, bottom);
+        return List.of(left, right);
+    }
+
+    static MarkerVector markerVector(int rotation, int markerSize) {
+        if (rotation < 0) {
+            return new MarkerVector(0, -Math.max(2, markerSize / 2), 0, 1);
+        }
+        int radius = Math.max(2, markerSize / 2);
+        double angle = rotation * Math.PI * 2.0 / 16.0 - Math.PI / 2.0;
+        int tipX = Math.round((float) Math.cos(angle) * radius);
+        int tipY = Math.round((float) Math.sin(angle) * radius);
+        int sideX = Math.round((float) Math.cos(angle + Math.PI / 2.0));
+        int sideY = Math.round((float) Math.sin(angle + Math.PI / 2.0));
+        return new MarkerVector(tipX, tipY, sideX, sideY);
+    }
+
+    record MarkerVector(int tipX, int tipY, int sideX, int sideY) {
+    }
+
+    record HeldMapHandPose(HudQuad leftSleeve, HudQuad leftHand, HudQuad rightSleeve, HudQuad rightHand) {
+    }
+
+    record HeldMapMarker(int x, int y, boolean edgeClamped) {
+    }
+
+    record HudQuad(float x1, float y1, float x2, float y2, float x3, float y3, float x4, float y4) {
+        float[] vertices() {
+            return new float[] { x1, y1, x2, y2, x3, y3, x4, y4 };
+        }
+
+        float minX() {
+            return Math.min(Math.min(x1, x2), Math.min(x3, x4));
+        }
+
+        float maxX() {
+            return Math.max(Math.max(x1, x2), Math.max(x3, x4));
+        }
+
+        float minY() {
+            return Math.min(Math.min(y1, y2), Math.min(y3, y4));
+        }
+
+        float maxY() {
+            return Math.max(Math.max(y1, y2), Math.max(y3, y4));
+        }
+
+        float centerX() {
+            return (x1 + x2 + x3 + x4) * 0.25f;
+        }
+    }
+
+    record HeldMapLayout(int mapX, int mapY, int displayPixels, int sourceStep, int cellSize, int frame) {
+        int mapSize() {
+            return displayPixels * cellSize;
+        }
+
+        int frameY() {
+            return mapY - frame;
+        }
+
+        int bottomY() {
+            return mapY + mapSize() + frame;
+        }
+    }
+
+    static List<StatusEffectHudEntry> statusEffectHudEntries(List<StatusEffectInstance> effects,
+            int screenWidth, int topMargin) {
+        List<StatusEffectInstance> visible = new ArrayList<>();
+        if (effects != null) {
+            for (StatusEffectInstance effect : effects) {
+                if (effect != null && !effect.expired()) {
+                    visible.add(effect);
+                }
+            }
+        }
+        visible.sort(Comparator.comparingInt(effect -> effect.type().ordinal()));
+
+        List<StatusEffectHudEntry> entries = new ArrayList<>(visible.size());
+        int x = Math.max(2, screenWidth - STATUS_EFFECT_RIGHT_MARGIN - STATUS_EFFECT_ICON_SIZE);
+        for (int i = 0; i < visible.size(); i++) {
+            StatusEffectInstance effect = visible.get(i);
+            int y = Math.max(2, topMargin) + i * (STATUS_EFFECT_ICON_SIZE + STATUS_EFFECT_SPACING);
+            int color = StatusEffectVisuals.color(effect.type());
+            entries.add(new StatusEffectHudEntry(
+                    effect.type(),
+                    x,
+                    y,
+                    STATUS_EFFECT_ICON_SIZE,
+                    statusEffectDisplayName(effect.type()),
+                    statusEffectDuration(effect.durationTicks()),
+                    statusEffectAmplifier(effect.amplifier()),
+                    statusEffectWarningAlpha(effect.durationTicks()),
+                    effect.durationTicks(),
+                    ((color >> 16) & 0xFF) / 255.0f,
+                    ((color >> 8) & 0xFF) / 255.0f,
+                    (color & 0xFF) / 255.0f,
+                    statusEffectIconItem(effect.type())));
+        }
+        return entries;
+    }
+
+    static String statusEffectDuration(int durationTicks) {
+        int seconds = Math.max(1, (Math.max(0, durationTicks) + 19) / 20);
+        int minutes = seconds / 60;
+        int remainingSeconds = seconds % 60;
+        return minutes + ":" + (remainingSeconds < 10 ? "0" : "") + remainingSeconds;
+    }
+
+    static String statusEffectAmplifier(int amplifier) {
+        int level = Math.max(0, amplifier) + 1;
+        if (level <= 1) {
+            return "";
+        }
+        String[] roman = { "", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X" };
+        if (level < roman.length) {
+            return roman[level];
+        }
+        return String.valueOf(level);
+    }
+
+    static float statusEffectWarningAlpha(int durationTicks) {
+        if (durationTicks > STATUS_EFFECT_LOW_TIME_TICKS) {
+            return 1.0f;
+        }
+        return ((Math.max(0, durationTicks) / 5) % 2 == 0) ? 1.0f : 0.45f;
+    }
+
+    static int statusEffectDurationBarWidth(int durationTicks, int maxWidth) {
+        if (maxWidth <= 0 || durationTicks <= 0) {
+            return 0;
+        }
+        if (durationTicks > STATUS_EFFECT_LOW_TIME_TICKS) {
+            return maxWidth;
+        }
+        float fraction = Math.max(0.0f, Math.min(1.0f, durationTicks / (float) STATUS_EFFECT_LOW_TIME_TICKS));
+        return Math.max(1, Math.round(maxWidth * fraction));
+    }
+
+    private static String statusEffectDisplayName(StatusEffectType type) {
+        if (type == null) {
+            return "";
+        }
+        return switch (type) {
+            case SPEED -> "Speed";
+            case SLOWNESS -> "Slowness";
+            case HASTE -> "Haste";
+            case MINING_FATIGUE -> "Mining Fatigue";
+            case STRENGTH -> "Strength";
+            case INSTANT_HEALTH -> "Instant Health";
+            case INSTANT_DAMAGE -> "Instant Damage";
+            case JUMP_BOOST -> "Jump Boost";
+            case NAUSEA -> "Nausea";
+            case REGENERATION -> "Regeneration";
+            case RESISTANCE -> "Resistance";
+            case FIRE_RESISTANCE -> "Fire Resistance";
+            case WATER_BREATHING -> "Water Breathing";
+            case INVISIBILITY -> "Invisibility";
+            case BLINDNESS -> "Blindness";
+            case NIGHT_VISION -> "Night Vision";
+            case HUNGER -> "Hunger";
+            case WEAKNESS -> "Weakness";
+            case POISON -> "Poison";
+        };
+    }
+
+    private static ItemType statusEffectIconItem(StatusEffectType type) {
+        if (type == null) {
+            return null;
+        }
+        return switch (type) {
+            case SPEED -> ItemType.SUGAR;
+            case SLOWNESS, WEAKNESS -> ItemType.FERMENTED_SPIDER_EYE;
+            case STRENGTH -> ItemType.BLAZE_POWDER;
+            case INSTANT_HEALTH, REGENERATION, RESISTANCE -> ItemType.GOLDEN_APPLE;
+            case INSTANT_DAMAGE, POISON -> ItemType.SPIDER_EYE;
+            case FIRE_RESISTANCE -> ItemType.MAGMA_CREAM;
+            case HUNGER -> ItemType.ROTTEN_FLESH;
+            case HASTE, MINING_FATIGUE -> ItemType.BLAZE_ROD;
+            case WATER_BREATHING -> ItemType.POTION;
+            case INVISIBILITY, BLINDNESS, NIGHT_VISION, NAUSEA, JUMP_BOOST -> ItemType.GHAST_TEAR;
+        };
+    }
+
+    record StatusEffectHudEntry(StatusEffectType type, int x, int y, int iconSize,
+            String displayName, String durationText, String amplifierText, float warningAlpha,
+            int durationTicks, float red, float green, float blue, ItemType iconItem) {
     }
 
     private void drawHotbar(Inventory inventory, int centerX, int y) {
@@ -376,7 +1422,7 @@ public class SurvivalHudRenderer {
             ItemStack item = items[i];
             if (item != null && !item.isEmpty()) {
                 // Remove +4 offset to center correctly (internal +2 offset handles padding)
-                drawItemIcon(slotX, y, item.getType());
+                drawItemIcon(slotX, y, item);
 
                 // Draw stack count (if > 1)
                 if (item.getCount() > 1) {
@@ -418,11 +1464,9 @@ public class SurvivalHudRenderer {
         ItemStack[] items = inventory.getHotbar();
         int selected = inventory.getSelectedSlot();
 
-        // Scale hotbar to our slot size (original is 182x22 for 9 slots = ~20px per
-        // slot)
-        float scale = HOTBAR_SLOT_SIZE / 20.0f; // Scale factor to match our slot size
-        int hotbarWidth = (int) (182 * scale);
-        int hotbarHeight = (int) (22 * scale);
+        float scale = HOTBAR_SLOT_SIZE / (float) HOTBAR_SLOT_TEXTURE_PITCH;
+        int hotbarWidth = Math.round(HOTBAR_TEXTURE_WIDTH * scale);
+        int hotbarHeight = Math.round(HOTBAR_TEXTURE_HEIGHT * scale);
         int startX = centerX - hotbarWidth / 2;
         int hotbarY = y;
 
@@ -447,10 +1491,11 @@ public class SurvivalHudRenderer {
 
         // Draw selection frame
         float[] selectionUV = GuiTexture.getHotbarSelectionUV();
-        int selectionSize = (int) (24 * scale);
-        int slotWidth = (int) (20 * scale);
-        int selX = startX + selected * slotWidth - (selectionSize - slotWidth) / 2 + 3;
-        int selY = hotbarY - (selectionSize - hotbarHeight) / 2;
+        int selectionSize = Math.round(HOTBAR_SELECTION_TEXTURE_SIZE * scale);
+        int slotWidth = Math.round(HOTBAR_SLOT_TEXTURE_PITCH * scale);
+        int selX = startX
+                + Math.round((selected * HOTBAR_SLOT_TEXTURE_PITCH + HOTBAR_SELECTION_TEXTURE_OFFSET) * scale);
+        int selY = hotbarY + Math.round(HOTBAR_SELECTION_TEXTURE_OFFSET * scale);
 
         drawTexturedQuad(
                 selX, selY,
@@ -465,21 +1510,22 @@ public class SurvivalHudRenderer {
         shader.setUniform("projection", ortho);
 
         // Draw item icons on top of hotbar
-        int itemSize = (int) (14 * scale); // Slightly smaller to prevent clipping
-        int itemOffset = (slotWidth - itemSize) / 2;
+        int itemSize = Math.round(HOTBAR_ITEM_TEXTURE_SIZE * scale);
+        int itemInset = Math.round(HOTBAR_ITEM_TEXTURE_INSET * scale);
 
         for (int i = 0; i < 9; i++) {
             ItemStack item = items[i];
             if (item != null && !item.isEmpty()) {
-                // Add +3 offset to itemX to center isometric blocks better (they extend left)
-                int itemX = startX + i * slotWidth + itemOffset + 3;
-                int itemY = hotbarY + (hotbarHeight - itemSize) / 2;
+                int itemX = startX + Math.round((i * HOTBAR_SLOT_TEXTURE_PITCH) * scale) + itemInset;
+                int itemY = hotbarY + itemInset;
 
                 if (item.getType().getRenderProfile().modelKind() == com.craftzero.inventory.ItemRenderProfile.ModelKind.BLOCK) {
                     drawIsometricBlockIcon(itemX, itemY, itemSize, item.getType());
                 } else {
                     drawItemSprite(itemX, itemY, itemSize, item.getType());
                 }
+                drawDynamicItemOverlay(itemX, itemY, itemSize, item.getType());
+                drawEnchantedItemOverlay(itemX, itemY, itemSize, item);
 
                 // Draw stack count
                 if (item.getCount() > 1) {
@@ -493,6 +1539,9 @@ public class SurvivalHudRenderer {
      * Draw stack count at a specific slot position.
      */
     private void drawStackCountAt(int slotX, int slotY, int slotWidth, int slotHeight, int count) {
+        if (drawBitmapStackCount(slotX, slotY, slotWidth, slotHeight, count, 3, 3)) {
+            return;
+        }
         String countStr = String.valueOf(count);
         int digitWidth = 6;
         int digitHeight = 8;
@@ -512,6 +1561,9 @@ public class SurvivalHudRenderer {
     }
 
     private void drawRect(int x, int y, int w, int h, float r, float g, float b, float a) {
+        if (w <= 0 || h <= 0) {
+            return;
+        }
         float[] vertices = {
                 x, y,
                 x + w, y,
@@ -519,6 +1571,38 @@ public class SurvivalHudRenderer {
                 x, y + h
         };
         drawShape(vertices, 4, r, g, b, a);
+    }
+
+    private boolean drawBitmapStackCount(int slotX, int slotY, int slotWidth, int slotHeight,
+            int count, int rightInset, int bottomInset) {
+        if (textRenderer == null) {
+            return false;
+        }
+        String countText = String.valueOf(count);
+        int textWidth = textRenderer.getStringWidth(countText, 1.0f);
+        int x = slotX + slotWidth - textWidth - rightInset;
+        int y = slotY + slotHeight - 8 - bottomInset;
+        textRenderer.drawText(countText, x + 1, y + 1, 1.0f, new float[] { 0.15f, 0.15f, 0.15f, 1.0f });
+        textRenderer.drawText(countText, x, y, 1.0f, new float[] { 1.0f, 1.0f, 1.0f, 1.0f });
+        restoreColorShader();
+        return true;
+    }
+
+    private void restoreColorShader() {
+        if (shader == null) {
+            return;
+        }
+        shader.bind();
+        shader.setUniform("projection", new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1));
+    }
+
+    private void drawItemIcon(int x, int y, ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return;
+        }
+        drawItemIcon(x, y, stack.getType());
+        drawDynamicItemOverlay(x + 4, y + 4, HOTBAR_SLOT_SIZE - 8, stack.getType());
+        drawEnchantedItemOverlay(x + 4, y + 4, HOTBAR_SLOT_SIZE - 8, stack);
     }
 
     private void drawItemIcon(int x, int y, ItemType type) {
@@ -546,10 +1630,115 @@ public class SurvivalHudRenderer {
         drawSimpleSquare(x + 2, y + 2, HOTBAR_SLOT_SIZE - 4, r, g, b, 1.0f);
     }
 
+    private void drawEnchantedItemOverlay(int x, int y, int size, ItemStack stack) {
+        if (!EnchantedItemVisuals.shouldDrawGlint(stack)) {
+            return;
+        }
+        if (drawTexturedEnchantedItemOverlay(x, y, size)) {
+            return;
+        }
+
+        float[] wash = EnchantedItemVisuals.glintWashColor();
+        drawRect(x, y, size, size, wash[0], wash[1], wash[2], wash[3]);
+
+        float[] color = EnchantedItemVisuals.glintColor();
+        for (EnchantedItemVisuals.Band band : EnchantedItemVisuals.glintBands(x, y, size)) {
+            drawShape(band.copyVertices(), band.vertexCount(), color[0], color[1], color[2], color[3]);
+        }
+    }
+
+    private boolean drawTexturedEnchantedItemOverlay(int x, int y, int size) {
+        Texture glint = GuiTexture.getGlintTexture();
+        if (glint == null || size <= 0) {
+            return false;
+        }
+
+        shader.unbind();
+        glint.bind(0);
+        texturedShader.bind();
+        Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
+        texturedShader.setUniform("projection", ortho);
+        texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("brightness", 1.0f);
+
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(x, Math.max(0, windowHeight - y - size), size, size);
+        glBlendFunc(GL_SRC_COLOR, GL_ONE);
+        for (EnchantedItemVisuals.TexturePass pass : EnchantedItemVisuals.texturePasses(x, y, size)) {
+            float[] vertices = pass.copyVertices();
+            if (vertices.length >= 8) {
+                drawTexturedQuad(
+                        vertices[0], vertices[1],
+                        vertices[2], vertices[3],
+                        vertices[4], vertices[5],
+                        vertices[6], vertices[7],
+                        pass.u1(), pass.v1(), pass.u2(), pass.v2());
+            }
+        }
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_SCISSOR_TEST);
+
+        texturedShader.unbind();
+        glint.unbind();
+        shader.bind();
+        shader.setUniform("projection", ortho);
+        return true;
+    }
+
+    private void drawDynamicItemOverlay(int x, int y, int size, ItemType type) {
+        ItemTextureResolver.DynamicItemState state =
+                ItemTextureResolver.dynamicItemState(type, dynamicItemWorld, dynamicItemPlayer);
+        if (!state.active()) {
+            return;
+        }
+
+        int centerX = Math.round(x + size * 0.5f);
+        int centerY = Math.round(y + size * 0.5f);
+        int radius = Math.max(4, Math.round(size * 0.33f));
+        int width = Math.max(1, Math.round(size * 0.045f));
+        if (type == ItemType.COMPASS) {
+            drawDynamicPointer(centerX, centerY, state.angleRadians() + (float) Math.PI,
+                    Math.max(2, Math.round(radius * 0.42f)), Math.max(1, width - 1),
+                    0.86f, 0.86f, 0.86f, 0.92f);
+            drawDynamicPointer(centerX, centerY, state.angleRadians(), radius, width,
+                    0.92f, 0.08f, 0.04f, 0.96f);
+        } else if (type == ItemType.CLOCK) {
+            drawDynamicPointer(centerX, centerY, state.angleRadians(), radius, width,
+                    1.0f, 0.83f, 0.25f, 0.95f);
+        }
+
+        int hub = Math.max(2, Math.round(size * 0.11f));
+        drawRect(centerX - hub / 2, centerY - hub / 2, hub, hub,
+                0.08f, 0.08f, 0.08f, 0.90f);
+    }
+
+    private void drawDynamicPointer(int centerX, int centerY, float angleRadians, int radius, int halfWidth,
+            float r, float g, float b, float a) {
+        float sin = (float) Math.sin(angleRadians);
+        float cos = (float) Math.cos(angleRadians);
+        float startX = centerX - sin * Math.max(1, halfWidth);
+        float startY = centerY + cos * Math.max(1, halfWidth);
+        float endX = centerX + sin * radius;
+        float endY = centerY - cos * radius;
+        float perpX = cos * halfWidth;
+        float perpY = sin * halfWidth;
+        float[] vertices = {
+                startX - perpX, startY - perpY,
+                startX + perpX, startY + perpY,
+                endX + perpX, endY + perpY,
+                endX - perpX, endY - perpY
+        };
+        drawShape(vertices, 4, r, g, b, a);
+    }
+
     /**
      * Draw an item as a flat 2D sprite (for sticks, tools, etc).
      */
     private void drawItemSprite(int x, int y, int size, ItemType type) {
+        drawItemSprite(x, y, size, type, 1.0f);
+    }
+
+    private void drawItemSprite(int x, int y, int size, ItemType type, float alpha) {
         float[] uv;
         Texture texToUse;
 
@@ -565,6 +1754,8 @@ public class SurvivalHudRenderer {
         if (texToUse == null)
             return;
 
+        uv = insetIconUv(uv);
+
         shader.unbind();
         texToUse.bind(0);
         texturedShader.bind();
@@ -572,11 +1763,13 @@ public class SurvivalHudRenderer {
         texturedShader.setUniform("projection", ortho);
         texturedShader.setUniform("textureSampler", 0);
         texturedShader.setUniform("brightness", 1.0f);
+        texturedShader.setUniform("alpha", clamp(alpha, 0.0f, 1.0f));
 
         // Simple square sprite
         drawTexturedQuad(x, y, x + size, y, x + size, y + size, x, y + size,
                 uv[0], uv[1], uv[2], uv[3]);
 
+        texturedShader.setUniform("alpha", 1.0f);
         texturedShader.unbind();
         texToUse.unbind(); // Unbind correct texture
         shader.bind();
@@ -589,19 +1782,19 @@ public class SurvivalHudRenderer {
      * Orientation: top corner pointing straight up at 45 degrees.
      */
     private void drawIsometricBlockIcon(int x, int y, int size, ItemType type) {
-        // Get UVs for each face
-        float[] topUV = type.getTextureCoords(0); // Top face
-        float[] sideUV = type.getTextureCoords(2); // Side face
+        drawIsometricBlockIcon(x, y, size, type, 1.0f);
+    }
 
-        // Minecraft-style isometric proportions
-        // The cube is viewed from above at an angle, with top corner pointing up
-        float halfW = size * 0.5f;
-        float quarterH = size * 0.25f; // Height of top diamond
-        float sideH = size * 0.5f; // Height of side faces
+    private void drawIsometricBlockIcon(int x, int y, int size, ItemType type, float alpha) {
+        float[] topUV = insetIconUv(type.getTextureCoords(0));
+        float[] sideUV = insetIconUv(type.getTextureCoords(2));
 
-        // Center point of the icon
-        float cx = x + halfW;
-        float cy = y + size * 0.3f; // Vertical center shifted up
+        float halfW = size * BLOCK_ICON_HALF_WIDTH;
+        float quarterH = size * BLOCK_ICON_TOP_HALF_HEIGHT;
+        float sideH = size * BLOCK_ICON_SIDE_HEIGHT;
+
+        float cx = x + size * (BLOCK_ICON_CENTER_X + BLOCK_ICON_CENTER_X_BIAS);
+        float cy = y + size * BLOCK_ICON_CENTER_Y;
 
         shader.unbind();
         atlas.bind(0);
@@ -609,9 +1802,9 @@ public class SurvivalHudRenderer {
         Matrix4f ortho = new Matrix4f().ortho(0, windowWidth, windowHeight, 0, -1, 1);
         texturedShader.setUniform("projection", ortho);
         texturedShader.setUniform("textureSampler", 0);
+        texturedShader.setUniform("alpha", clamp(alpha, 0.0f, 1.0f));
 
-        // Draw TOP face (diamond shape, brightest) - top corner pointing UP
-        texturedShader.setUniform("brightness", 1.0f);
+        texturedShader.setUniform("brightness", BLOCK_ICON_TOP_BRIGHTNESS);
         drawTexturedQuad(
                 cx, cy - quarterH, // Top corner (pointing up)
                 cx + halfW, cy, // Right corner
@@ -619,8 +1812,7 @@ public class SurvivalHudRenderer {
                 cx - halfW, cy, // Left corner
                 topUV[0], topUV[1], topUV[2], topUV[3]);
 
-        // Draw LEFT face (parallelogram, medium brightness)
-        texturedShader.setUniform("brightness", 0.6f);
+        texturedShader.setUniform("brightness", BLOCK_ICON_LEFT_BRIGHTNESS);
         drawTexturedQuad(
                 cx - halfW, cy, // Top-left
                 cx, cy + quarterH, // Top-right
@@ -628,8 +1820,7 @@ public class SurvivalHudRenderer {
                 cx - halfW, cy + sideH, // Bottom-left
                 sideUV[0], sideUV[1], sideUV[2], sideUV[3]);
 
-        // Draw RIGHT face (parallelogram, darkest)
-        texturedShader.setUniform("brightness", 0.45f);
+        texturedShader.setUniform("brightness", BLOCK_ICON_RIGHT_BRIGHTNESS);
         drawTexturedQuad(
                 cx, cy + quarterH, // Top-left
                 cx + halfW, cy, // Top-right
@@ -637,12 +1828,22 @@ public class SurvivalHudRenderer {
                 cx, cy + quarterH + sideH, // Bottom-left
                 sideUV[0], sideUV[1], sideUV[2], sideUV[3]);
 
+        texturedShader.setUniform("alpha", 1.0f);
         texturedShader.unbind();
         atlas.unbind();
 
         // Rebind color shader for subsequent draws
         shader.bind();
         shader.setUniform("projection", ortho);
+    }
+
+    private static float[] insetIconUv(float[] uv) {
+        return new float[] {
+                Math.min(uv[0] + ITEM_ICON_UV_INSET, uv[2]),
+                Math.min(uv[1] + ITEM_ICON_UV_INSET, uv[3]),
+                Math.max(uv[2] - ITEM_ICON_UV_INSET, uv[0]),
+                Math.max(uv[3] - ITEM_ICON_UV_INSET, uv[1])
+        };
     }
 
     /**
@@ -773,8 +1974,13 @@ public class SurvivalHudRenderer {
             int textWidth = textRenderer.getStringWidth(level, scale);
             int tx = centerX - textWidth / 2;
             int ty = y - 18;
-            textRenderer.drawText(level, tx + 1, ty + 1, scale, new float[] { 0.0f, 0.0f, 0.0f, 1.0f });
-            textRenderer.drawText(level, tx, ty, scale, new float[] { 0.55f, 1.0f, 0.2f, 1.0f });
+            float[] outline = new float[] { 0.0f, 0.25f, 0.0f, 1.0f };
+            textRenderer.drawText(level, tx - 1, ty, scale, outline);
+            textRenderer.drawText(level, tx + 1, ty, scale, outline);
+            textRenderer.drawText(level, tx, ty - 1, scale, outline);
+            textRenderer.drawText(level, tx, ty + 1, scale, outline);
+            textRenderer.drawText(level, tx, ty, scale, new float[] { 0.50f, 1.0f, 0.10f, 1.0f });
+            restoreColorShader();
         }
     }
 
@@ -1261,6 +2467,26 @@ public class SurvivalHudRenderer {
         if (shader != null) {
             shader.cleanup();
         }
+        if (achievementTexture != null) {
+            achievementTexture.cleanup();
+            achievementTexture = null;
+        }
+        if (pumpkinOverlayTexture != null) {
+            pumpkinOverlayTexture.cleanup();
+            pumpkinOverlayTexture = null;
+        }
+        if (vignetteTexture != null) {
+            vignetteTexture.cleanup();
+            vignetteTexture = null;
+        }
+        if (portalOverlayTexture != null) {
+            portalOverlayTexture.cleanup();
+            portalOverlayTexture = null;
+        }
+        if (waterOverlayTexture != null) {
+            waterOverlayTexture.cleanup();
+            waterOverlayTexture = null;
+        }
         glDeleteBuffers(vbo);
         glDeleteVertexArrays(vao);
     }
@@ -1269,6 +2495,9 @@ public class SurvivalHudRenderer {
      * Draw stack count as a number in the bottom-right of a slot.
      */
     private void drawStackCount(int slotX, int slotY, int count) {
+        if (drawBitmapStackCount(slotX, slotY, HOTBAR_SLOT_SIZE, HOTBAR_SLOT_SIZE, count, 4, 4)) {
+            return;
+        }
         String countStr = String.valueOf(count);
         int digitWidth = 6;
         int digitHeight = 8;

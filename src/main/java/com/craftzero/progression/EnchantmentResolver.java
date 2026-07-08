@@ -40,7 +40,7 @@ public final class EnchantmentResolver {
             return false;
         }
         ItemType type = stack.getType();
-        return type.isTool() || type == ItemType.BOW || ArmorMaterial.materialOf(type) != null;
+        return isTableEnchantableTool(type) || ArmorMaterial.materialOf(type) != null;
     }
 
     public static int enchantability(ItemType type) {
@@ -49,7 +49,10 @@ public final class EnchantmentResolver {
             return armor.getEnchantability();
         }
         if (type == null || !type.isTool()) {
-            return type == ItemType.BOW ? 1 : 0;
+            return 0;
+        }
+        if (!isTableEnchantableTool(type)) {
+            return 0;
         }
         return switch (type.getToolType().getTier()) {
             case WOOD -> 15;
@@ -79,18 +82,14 @@ public final class EnchantmentResolver {
         if (!isEnchantable(stack) || cost <= 0) {
             return List.of();
         }
-        int enchantability = Math.max(1, enchantability(stack.getType()));
-        int adjusted = 1 + random.nextInt((enchantability >> 1) + 1)
-                + random.nextInt((enchantability >> 1) + 1) + cost;
-        float variance = (random.nextFloat() + random.nextFloat() - 1.0f) * 0.15f;
-        int level = Math.max(1, Math.round(adjusted * (1.0f + variance)));
+        int level = adjustedEnchantmentLevel(random, stack, cost);
 
         List<EnchantmentInstance> candidates = candidatesFor(stack.getType(), level);
         if (candidates.isEmpty()) {
             return List.of();
         }
         List<EnchantmentInstance> result = new ArrayList<>();
-        result.add(candidates.get(random.nextInt(candidates.size())));
+        result.add(pickWeighted(random, candidates));
         int chanceLevel = level;
         while (random.nextInt(50) <= chanceLevel) {
             chanceLevel >>= 1;
@@ -103,7 +102,7 @@ public final class EnchantmentResolver {
             if (compatible.isEmpty()) {
                 break;
             }
-            result.add(compatible.get(random.nextInt(compatible.size())));
+            result.add(pickWeighted(random, compatible));
         }
         return result;
     }
@@ -136,65 +135,154 @@ public final class EnchantmentResolver {
 
     public static boolean shouldPreventDurabilityLoss(ItemStack stack, Random random) {
         int unbreaking = getLevel(stack, EnchantmentType.UNBREAKING);
-        return unbreaking > 0 && random != null && random.nextInt(unbreaking + 1) > 0;
+        if (unbreaking <= 0 || random == null) {
+            return false;
+        }
+        if (ArmorMaterial.materialOf(stack.getType()) != null && random.nextFloat() < 0.6f) {
+            return false;
+        }
+        return random.nextInt(unbreaking + 1) > 0;
+    }
+
+    static int adjustedEnchantmentLevel(Random random, ItemStack stack, int cost) {
+        int enchantability = Math.max(1, enchantability(stack == null ? null : stack.getType()));
+        int bonusBound = enchantability / 4 + 1;
+        int adjusted = 1 + random.nextInt(bonusBound) + random.nextInt(bonusBound) + cost;
+        float variance = (random.nextFloat() + random.nextFloat() - 1.0f) * 0.15f;
+        return Math.max(1, Math.round(adjusted * (1.0f + variance)));
     }
 
     private static List<EnchantmentInstance> candidatesFor(ItemType type, int level) {
         List<EnchantmentInstance> candidates = new ArrayList<>();
         ArmorMaterial armor = ArmorMaterial.materialOf(type);
         if (armor != null) {
-            addIfInRange(candidates, EnchantmentType.PROTECTION, level, 1, 12, 4);
-            addIfInRange(candidates, EnchantmentType.FIRE_PROTECTION, level, 10, 18, 4);
-            addIfInRange(candidates, EnchantmentType.BLAST_PROTECTION, level, 5, 13, 4);
-            addIfInRange(candidates, EnchantmentType.PROJECTILE_PROTECTION, level, 3, 9, 4);
-            addIfInRange(candidates, EnchantmentType.UNBREAKING, level, 5, 55, 3);
+            addIfInRange(candidates, EnchantmentType.PROTECTION, level, 4);
+            addIfInRange(candidates, EnchantmentType.FIRE_PROTECTION, level, 4);
+            addIfInRange(candidates, EnchantmentType.BLAST_PROTECTION, level, 4);
+            addIfInRange(candidates, EnchantmentType.PROJECTILE_PROTECTION, level, 4);
+            addIfInRange(candidates, EnchantmentType.UNBREAKING, level, 3);
             if (ArmorMaterial.slotOf(type) == ArmorSlot.BOOTS) {
-                addIfInRange(candidates, EnchantmentType.FEATHER_FALLING, level, 5, 11, 4);
+                addIfInRange(candidates, EnchantmentType.FEATHER_FALLING, level, 4);
             }
             if (ArmorMaterial.slotOf(type) == ArmorSlot.HELMET) {
-                addIfInRange(candidates, EnchantmentType.RESPIRATION, level, 10, 40, 3);
-                addIfInRange(candidates, EnchantmentType.AQUA_AFFINITY, level, 1, 41, 1);
+                addIfInRange(candidates, EnchantmentType.RESPIRATION, level, 3);
+                addIfInRange(candidates, EnchantmentType.AQUA_AFFINITY, level, 1);
             }
-            return candidates;
-        }
-        if (type == ItemType.BOW) {
-            addIfInRange(candidates, EnchantmentType.POWER, level, 1, 16, 5);
-            addIfInRange(candidates, EnchantmentType.PUNCH, level, 12, 37, 2);
-            addIfInRange(candidates, EnchantmentType.FLAME, level, 20, 50, 1);
-            addIfInRange(candidates, EnchantmentType.INFINITY, level, 20, 50, 1);
-            addIfInRange(candidates, EnchantmentType.UNBREAKING, level, 5, 55, 3);
             return candidates;
         }
         if (type == null || !type.isTool()) {
             return candidates;
         }
         ToolType.Category category = type.getToolType().getCategory();
+        if (!isTableEnchantableTool(type)) {
+            return candidates;
+        }
         if (category == ToolType.Category.SWORD) {
-            addIfInRange(candidates, EnchantmentType.SHARPNESS, level, 1, 21, 5);
-            addIfInRange(candidates, EnchantmentType.SMITE, level, 5, 25, 5);
-            addIfInRange(candidates, EnchantmentType.BANE_OF_ARTHROPODS, level, 5, 25, 5);
-            addIfInRange(candidates, EnchantmentType.KNOCKBACK, level, 5, 55, 2);
-            addIfInRange(candidates, EnchantmentType.FIRE_ASPECT, level, 10, 60, 2);
-            addIfInRange(candidates, EnchantmentType.LOOTING, level, 15, 65, 3);
+            addIfInRange(candidates, EnchantmentType.SHARPNESS, level, 5);
+            addIfInRange(candidates, EnchantmentType.SMITE, level, 5);
+            addIfInRange(candidates, EnchantmentType.BANE_OF_ARTHROPODS, level, 5);
+            addIfInRange(candidates, EnchantmentType.KNOCKBACK, level, 2);
+            addIfInRange(candidates, EnchantmentType.FIRE_ASPECT, level, 2);
+            addIfInRange(candidates, EnchantmentType.LOOTING, level, 3);
         } else if (category == ToolType.Category.PICKAXE || category == ToolType.Category.SHOVEL
                 || category == ToolType.Category.AXE) {
-            addIfInRange(candidates, EnchantmentType.EFFICIENCY, level, 1, 51, 5);
-            addIfInRange(candidates, EnchantmentType.SILK_TOUCH, level, 15, 65, 1);
-            addIfInRange(candidates, EnchantmentType.FORTUNE, level, 15, 65, 3);
+            addIfInRange(candidates, EnchantmentType.EFFICIENCY, level, 5);
+            addIfInRange(candidates, EnchantmentType.SILK_TOUCH, level, 1);
+            addIfInRange(candidates, EnchantmentType.FORTUNE, level, 3);
         }
-        addIfInRange(candidates, EnchantmentType.UNBREAKING, level, 5, 55, 3);
+        addIfInRange(candidates, EnchantmentType.UNBREAKING, level, 3);
         return candidates;
     }
 
-    private static void addIfInRange(List<EnchantmentInstance> out, EnchantmentType type, int level,
-            int minBase, int maxBase, int maxLevel) {
+    private static boolean isTableEnchantableTool(ItemType type) {
+        if (type == null || !type.isTool()) {
+            return false;
+        }
+        ToolType.Category category = type.getToolType().getCategory();
+        return category == ToolType.Category.SWORD
+                || category == ToolType.Category.PICKAXE
+                || category == ToolType.Category.SHOVEL
+                || category == ToolType.Category.AXE;
+    }
+
+    private static void addIfInRange(List<EnchantmentInstance> out, EnchantmentType type, int level, int maxLevel) {
         for (int enchantLevel = 1; enchantLevel <= maxLevel; enchantLevel++) {
-            int min = minBase + (enchantLevel - 1) * 10;
-            int max = maxBase + (enchantLevel - 1) * 10;
-            if (level >= min && level <= max) {
+            if (canApplyAtAdjustedLevel(type, enchantLevel, level)) {
                 out.add(new EnchantmentInstance(type, enchantLevel));
             }
         }
+    }
+
+    static boolean canApplyAtAdjustedLevel(EnchantmentType type, int enchantmentLevel, int adjustedLevel) {
+        if (type == null || enchantmentLevel <= 0) {
+            return false;
+        }
+        return adjustedLevel >= minEnchantability(type, enchantmentLevel)
+                && adjustedLevel <= maxEnchantability(type, enchantmentLevel);
+    }
+
+    private static int minEnchantability(EnchantmentType type, int level) {
+        return switch (type) {
+            case PROTECTION -> 1 + (level - 1) * 11;
+            case FIRE_PROTECTION -> 10 + (level - 1) * 8;
+            case FEATHER_FALLING -> 5 + (level - 1) * 6;
+            case BLAST_PROTECTION -> 5 + (level - 1) * 8;
+            case PROJECTILE_PROTECTION -> 3 + (level - 1) * 6;
+            case RESPIRATION -> level * 10;
+            case AQUA_AFFINITY -> 1;
+            case SHARPNESS -> 1 + (level - 1) * 11;
+            case SMITE, BANE_OF_ARTHROPODS -> 5 + (level - 1) * 8;
+            case KNOCKBACK -> 5 + (level - 1) * 20;
+            case FIRE_ASPECT -> 10 + (level - 1) * 20;
+            case LOOTING, FORTUNE -> 15 + (level - 1) * 9;
+            case EFFICIENCY -> 1 + (level - 1) * 10;
+            case SILK_TOUCH -> 15;
+            case UNBREAKING -> 5 + (level - 1) * 8;
+            case POWER, PUNCH, FLAME, INFINITY -> Integer.MAX_VALUE;
+        };
+    }
+
+    private static int maxEnchantability(EnchantmentType type, int level) {
+        return switch (type) {
+            case PROTECTION -> minEnchantability(type, level) + 20;
+            case FIRE_PROTECTION -> minEnchantability(type, level) + 12;
+            case FEATHER_FALLING -> minEnchantability(type, level) + 10;
+            case BLAST_PROTECTION -> minEnchantability(type, level) + 12;
+            case PROJECTILE_PROTECTION -> minEnchantability(type, level) + 15;
+            case RESPIRATION -> minEnchantability(type, level) + 30;
+            case AQUA_AFFINITY -> 41;
+            case SHARPNESS, SMITE, BANE_OF_ARTHROPODS -> minEnchantability(type, level) + 20;
+            case KNOCKBACK, FIRE_ASPECT, LOOTING, EFFICIENCY, SILK_TOUCH,
+                    UNBREAKING, FORTUNE -> minEnchantability(type, level) + 50;
+            case POWER, PUNCH, FLAME, INFINITY -> Integer.MIN_VALUE;
+        };
+    }
+
+    private static EnchantmentInstance pickWeighted(Random random, List<EnchantmentInstance> candidates) {
+        int totalWeight = 0;
+        for (EnchantmentInstance candidate : candidates) {
+            totalWeight += weight(candidate.type());
+        }
+        int roll = random.nextInt(Math.max(1, totalWeight));
+        for (EnchantmentInstance candidate : candidates) {
+            roll -= weight(candidate.type());
+            if (roll < 0) {
+                return candidate;
+            }
+        }
+        return candidates.get(candidates.size() - 1);
+    }
+
+    private static int weight(EnchantmentType type) {
+        return switch (type) {
+            case PROTECTION, SHARPNESS, EFFICIENCY -> 10;
+            case FIRE_PROTECTION, FEATHER_FALLING, PROJECTILE_PROTECTION,
+                    SMITE, BANE_OF_ARTHROPODS, KNOCKBACK, UNBREAKING -> 5;
+            case BLAST_PROTECTION, RESPIRATION, AQUA_AFFINITY,
+                    FIRE_ASPECT, LOOTING, FORTUNE,
+                    POWER, PUNCH, FLAME, INFINITY -> 2;
+            case SILK_TOUCH -> 1;
+        };
     }
 
     private static boolean contains(List<EnchantmentInstance> enchantments, EnchantmentType type) {
@@ -244,7 +332,8 @@ public final class EnchantmentResolver {
             MobDefinition definition = mob.getDefinition();
             return definition == MobDefinition.ZOMBIE
                     || definition == MobDefinition.SKELETON
-                    || definition == MobDefinition.ZOMBIE_PIGMAN;
+                    || definition == MobDefinition.ZOMBIE_PIGMAN
+                    || definition == MobDefinition.GIANT;
         }
         return false;
     }

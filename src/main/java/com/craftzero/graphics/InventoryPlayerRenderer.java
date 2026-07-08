@@ -3,9 +3,12 @@ package com.craftzero.graphics;
 import com.craftzero.engine.Input;
 import com.craftzero.graphics.model.ModelPart;
 import com.craftzero.graphics.model.PlayerModel;
+import com.craftzero.inventory.ItemStack;
 import com.craftzero.ui.InventoryScreen;
 
 import org.joml.Matrix4f;
+
+import java.util.List;
 
 import static org.lwjgl.opengl.GL11.*;
 
@@ -22,6 +25,15 @@ public class InventoryPlayerRenderer {
 
     // Model scale (Minecraft model units are 1/16th of a block)
     private static final float MODEL_SCALE = 1.0f / 16.0f;
+    private static final float PREVIEW_CENTER_TEX_X = 51.0f;
+    private static final float PREVIEW_FOOT_TEX_Y = 75.0f;
+    private static final float PREVIEW_HEAD_LOOK_TEX_OFFSET = 50.0f;
+    private static final float PREVIEW_ENTITY_SCALE = 30.0f;
+    private static final float RELEASE_LOOK_DIVISOR = 40.0f;
+    private static final float RELEASE_BODY_YAW = 20.0f;
+    private static final float RELEASE_HEAD_YAW = 40.0f;
+    private static final float RELEASE_HEAD_PITCH = 20.0f;
+    private static final float ARMOR_LAYER_SCALE = 1.025f;
 
     // Screen dimensions for calculations
     private int windowWidth;
@@ -94,62 +106,31 @@ public class InventoryPlayerRenderer {
         if (!screen.isOpen() || playerTexture == null)
             return;
 
-        // Get window position and calculate model position
         int winX = screen.getWindowX();
         int winY = screen.getWindowY();
         float scale = InventoryScreen.GUI_SCALE;
 
-        // Player model area in the inventory (black box on left side)
-        // The black box is approximately at (26, 8) to (77, 77) in texture pixels
-        // Center of the box is around (51, 42) for the body, feet at ~75
-        float boxCenterX = 51.0f; // Center X of the black box in texture pixels
-        float boxBottomY = 75.0f; // Bottom of the black box (where feet go)
-
-        float modelCenterX = winX + boxCenterX * scale;
-        float modelBottomY = winY + boxBottomY * scale;
-
-        // Get mouse position
+        float modelCenterX = winX + PREVIEW_CENTER_TEX_X * scale;
+        float modelBottomY = winY + PREVIEW_FOOT_TEX_Y * scale;
+        float headLookY = modelBottomY - PREVIEW_HEAD_LOOK_TEX_OFFSET * scale;
         float mouseX = (float) Input.getMouseX();
         float mouseY = (float) Input.getMouseY();
 
-        // Calculate normalized position relative to model center
-        // -1 to 1 range where screen edges are the limits
-        float headCenterY = modelBottomY - 45 * scale; // Approximate head height
-
-        // Calculate normalized offsets (-1 to +1 based on distance from model to screen
-        // edge)
-        // For X: left edge = -1, right edge = +1
-        // Negate because the model faces forward (toward camera)
-        float normalizedX = -(mouseX - modelCenterX) / (windowWidth * 0.5f);
-        // For Y: top edge = -1, bottom edge = +1
-        float normalizedY = (mouseY - headCenterY) / (windowHeight * 0.5f);
-
-        // Clamp to -1 to 1 range
-        normalizedX = Math.max(-1.0f, Math.min(1.0f, normalizedX));
-        normalizedY = Math.max(-1.0f, Math.min(1.0f, normalizedY));
-
-        // Head rotation - full range when cursor at screen edges
-        // Max 40 degrees yaw, 30 degrees pitch
-        float headYaw = normalizedX * 40.0f; // Positive = look right when cursor right
-        float headPitch = normalizedY * 30.0f; // Positive = look down when cursor below
-
-        // Body rotation - subtle "peeking" effect (about 20% of head yaw)
-        float bodyYaw = headYaw * 0.2f;
-
-        // Body lean - lean back when looking up, lean forward when looking down
-        // Max 10 degrees lean
-        float bodyPitch = normalizedY * 10.0f;
-
-        // Animate the model - head yaw is relative to body, so subtract body
-        // contribution
+        float lookDivisor = RELEASE_LOOK_DIVISOR * scale;
+        float lookX = modelCenterX - mouseX;
+        float lookY = headLookY - mouseY;
+        float yawCurve = (float) Math.atan(lookX / lookDivisor);
+        float pitchCurve = (float) Math.atan(lookY / lookDivisor);
+        float bodyYaw = yawCurve * RELEASE_BODY_YAW;
+        float headYaw = yawCurve * RELEASE_HEAD_YAW;
+        float headPitch = -pitchCurve * RELEASE_HEAD_PITCH;
         float headYawRelative = headYaw - bodyYaw;
         playerModel.animate(0, 0, 0, headYawRelative, headPitch, 0, false);
 
-        // Don't set body rotation here - we'll apply lean to the whole model via matrix
-
-        // Setup GL state for 3D rendering in UI
         glDisable(GL_CULL_FACE);
         glEnable(GL_DEPTH_TEST);
+        glDepthMask(true);
+        glDepthFunc(GL_LEQUAL);
         glClear(GL_DEPTH_BUFFER_BIT);
 
         shader.bind();
@@ -167,33 +148,26 @@ public class InventoryPlayerRenderer {
         shader.setUniform("view", view);
         shader.setUniform("textureSampler", 0);
 
-        // Position and scale the model
-        float displayScale = scale * 30.0f * MODEL_SCALE;
+        float displayScale = scale * PREVIEW_ENTITY_SCALE * MODEL_SCALE;
 
         modelMatrix.identity();
-        // Position at the bottom center of the player preview area
         modelMatrix.translate(modelCenterX, modelBottomY, 100);
-        // Flip Y to correct for screen coordinates (Y down) vs model coordinates (Y up)
         modelMatrix.scale(displayScale, -displayScale, displayScale);
-        // First rotate 180 degrees so we see the front of the model
         modelMatrix.rotateY((float) Math.toRadians(180));
-        // Apply subtle body yaw rotation (peeking)
         modelMatrix.rotateY((float) Math.toRadians(-bodyYaw));
-        // Apply body lean (whole body tilts forward/back based on cursor Y)
-        modelMatrix.rotateX((float) Math.toRadians(bodyPitch));
+        modelMatrix.rotateX((float) Math.toRadians(headPitch));
 
-        // Calculate transforms for all parts
         playerModel.root.calculateTransform(modelMatrix);
-
-        // Render all parts
         playerTexture.bind(0);
         renderModelPart(playerModel.root);
         playerTexture.unbind();
 
+        renderArmorLayers(screen.getInventory().getArmor());
+
         shader.unbind();
 
-        // Restore GL state
         glDisable(GL_DEPTH_TEST);
+        glDepthMask(true);
     }
 
     private void renderModelPart(ModelPart part) {
@@ -203,6 +177,48 @@ public class InventoryPlayerRenderer {
         }
         for (ModelPart child : part.getChildren()) {
             renderModelPart(child);
+        }
+    }
+
+    private void renderArmorLayers(ItemStack[] armor) {
+        List<PlayerRenderer.ArmorRenderLayer> layers = PlayerRenderer.armorRenderLayers(armor);
+        if (layers.isEmpty()) {
+            return;
+        }
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(-1.0f, -1.0f);
+        for (PlayerRenderer.ArmorRenderLayer layer : layers) {
+            Texture texture = MobTexture.get(layer.texturePath());
+            if (texture == null) {
+                continue;
+            }
+            Matrix4f armorMatrix = new Matrix4f(modelMatrix).scale(ARMOR_LAYER_SCALE);
+            playerModel.root.calculateTransform(armorMatrix);
+            texture.bind(0);
+            renderArmorModelParts(layer);
+            texture.unbind();
+        }
+        glDisable(GL_POLYGON_OFFSET_FILL);
+    }
+
+    private void renderArmorModelParts(PlayerRenderer.ArmorRenderLayer layer) {
+        if (layer.renders(PlayerRenderer.ArmorModelPart.HEAD)) {
+            renderModelPart(playerModel.head);
+        }
+        if (layer.renders(PlayerRenderer.ArmorModelPart.BODY)) {
+            renderModelPart(playerModel.body);
+        }
+        if (layer.renders(PlayerRenderer.ArmorModelPart.RIGHT_ARM)) {
+            renderModelPart(playerModel.rightArm);
+        }
+        if (layer.renders(PlayerRenderer.ArmorModelPart.LEFT_ARM)) {
+            renderModelPart(playerModel.leftArm);
+        }
+        if (layer.renders(PlayerRenderer.ArmorModelPart.RIGHT_LEG)) {
+            renderModelPart(playerModel.rightLeg);
+        }
+        if (layer.renders(PlayerRenderer.ArmorModelPart.LEFT_LEG)) {
+            renderModelPart(playerModel.leftLeg);
         }
     }
 

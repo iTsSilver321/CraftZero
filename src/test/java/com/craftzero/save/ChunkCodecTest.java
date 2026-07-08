@@ -56,6 +56,25 @@ class ChunkCodecTest {
     }
 
     @Test
+    @DisplayName("Chunk codec should keep a backup of the previous chunk file")
+    void chunkWritesKeepPreviousBackup() throws Exception {
+        Path path = tempDir.resolve("c.0.0.bin");
+        Chunk first = new Chunk(0, 0);
+        first.setBlock(1, 70, 1, BlockType.DIAMOND_ORE);
+        Chunk second = new Chunk(0, 0);
+        second.setBlock(1, 70, 1, BlockType.GOLD_ORE);
+
+        ChunkCodec.write(path, first);
+        ChunkCodec.write(path, second);
+
+        assertTrue(Files.exists(SafeFiles.backupPath(path)));
+        ChunkCodec.ChunkData current = ChunkCodec.read(path);
+        ChunkCodec.ChunkData backup = ChunkCodec.read(SafeFiles.backupPath(path));
+        assertEquals(BlockType.GOLD_ORE.getId(), current.blockIds()[Chunk.getIndex(1, 70, 1)]);
+        assertEquals(BlockType.DIAMOND_ORE.getId(), backup.blockIds()[Chunk.getIndex(1, 70, 1)]);
+    }
+
+    @Test
     @DisplayName("Chunk codec should load v1 block-only chunks with zero metadata")
     void readsVersionOneChunks() throws Exception {
         Path path = tempDir.resolve("old.bin");

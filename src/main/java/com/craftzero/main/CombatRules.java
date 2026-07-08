@@ -9,6 +9,7 @@ public final class CombatRules {
     public static final float EASY_ZOMBIE_DAMAGE = 2.0f;
     public static final float EASY_SPIDER_DAMAGE = 2.0f;
     public static final float EASY_SKELETON_ARROW_DAMAGE = 2.0f;
+    public static final float EASY_ENDERMAN_DAMAGE = 4.0f;
 
     public static final float PLAYER_ATTACK_KNOCKBACK = 0.4f;
     public static final float PLAYER_ATTACK_SPRINT_BONUS = 0.4f;

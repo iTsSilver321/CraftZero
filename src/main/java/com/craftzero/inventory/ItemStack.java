@@ -52,6 +52,8 @@ public class ItemStack {
         this(type, count);
         if (type != null && type.isDamageable()) {
             this.durability = durability;
+        } else if (usesItemDamageIdentity(type)) {
+            this.durability = durability;
         }
     }
 
@@ -105,6 +107,14 @@ public class ItemStack {
 
     public boolean isDamageable() {
         return type != null && type.isDamageable();
+    }
+
+    public boolean usesItemDamageIdentity() {
+        return usesItemDamageIdentity(type);
+    }
+
+    private static boolean usesItemDamageIdentity(ItemType type) {
+        return type == ItemType.MAP;
     }
 
     public ItemStack copy() {
@@ -188,7 +198,7 @@ public class ItemStack {
      * @return true if the item broke (durability reached 0)
      */
     public boolean useDurability() {
-        if (durability > 0) {
+        if (isDamageable() && durability > 0) {
             durability--;
             return durability <= 0;
         }
@@ -196,6 +206,10 @@ public class ItemStack {
     }
 
     public void setDurability(int durability) {
+        if (usesItemDamageIdentity()) {
+            this.durability = durability < 0 ? -1 : durability;
+            return;
+        }
         if (!isDamageable()) {
             this.durability = -1;
             return;

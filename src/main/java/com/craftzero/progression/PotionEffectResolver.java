@@ -1,5 +1,6 @@
 package com.craftzero.progression;
 
+import com.craftzero.combat.DamageSource;
 import com.craftzero.entity.LivingEntity;
 import com.craftzero.entity.mob.Mob;
 import com.craftzero.entity.mob.MobDefinition;
@@ -47,55 +48,88 @@ public final class PotionEffectResolver {
     }
 
     public static void applyToPlayer(Player player, PotionData potion, float strength) {
+        applyToPlayer(player, potion, strength, DamageSource.magic());
+    }
+
+    public static void applyToPlayer(Player player, PotionData potion, float strength, DamageSource harmfulSource) {
         if (player == null || potion == null) {
             return;
         }
         if (isInstant(potion)) {
             boolean undead = false;
-            applyInstantToPlayer(player, potion, strength, undead);
+            applyInstantToPlayer(player, potion, strength, undead, harmfulSource);
             return;
         }
         for (StatusEffectInstance effect : effects(potion)) {
-            int duration = Math.max(1, Math.round(effect.durationTicks() * strength));
-            player.getStats().addEffect(new StatusEffectInstance(effect.type(), duration, effect.amplifier()));
+            int duration = Math.round(effect.durationTicks() * strength);
+            if (duration > 20) {
+                player.getStats().addEffect(new StatusEffectInstance(effect.type(), duration, effect.amplifier()));
+            }
         }
     }
 
     public static void applyToLiving(LivingEntity entity, PotionData potion, float strength) {
+        applyToLiving(entity, potion, strength, DamageSource.magic());
+    }
+
+    public static void applyToLiving(LivingEntity entity, PotionData potion, float strength,
+            DamageSource harmfulSource) {
         if (entity == null || potion == null) {
             return;
         }
         boolean undead = isUndead(entity);
         if (isInstant(potion)) {
-            applyInstantToLiving(entity, potion, strength, undead);
+            applyInstantToLiving(entity, potion, strength, undead, harmfulSource);
             return;
         }
         for (StatusEffectInstance effect : effects(potion)) {
-            int duration = Math.max(1, Math.round(effect.durationTicks() * strength));
-            entity.addEffect(new StatusEffectInstance(effect.type(), duration, effect.amplifier()));
+            int duration = Math.round(effect.durationTicks() * strength);
+            if (duration > 20) {
+                entity.addEffect(new StatusEffectInstance(effect.type(), duration, effect.amplifier()));
+            }
         }
     }
 
-    private static void applyInstantToPlayer(Player player, PotionData potion, float strength, boolean undead) {
-        int level = potion.enhanced() ? 2 : 1;
+    private static void applyInstantToPlayer(Player player, PotionData potion, float strength, boolean undead,
+            DamageSource harmfulSource) {
         boolean healing = potion.type() == PotionType.HEALING;
-        float amount = (healing ? 4.0f : 6.0f) * level * strength;
         if (healing != undead) {
+            int amount = instantAmount(potion, strength, true);
+            if (amount <= 0) {
+                return;
+            }
             player.getStats().heal(amount);
         } else {
-            player.hurt(amount, player.getPosition().x, player.getPosition().y, player.getPosition().z, 0.0f, 0.0f);
+            int amount = instantAmount(potion, strength, false);
+            if (amount <= 0) {
+                return;
+            }
+            player.hurt(amount, harmfulSource == null ? DamageSource.magic() : harmfulSource);
         }
     }
 
-    private static void applyInstantToLiving(LivingEntity entity, PotionData potion, float strength, boolean undead) {
-        int level = potion.enhanced() ? 2 : 1;
+    private static void applyInstantToLiving(LivingEntity entity, PotionData potion, float strength, boolean undead,
+            DamageSource harmfulSource) {
         boolean healing = potion.type() == PotionType.HEALING;
-        float amount = (healing ? 4.0f : 6.0f) * level * strength;
         if (healing != undead) {
+            int amount = instantAmount(potion, strength, true);
+            if (amount <= 0) {
+                return;
+            }
             entity.heal(amount);
         } else {
-            entity.damage(amount, com.craftzero.combat.DamageSource.generic());
+            int amount = instantAmount(potion, strength, false);
+            if (amount <= 0) {
+                return;
+            }
+            entity.damage(amount, harmfulSource == null ? DamageSource.magic() : harmfulSource);
         }
+    }
+
+    private static int instantAmount(PotionData potion, float strength, boolean beneficial) {
+        int amplifier = potion.enhanced() ? 1 : 0;
+        int base = (beneficial ? 4 : 6) << amplifier;
+        return (int) (base * Math.max(0.0f, strength) + 0.5f);
     }
 
     public static boolean isUndead(LivingEntity entity) {
@@ -103,7 +137,8 @@ public final class PotionEffectResolver {
             MobDefinition definition = mob.getDefinition();
             return definition == MobDefinition.ZOMBIE
                     || definition == MobDefinition.SKELETON
-                    || definition == MobDefinition.ZOMBIE_PIGMAN;
+                    || definition == MobDefinition.ZOMBIE_PIGMAN
+                    || definition == MobDefinition.GIANT;
         }
         return false;
     }

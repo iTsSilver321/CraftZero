@@ -1,5 +1,9 @@
 package com.craftzero.ui.menu;
 
+import com.craftzero.main.PlayerStatistics;
+import com.craftzero.progression.AchievementTracker;
+import com.craftzero.progression.AchievementType;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -11,6 +15,8 @@ import java.util.Objects;
 public final class MenuScreenFactory {
 
     private static final GuiLayout LAYOUT = GuiLayout.logical(GuiLayout.BASE_WIDTH, GuiLayout.BASE_HEIGHT);
+    private static final String DEFAULT_LANGUAGE_CODE = "en_US";
+    private static final String DEFAULT_LANGUAGE_NAME = "English (US)";
 
     private final MenuNavigation navigation;
     private final Callbacks callbacks;
@@ -40,16 +46,133 @@ public final class MenuScreenFactory {
     }
 
     public Screen pause() {
-        List<Rect> rows = LAYOUT.centeredVerticalStack(200, 20, 4, 128, 4);
+        int centerX = GuiLayout.BASE_WIDTH / 2;
+        int y = GuiLayout.BASE_HEIGHT / 4 + 48;
         List<MenuComponent> components = List.of(
-                new MenuButton("resume", "Back to Game", rows.get(0), this::resumeGame),
-                new MenuButton("options", "Options...", rows.get(1), () -> navigation.push(options())),
-                new MenuButton("texture-packs", "Texture Packs", rows.get(2), () -> navigation.push(texturePacks())),
-                new MenuButton("save-and-quit", "Save and Quit to Title", rows.get(3), this::saveAndQuitToTitle));
+                new MenuButton("resume", "Back to Game", new Rect(centerX - 100, y, 200, 20), this::resumeGame),
+                new MenuButton("achievements", "Achievements", new Rect(centerX - 100, y + 24, 98, 20),
+                        () -> navigation.push(achievements())),
+                new MenuButton("statistics", "Statistics", new Rect(centerX + 2, y + 24, 98, 20),
+                        () -> navigation.push(statistics())),
+                new MenuButton("options", "Options...", new Rect(centerX - 100, y + 60, 200, 20),
+                        () -> navigation.push(options())),
+                new MenuButton("save-and-quit", "Save and Quit to Title", new Rect(centerX - 100, y + 96, 200, 20),
+                        this::saveAndQuitToTitle));
         return new MenuScreen(MenuScreenIds.PAUSE, "Game menu", components, true, true, () -> {
             resumeGame();
             return true;
         }, MenuScreen.Background.NONE);
+    }
+
+    public Screen achievements() {
+        int width = GuiLayout.BASE_WIDTH;
+        int height = GuiLayout.BASE_HEIGHT;
+        int centerX = width / 2;
+        AchievementTracker tracker = content.achievementTracker();
+        AchievementType[] achievements = AchievementType.values();
+        int unlocked = tracker.unlockedAchievements().size();
+        List<MenuComponent> components = new ArrayList<>();
+        components.add(MenuLabel.centered("achievement-summary",
+                "Unlocked: " + unlocked + " / " + achievements.length,
+                centerX, 54, Math.min(320, Math.max(180, width - 40))).color(1.0f, 1.0f, 0.63f, 1.0f));
+
+        int detailTitleY = Math.max(78, height - 72);
+        int detailWidth = Math.max(100, width - 48);
+        AchievementTreeComponent tree = new AchievementTreeComponent("achievement-tree",
+                new Rect(24, 74, detailWidth, Math.max(64, detailTitleY - 84)), tracker);
+        components.add(tree);
+
+        AchievementType selected = tree.detailAchievement();
+        MenuLabel selectedTitle = new MenuLabel("achievement-selected-title",
+                tree.titleLine(selected), new Rect(24, detailTitleY, detailWidth, 10))
+                .color(tree.colorFor(selected));
+        MenuLabel selectedDescription = new MenuLabel("achievement-selected-description",
+                MenuScreens.fitMenuText(tree.detailDescription(selected), detailWidth),
+                new Rect(24, detailTitleY + 14, detailWidth, 10))
+                .color(0.76f, 0.76f, 0.76f, 1.0f);
+        tree.onDetailChanged(detail -> {
+            selectedTitle.text(tree.titleLine(detail)).color(tree.colorFor(detail));
+            selectedDescription.text(MenuScreens.fitMenuText(tree.detailDescription(detail), detailWidth));
+        });
+        components.add(selectedTitle);
+        components.add(selectedDescription);
+        components.add(new MenuButton("done", "Done", LAYOUT.centeredButton(height - 28), navigation::back));
+        return new MenuScreen(MenuScreenIds.ACHIEVEMENTS, "Achievements", components);
+    }
+
+    public Screen statistics() {
+        int width = GuiLayout.BASE_WIDTH;
+        int height = GuiLayout.BASE_HEIGHT;
+        int centerX = width / 2;
+        PlayerStatistics stats = content.statistics();
+        List<MenuComponent> components = new ArrayList<>();
+        MenuLabel summary = MenuLabel.centered("statistics-summary", "General", centerX,
+                MenuScreens.STATISTICS_SUMMARY_Y, MenuScreens.statisticsSummaryWidth(width))
+                .color(1.0f, 1.0f, 0.63f, 1.0f);
+        components.add(summary);
+
+        MenuButton generalTab = new MenuButton("statistics-tab-general", "General",
+                MenuScreens.statisticsTabBounds(centerX, 0), null);
+        MenuButton blocksTab = new MenuButton("statistics-tab-blocks", "Blocks",
+                MenuScreens.statisticsTabBounds(centerX, 1), null);
+        MenuButton itemsTab = new MenuButton("statistics-tab-items", "Items",
+                MenuScreens.statisticsTabBounds(centerX, 2), null);
+        components.add(generalTab);
+        components.add(blocksTab);
+        components.add(itemsTab);
+
+        Rect listBounds = MenuScreens.statisticsListBounds(width, height);
+        int tableWidth = listBounds.width();
+        MenuList<String> generalList = new MenuList<>("statistics-general-list",
+                listBounds, MenuScreens.STATISTICS_ROW_HEIGHT,
+                MenuScreens.statisticRows(stats, tableWidth),
+                row -> row);
+        MenuList<String> blockList = new MenuList<>("statistics-block-list",
+                listBounds, MenuScreens.STATISTICS_ROW_HEIGHT,
+                MenuScreens.blockStatisticRows(stats, tableWidth), row -> row);
+        MenuList<String> itemList = new MenuList<>("statistics-item-list",
+                listBounds, MenuScreens.STATISTICS_ROW_HEIGHT,
+                MenuScreens.itemStatisticRows(stats, tableWidth), row -> row);
+        blockList.setVisible(false);
+        itemList.setVisible(false);
+        components.add(generalList);
+        components.add(blockList);
+        components.add(itemList);
+
+        Runnable showGeneral = () -> {
+            summary.text("General");
+            generalList.setVisible(true);
+            blockList.setVisible(false);
+            itemList.setVisible(false);
+            generalTab.setEnabled(false);
+            blocksTab.setEnabled(true);
+            itemsTab.setEnabled(true);
+        };
+        Runnable showBlocks = () -> {
+            summary.text("Blocks");
+            generalList.setVisible(false);
+            blockList.setVisible(true);
+            itemList.setVisible(false);
+            generalTab.setEnabled(true);
+            blocksTab.setEnabled(false);
+            itemsTab.setEnabled(true);
+        };
+        Runnable showItems = () -> {
+            summary.text("Items");
+            generalList.setVisible(false);
+            blockList.setVisible(false);
+            itemList.setVisible(true);
+            generalTab.setEnabled(true);
+            blocksTab.setEnabled(true);
+            itemsTab.setEnabled(false);
+        };
+        generalTab.setAction(showGeneral);
+        blocksTab.setAction(showBlocks);
+        itemsTab.setAction(showItems);
+        showGeneral.run();
+
+        components.add(new MenuButton("done", "Done", LAYOUT.centeredButton(height - 28), navigation::back));
+        return new MenuScreen(MenuScreenIds.STATISTICS, "Statistics", components);
     }
 
     public Screen options() {
@@ -81,20 +204,54 @@ public final class MenuScreenFactory {
                 new MenuButton("video", "Video Settings...", LAYOUT.centeredButton(148),
                         () -> navigation.push(videoOptions())),
                 new MenuButton("controls", "Controls...", LAYOUT.centeredButton(172), () -> navigation.push(controls())),
-                new MenuButton("done", "Done", LAYOUT.centeredButton(204), navigation::back));
+                new MenuButton("language", "Language...", LAYOUT.centeredButton(196),
+                        () -> navigation.push(language())),
+                new MenuButton("done", "Done", LAYOUT.centeredButton(220), navigation::back));
         return new MenuScreen(MenuScreenIds.OPTIONS, "Options", components);
+    }
+
+    public Screen language() {
+        SettingsModel settings = content.settings();
+        List<LanguageEntry> languages = normalizedLanguages(content.languages());
+        int centerX = GuiLayout.BASE_WIDTH / 2;
+        MenuLabel current = MenuLabel.centered("language-current",
+                currentLanguageLabel(settings, languages), centerX, 54, 240)
+                .color(1.0f, 1.0f, 0.63f, 1.0f);
+        MenuList<LanguageEntry> languageList = new MenuList<>("languages",
+                new Rect(centerX - 120, 74, 240, 96), 16, languages,
+                entry -> languageRowLabel(settings, entry));
+        int selectedIndex = selectedLanguageIndex(languages, settings.language());
+        if (selectedIndex >= 0) {
+            languageList.setSelectedIndex(selectedIndex);
+        }
+        MenuButton select = new MenuButton("select-language", "Select", LAYOUT.centeredButton(180), null);
+        select.setAction(() -> applyLanguageSelection(languageList, settings, current));
+        languageList.setOnActivated(entry -> applyLanguageSelection(languageList, settings, current));
+
+        List<MenuComponent> components = List.of(
+                current,
+                languageList,
+                select,
+                new MenuButton("done", "Done", LAYOUT.centeredButton(212), navigation::back));
+        return new MenuScreen(MenuScreenIds.LANGUAGE, "Language", components);
     }
 
     public Screen videoOptions() {
         VideoSettingsModel video = content.videoSettings();
-        MenuButton graphics = new MenuButton("graphics", graphicsLabel(video), LAYOUT.centeredButton(72), null);
+        int leftX = 10;
+        int rightX = 160;
+        int width = 150;
+        int y = 42;
+        int row = 24;
+        MenuButton graphics = new MenuButton("graphics", graphicsLabel(video), new Rect(leftX, y, width, 20), null);
         graphics.setAction(() -> {
             video.setGraphicsMode(video.graphicsMode().next());
             graphics.setLabel(graphicsLabel(video));
             callbacks.videoSettingsChanged(video.copy());
         });
 
-        MenuButton renderDistance = new MenuButton("render-distance", renderDistanceLabel(video), LAYOUT.centeredButton(96),
+        MenuButton renderDistance = new MenuButton("render-distance", renderDistanceLabel(video),
+                new Rect(rightX, y, width, 20),
                 null);
         renderDistance.setAction(() -> {
             video.setRenderDistance(video.renderDistance().next());
@@ -102,18 +259,91 @@ public final class MenuScreenFactory {
             callbacks.videoSettingsChanged(video.copy());
         });
 
-        MenuSlider guiScale = new MenuSlider("gui-scale", "GUI Scale", LAYOUT.centeredButton(120), 0.0, 4.0,
-                video.guiScale(), 1.0, value -> {
-                    video.setGuiScale((int) Math.round(value));
+        MenuButton smoothLighting = new MenuButton("smooth-lighting", smoothLightingLabel(video),
+                new Rect(leftX, y + row, width, 20), null);
+        smoothLighting.setAction(() -> {
+            video.setSmoothLighting(!video.smoothLighting());
+            smoothLighting.setLabel(smoothLightingLabel(video));
+            callbacks.videoSettingsChanged(video.copy());
+        });
+
+        MenuButton performance = new MenuButton("performance", performanceLabel(video),
+                new Rect(rightX, y + row, width, 20), null);
+        performance.setAction(() -> {
+            video.setFramerateLimit(nextFrameLimit(video.framerateLimit()));
+            performance.setLabel(performanceLabel(video));
+            callbacks.videoSettingsChanged(video.copy());
+        });
+
+        MenuButton anaglyph = new MenuButton("anaglyph", anaglyphLabel(video),
+                new Rect(leftX, y + row * 2, width, 20), null);
+        anaglyph.setAction(() -> {
+            video.setAnaglyph3d(!video.anaglyph3d());
+            anaglyph.setLabel(anaglyphLabel(video));
+            callbacks.videoSettingsChanged(video.copy());
+        });
+
+        MenuButton bobbing = new MenuButton("view-bobbing", viewBobbingLabel(video),
+                new Rect(rightX, y + row * 2, width, 20), null);
+        bobbing.setAction(() -> {
+            video.setViewBobbing(!video.viewBobbing());
+            bobbing.setLabel(viewBobbingLabel(video));
+            callbacks.videoSettingsChanged(video.copy());
+        });
+
+        MenuButton guiScale = new MenuButton("gui-scale", guiScaleButtonLabel(video),
+                new Rect(leftX, y + row * 3, width, 20), null);
+        guiScale.setAction(() -> {
+            video.setGuiScale((video.guiScale() + 1) % 4);
+            guiScale.setLabel(guiScaleButtonLabel(video));
+            callbacks.videoSettingsChanged(video.copy());
+        });
+
+        MenuButton advancedOpenGl = new MenuButton("advanced-opengl", advancedOpenGlLabel(video),
+                new Rect(rightX, y + row * 3, width, 20), null);
+        advancedOpenGl.setAction(() -> {
+            video.setAdvancedOpenGl(!video.advancedOpenGl());
+            advancedOpenGl.setLabel(advancedOpenGlLabel(video));
+            callbacks.videoSettingsChanged(video.copy());
+        });
+
+        MenuSlider brightness = new MenuSlider("brightness", "Brightness",
+                new Rect(leftX, y + row * 4, width, 20), 0.0, 1.0,
+                video.brightness(), 0.01, value -> {
+                    video.setBrightness(value);
                     callbacks.videoSettingsChanged(video.copy());
                 });
-        guiScale.setFormatter(value -> ((int) Math.round(value)) == 0 ? "Auto" : Integer.toString((int) Math.round(value)));
+        brightness.setFormatter(MenuScreenFactory::brightnessLabel);
+
+        MenuButton clouds = new MenuButton("clouds", cloudsLabel(video),
+                new Rect(rightX, y + row * 4, width, 20), null);
+        clouds.setAction(() -> {
+            video.setClouds(!video.clouds());
+            clouds.setLabel(cloudsLabel(video));
+            callbacks.videoSettingsChanged(video.copy());
+        });
+
+        MenuButton particles = new MenuButton("particles", particlesLabel(video),
+                new Rect(leftX, y + row * 5, width, 20), null);
+        particles.setAction(() -> {
+            video.setParticles((video.particles() + 1) % 3);
+            particles.setLabel(particlesLabel(video));
+            callbacks.videoSettingsChanged(video.copy());
+        });
 
         List<MenuComponent> components = List.of(
                 graphics,
                 renderDistance,
+                smoothLighting,
+                performance,
+                anaglyph,
+                bobbing,
                 guiScale,
-                new MenuButton("done", "Done", LAYOUT.centeredButton(180), navigation::back));
+                advancedOpenGl,
+                brightness,
+                clouds,
+                particles,
+                new MenuButton("done", "Done", LAYOUT.centeredButton(212), navigation::back));
         return new MenuScreen(MenuScreenIds.VIDEO_OPTIONS, "Video Settings", components);
     }
 
@@ -222,16 +452,27 @@ public final class MenuScreenFactory {
     }
 
     public Screen death() {
-        return death("You died!");
+        return death(content.hardcoreDeath() ? "Game over!" : "You died!");
     }
 
     public Screen death(String message) {
-        List<MenuComponent> components = List.of(
-                new MenuButton("respawn", "Respawn", LAYOUT.centeredButton(124), () -> {
-                    callbacks.respawn();
-                    navigation.pop();
-                }),
-                new MenuButton("title", "Title Menu", LAYOUT.centeredButton(148), this::saveAndQuitToTitle));
+        List<MenuComponent> components = new ArrayList<>();
+        components.add(MenuLabel.centered("score", com.craftzero.graphics.DeathScreen.scoreText(content.deathScore()),
+                GuiLayout.BASE_WIDTH / 2, 96, 200)
+                .color(0.85f, 0.85f, 0.85f, 1.0f));
+        if (content.hardcoreDeath()) {
+            components.add(MenuLabel.centered("hardcore-message", "You cannot respawn in hardcore mode!",
+                    GuiLayout.BASE_WIDTH / 2, 122, 240));
+            components.add(new MenuButton("delete-world", "Delete World", LAYOUT.centeredButton(148),
+                    this::deleteHardcoreWorldAndReturnToTitle));
+        } else {
+            components.add(new MenuButton("respawn", "Respawn", LAYOUT.centeredButton(124), () -> {
+                callbacks.respawn();
+                navigation.pop();
+            }));
+            components.add(new MenuButton("title", "Title Menu", LAYOUT.centeredButton(148),
+                    this::saveAndQuitToTitle));
+        }
         return new MenuScreen(MenuScreenIds.DEATH, message, components, true, false, () -> true,
                 MenuScreen.Background.NONE);
     }
@@ -243,6 +484,12 @@ public final class MenuScreenFactory {
 
     private void saveAndQuitToTitle() {
         callbacks.saveAndQuitToTitle();
+        navigation.clear();
+        navigation.push(title());
+    }
+
+    private void deleteHardcoreWorldAndReturnToTitle() {
+        callbacks.deleteHardcoreWorld();
         navigation.clear();
         navigation.push(title());
     }
@@ -259,8 +506,123 @@ public final class MenuScreenFactory {
         return "Render Distance: " + video.renderDistance().displayName();
     }
 
+    private static String guiScaleLabel(int value) {
+        return switch (value) {
+            case 0 -> "Auto";
+            case 1 -> "Small";
+            case 2 -> "Normal";
+            default -> "Large";
+        };
+    }
+
+    private static String guiScaleButtonLabel(VideoSettingsModel video) {
+        return "GUI Scale: " + guiScaleLabel(video.guiScale());
+    }
+
+    private static String smoothLightingLabel(VideoSettingsModel video) {
+        return "Smooth Lighting: " + onOff(video.smoothLighting());
+    }
+
+    private static String performanceLabel(VideoSettingsModel video) {
+        return "Performance: " + switch (video.framerateLimit()) {
+            case 0 -> "Max FPS";
+            case 40 -> "Power saver";
+            default -> "Balanced";
+        };
+    }
+
+    private static String anaglyphLabel(VideoSettingsModel video) {
+        return "3D Anaglyph: " + onOff(video.anaglyph3d());
+    }
+
+    private static String viewBobbingLabel(VideoSettingsModel video) {
+        return "View Bobbing: " + onOff(video.viewBobbing());
+    }
+
+    private static String advancedOpenGlLabel(VideoSettingsModel video) {
+        return "Advanced OpenGL: " + onOff(video.advancedOpenGl());
+    }
+
+    private static String brightnessLabel(double value) {
+        if (value <= 0.0) {
+            return "Moody";
+        }
+        if (value >= 1.0) {
+            return "Bright";
+        }
+        return Math.round(value * 100.0) + "%";
+    }
+
+    private static String cloudsLabel(VideoSettingsModel video) {
+        return "Clouds: " + onOff(video.clouds());
+    }
+
+    private static String particlesLabel(VideoSettingsModel video) {
+        return "Particles: " + switch (video.particles()) {
+            case 0 -> "All";
+            case 1 -> "Decreased";
+            default -> "Minimal";
+        };
+    }
+
+    private static String onOff(boolean value) {
+        return value ? "ON" : "OFF";
+    }
+
+    private static int nextFrameLimit(int framerateLimit) {
+        return framerateLimit == 120 ? 40 : framerateLimit == 40 ? 0 : 120;
+    }
+
     private static String gameModeLabel(GameMode gameMode) {
         return "Game Mode: " + gameMode.displayName();
+    }
+
+    private void applyLanguageSelection(MenuList<LanguageEntry> languageList, SettingsModel settings,
+            MenuLabel current) {
+        languageList.selectedItem().ifPresent(entry -> {
+            settings.setLanguage(entry.code());
+            current.text(currentLanguageLabel(settings, languageList.items()));
+            callbacks.settingsChanged(settings.copy());
+        });
+    }
+
+    private static List<LanguageEntry> normalizedLanguages(List<LanguageEntry> languages) {
+        return languages == null || languages.isEmpty()
+                ? List.of(new LanguageEntry(DEFAULT_LANGUAGE_CODE, DEFAULT_LANGUAGE_NAME))
+                : languages;
+    }
+
+    private static int selectedLanguageIndex(List<LanguageEntry> languages, String code) {
+        String selected = normalizeLanguageCode(code);
+        for (int i = 0; i < languages.size(); i++) {
+            if (languages.get(i).code().equals(selected)) {
+                return i;
+            }
+        }
+        return languages.isEmpty() ? -1 : 0;
+    }
+
+    private static String currentLanguageLabel(SettingsModel settings, List<LanguageEntry> languages) {
+        return "Language: " + languageName(languages, settings.language());
+    }
+
+    private static String languageRowLabel(SettingsModel settings, LanguageEntry entry) {
+        return entry.displayName() + (entry.code().equals(settings.language()) ? " *" : "");
+    }
+
+    private static String languageName(List<LanguageEntry> languages, String code) {
+        String selected = normalizeLanguageCode(code);
+        for (LanguageEntry entry : languages) {
+            if (entry.code().equals(selected)) {
+                return entry.displayName();
+            }
+        }
+        return selected;
+    }
+
+    private static String normalizeLanguageCode(String language) {
+        String cleaned = language == null ? "" : language.trim();
+        return cleaned.isEmpty() ? DEFAULT_LANGUAGE_CODE : cleaned;
     }
 
     public interface Callbacks {
@@ -288,6 +650,9 @@ public final class MenuScreenFactory {
         default void saveAndQuitToTitle() {
         }
 
+        default void deleteHardcoreWorld() {
+        }
+
         default void quitGame() {
         }
 
@@ -309,8 +674,14 @@ public final class MenuScreenFactory {
         private final List<TexturePackEntry> texturePacks = new ArrayList<>();
         private final List<ServerEntry> servers = new ArrayList<>();
         private final List<ControlBinding> controlBindings = new ArrayList<>();
+        private final List<LanguageEntry> languages = new ArrayList<>(
+                List.of(new LanguageEntry(DEFAULT_LANGUAGE_CODE, DEFAULT_LANGUAGE_NAME)));
         private SettingsModel settings = new SettingsModel();
         private VideoSettingsModel videoSettings = new VideoSettingsModel();
+        private AchievementTracker achievementTracker = new AchievementTracker();
+        private PlayerStatistics statistics = new PlayerStatistics();
+        private int deathScore;
+        private boolean hardcoreDeath;
 
         public List<WorldEntry> worlds() {
             return List.copyOf(worlds);
@@ -352,6 +723,16 @@ public final class MenuScreenFactory {
             return this;
         }
 
+        public List<LanguageEntry> languages() {
+            return List.copyOf(languages);
+        }
+
+        public Content setLanguages(List<LanguageEntry> languages) {
+            this.languages.clear();
+            this.languages.addAll(Objects.requireNonNull(languages, "languages"));
+            return this;
+        }
+
         public SettingsModel settings() {
             return settings;
         }
@@ -367,6 +748,42 @@ public final class MenuScreenFactory {
 
         public Content setVideoSettings(VideoSettingsModel videoSettings) {
             this.videoSettings = Objects.requireNonNull(videoSettings, "videoSettings");
+            return this;
+        }
+
+        public AchievementTracker achievementTracker() {
+            return achievementTracker;
+        }
+
+        public Content setAchievementTracker(AchievementTracker achievementTracker) {
+            this.achievementTracker = Objects.requireNonNull(achievementTracker, "achievementTracker");
+            return this;
+        }
+
+        public PlayerStatistics statistics() {
+            return statistics;
+        }
+
+        public Content setStatistics(PlayerStatistics statistics) {
+            this.statistics = Objects.requireNonNull(statistics, "statistics");
+            return this;
+        }
+
+        public int deathScore() {
+            return deathScore;
+        }
+
+        public Content setDeathScore(int deathScore) {
+            this.deathScore = Math.max(0, deathScore);
+            return this;
+        }
+
+        public boolean hardcoreDeath() {
+            return hardcoreDeath;
+        }
+
+        public Content setHardcoreDeath(boolean hardcoreDeath) {
+            this.hardcoreDeath = hardcoreDeath;
             return this;
         }
     }
@@ -403,6 +820,13 @@ public final class MenuScreenFactory {
         }
     }
 
+    public record LanguageEntry(String code, String displayName) {
+        public LanguageEntry {
+            code = normalizeLanguageCode(code);
+            Objects.requireNonNull(displayName, "displayName");
+        }
+    }
+
     public record CreateWorldRequest(String name, String seed, GameMode gameMode) {
         public CreateWorldRequest {
             Objects.requireNonNull(name, "name");
@@ -415,14 +839,20 @@ public final class MenuScreenFactory {
         private double musicVolume = 1.0;
         private double soundVolume = 1.0;
         private boolean invertMouse;
+        private String language = DEFAULT_LANGUAGE_CODE;
 
         public SettingsModel() {
         }
 
         public SettingsModel(double musicVolume, double soundVolume, boolean invertMouse) {
+            this(musicVolume, soundVolume, invertMouse, DEFAULT_LANGUAGE_CODE);
+        }
+
+        public SettingsModel(double musicVolume, double soundVolume, boolean invertMouse, String language) {
             setMusicVolume(musicVolume);
             setSoundVolume(soundVolume);
             this.invertMouse = invertMouse;
+            setLanguage(language);
         }
 
         public double musicVolume() {
@@ -449,15 +879,31 @@ public final class MenuScreenFactory {
             this.invertMouse = invertMouse;
         }
 
+        public String language() {
+            return language;
+        }
+
+        public void setLanguage(String language) {
+            this.language = normalizeLanguageCode(language);
+        }
+
         public SettingsModel copy() {
-            return new SettingsModel(musicVolume, soundVolume, invertMouse);
+            return new SettingsModel(musicVolume, soundVolume, invertMouse, language);
         }
     }
 
     public static final class VideoSettingsModel {
         private GraphicsMode graphicsMode = GraphicsMode.FANCY;
         private RenderDistance renderDistance = RenderDistance.NORMAL;
+        private boolean smoothLighting = true;
+        private int framerateLimit = 120;
+        private boolean anaglyph3d;
+        private boolean viewBobbing = true;
         private int guiScale;
+        private boolean advancedOpenGl;
+        private double brightness;
+        private boolean clouds = true;
+        private int particles;
 
         public GraphicsMode graphicsMode() {
             return graphicsMode;
@@ -475,19 +921,91 @@ public final class MenuScreenFactory {
             this.renderDistance = Objects.requireNonNull(renderDistance, "renderDistance");
         }
 
+        public boolean smoothLighting() {
+            return smoothLighting;
+        }
+
+        public void setSmoothLighting(boolean smoothLighting) {
+            this.smoothLighting = smoothLighting;
+        }
+
+        public int framerateLimit() {
+            return framerateLimit;
+        }
+
+        public void setFramerateLimit(int framerateLimit) {
+            this.framerateLimit = framerateLimit <= 0 ? 0 : framerateLimit <= 40 ? 40 : 120;
+        }
+
+        public boolean anaglyph3d() {
+            return anaglyph3d;
+        }
+
+        public void setAnaglyph3d(boolean anaglyph3d) {
+            this.anaglyph3d = anaglyph3d;
+        }
+
+        public boolean viewBobbing() {
+            return viewBobbing;
+        }
+
+        public void setViewBobbing(boolean viewBobbing) {
+            this.viewBobbing = viewBobbing;
+        }
+
         public int guiScale() {
             return guiScale;
         }
 
         public void setGuiScale(int guiScale) {
-            this.guiScale = Math.max(0, Math.min(4, guiScale));
+            this.guiScale = Math.max(0, Math.min(3, guiScale));
+        }
+
+        public boolean advancedOpenGl() {
+            return advancedOpenGl;
+        }
+
+        public void setAdvancedOpenGl(boolean advancedOpenGl) {
+            this.advancedOpenGl = advancedOpenGl;
+        }
+
+        public double brightness() {
+            return brightness;
+        }
+
+        public void setBrightness(double brightness) {
+            this.brightness = clamp01(brightness);
+        }
+
+        public boolean clouds() {
+            return clouds;
+        }
+
+        public void setClouds(boolean clouds) {
+            this.clouds = clouds;
+        }
+
+        public int particles() {
+            return particles;
+        }
+
+        public void setParticles(int particles) {
+            this.particles = Math.max(0, Math.min(2, particles));
         }
 
         public VideoSettingsModel copy() {
             VideoSettingsModel copy = new VideoSettingsModel();
             copy.setGraphicsMode(graphicsMode);
             copy.setRenderDistance(renderDistance);
+            copy.setSmoothLighting(smoothLighting);
+            copy.setFramerateLimit(framerateLimit);
+            copy.setAnaglyph3d(anaglyph3d);
+            copy.setViewBobbing(viewBobbing);
             copy.setGuiScale(guiScale);
+            copy.setAdvancedOpenGl(advancedOpenGl);
+            copy.setBrightness(brightness);
+            copy.setClouds(clouds);
+            copy.setParticles(particles);
             return copy;
         }
     }

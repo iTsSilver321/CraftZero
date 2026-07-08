@@ -10,13 +10,16 @@ import static org.lwjgl.opengl.GL11.*;
  */
 public class SkyRenderer {
 
-    private Mesh sunMesh;
-    private Mesh moonMesh;
-    private Texture sunTexture;
-    private Texture moonTexture;
-
     private static final float SIZE = 30.0f;
     private static final float DISTANCE = 100.0f;
+    private static final int MOON_PHASE_COUNT = 8;
+    private static final int MOON_PHASE_COLUMNS = 4;
+    private static final int MOON_PHASE_ROWS = 2;
+
+    private Mesh sunMesh;
+    private final Mesh[] moonPhaseMeshes = new Mesh[MOON_PHASE_COUNT];
+    private Texture sunTexture;
+    private Texture moonTexture;
 
     public void init() throws Exception {
         float[] vertices = new float[] {
@@ -43,10 +46,12 @@ public class SkyRenderer {
         };
 
         sunMesh = new Mesh(vertices, texCoords, normals, indices);
-        moonMesh = new Mesh(vertices, texCoords, normals, indices);
+        for (int phase = 0; phase < moonPhaseMeshes.length; phase++) {
+            moonPhaseMeshes[phase] = new Mesh(vertices, moonPhaseTexCoords(phase), normals, indices);
+        }
 
         sunTexture = new Texture("/textures/terrain/sun.png");
-        moonTexture = new Texture("/textures/terrain/moon.png");
+        moonTexture = new Texture("/textures/terrain/moon_phases.png");
     }
 
     public void render(Renderer renderer, DayCycleManager dayCycle, Camera camera) {
@@ -99,7 +104,7 @@ public class SkyRenderer {
 
         shader.setUniform("modelMatrix", moonMat);
         moonTexture.bind(0);
-        moonMesh.render();
+        moonPhaseMeshes[normalizedMoonPhase(dayCycle.getMoonPhase())].render();
 
         // Restore state - keep blend ENABLED for water transparency
         glDepthMask(true);
@@ -117,11 +122,33 @@ public class SkyRenderer {
     public void cleanup() {
         if (sunMesh != null)
             sunMesh.cleanup();
-        if (moonMesh != null)
-            moonMesh.cleanup();
+        for (Mesh moonPhaseMesh : moonPhaseMeshes) {
+            if (moonPhaseMesh != null)
+                moonPhaseMesh.cleanup();
+        }
         if (sunTexture != null)
             sunTexture.cleanup();
         if (moonTexture != null)
             moonTexture.cleanup();
+    }
+
+    static float[] moonPhaseTexCoords(int phase) {
+        int normalized = normalizedMoonPhase(phase);
+        int column = normalized % MOON_PHASE_COLUMNS;
+        int row = normalized / MOON_PHASE_COLUMNS;
+        float u0 = column / (float) MOON_PHASE_COLUMNS;
+        float u1 = (column + 1) / (float) MOON_PHASE_COLUMNS;
+        float v0 = row / (float) MOON_PHASE_ROWS;
+        float v1 = (row + 1) / (float) MOON_PHASE_ROWS;
+        return new float[] {
+                u0, v0,
+                u0, v1,
+                u1, v1,
+                u1, v0
+        };
+    }
+
+    static int normalizedMoonPhase(int phase) {
+        return Math.floorMod(phase, MOON_PHASE_COUNT);
     }
 }

@@ -23,6 +23,7 @@ public enum GameState {
     LOADING_WORLD(true, false),
     IN_GAME(false, true),
     PAUSED(true, true),
+    END_CREDITS(true, true),
     DISCONNECTED(true, false),
     SHUTTING_DOWN(false, false);
 

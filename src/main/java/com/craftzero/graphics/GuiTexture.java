@@ -11,6 +11,7 @@ package com.craftzero.graphics;
  * - crafting.png: crafting table background
  * - container.png: chest background
  * - furnace.png: furnace background
+ * - trap.png: dispenser background
  */
 public class GuiTexture {
 
@@ -21,10 +22,13 @@ public class GuiTexture {
     private static Texture craftingTexture;
     private static Texture containerTexture;
     private static Texture furnaceTexture;
+    private static Texture trapTexture;
     private static Texture enchantTexture;
     private static Texture alchemyTexture;
     private static Texture chestTexture;
     private static Texture largeChestTexture;
+    private static Texture bookTexture;
+    private static Texture glintTexture;
     private static Texture itemsTexture; // Items atlas (stick, tools, etc.)
 
     private static boolean initialized = false;
@@ -43,10 +47,14 @@ public class GuiTexture {
         craftingTexture = new Texture("/textures/gui/crafting.png");
         containerTexture = new Texture("/textures/gui/container.png");
         furnaceTexture = new Texture("/textures/gui/furnace.png");
+        trapTexture = new Texture("/textures/gui/trap.png");
         enchantTexture = new Texture("/textures/gui/enchant.png");
         alchemyTexture = new Texture("/textures/gui/alchemy.png");
         chestTexture = new Texture("/textures/item/chest.png");
         largeChestTexture = new Texture("/textures/item/largechest.png");
+        bookTexture = new Texture("/textures/item/book.png");
+        glintTexture = new Texture("/textures/misc/glint.png");
+        glintTexture.setRepeatWrapping();
         itemsTexture = new Texture("/textures/item/items.png");
 
         initialized = true;
@@ -81,6 +89,10 @@ public class GuiTexture {
         return furnaceTexture;
     }
 
+    public static Texture getTrapTexture() {
+        return trapTexture;
+    }
+
     public static Texture getEnchantTexture() {
         return enchantTexture;
     }
@@ -95,6 +107,14 @@ public class GuiTexture {
 
     public static Texture getLargeChestTexture() {
         return largeChestTexture;
+    }
+
+    public static Texture getBookTexture() {
+        return bookTexture;
+    }
+
+    public static Texture getGlintTexture() {
+        return glintTexture;
     }
 
     // ========== icons.png UV coordinates (256x256) ==========
@@ -156,6 +176,14 @@ public class GuiTexture {
 
     public static float[] getXpBarFillUV(int width) {
         return getUV(0, 69, Math.max(0, Math.min(182, width)), 5, ICONS_SIZE);
+    }
+
+    public static float[] getBossBarBackgroundUV() {
+        return getUV(0, 74, 182, 5, ICONS_SIZE);
+    }
+
+    public static float[] getBossBarFillUV(int width) {
+        return getUV(0, 79, Math.max(0, Math.min(182, width)), 5, ICONS_SIZE);
     }
 
     // ========== gui.png UV coordinates (256x256) ==========
@@ -228,6 +256,8 @@ public class GuiTexture {
             containerTexture.cleanup();
         if (furnaceTexture != null)
             furnaceTexture.cleanup();
+        if (trapTexture != null)
+            trapTexture.cleanup();
         if (enchantTexture != null)
             enchantTexture.cleanup();
         if (alchemyTexture != null)
@@ -236,6 +266,10 @@ public class GuiTexture {
             chestTexture.cleanup();
         if (largeChestTexture != null)
             largeChestTexture.cleanup();
+        if (bookTexture != null)
+            bookTexture.cleanup();
+        if (glintTexture != null)
+            glintTexture.cleanup();
         if (itemsTexture != null)
             itemsTexture.cleanup();
         initialized = false;

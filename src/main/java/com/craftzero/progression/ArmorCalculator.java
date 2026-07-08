@@ -18,13 +18,12 @@ public final class ArmorCalculator {
         ArmorSlot[] slots = ArmorSlot.values();
         for (int i = 0; i < armor.length && i < slots.length; i++) {
             ItemStack stack = armor[i];
-            if (stack == null || stack.isEmpty()) {
+            ArmorSlot slot = slots[i];
+            if (!isValidArmorSlot(stack, slot)) {
                 continue;
             }
             ArmorMaterial material = ArmorMaterial.materialOf(stack.getType());
-            if (material != null) {
-                total += material.getProtection(slots[i]);
-            }
+            total += material.getProtection(slot);
         }
         return total;
     }
@@ -48,8 +47,10 @@ public final class ArmorCalculator {
             return 0;
         }
         int total = 0;
-        for (ItemStack stack : armor) {
-            if (stack == null || stack.isEmpty()) {
+        ArmorSlot[] slots = ArmorSlot.values();
+        for (int i = 0; i < armor.length && i < slots.length; i++) {
+            ItemStack stack = armor[i];
+            if (!isValidArmorSlot(stack, slots[i])) {
                 continue;
             }
             total += EnchantmentResolver.getLevel(stack, EnchantmentType.PROTECTION);
@@ -58,10 +59,15 @@ public final class ArmorCalculator {
                     case FIRE -> EnchantmentResolver.getLevel(stack, EnchantmentType.FIRE_PROTECTION) * 2;
                     case EXPLOSION -> EnchantmentResolver.getLevel(stack, EnchantmentType.BLAST_PROTECTION) * 2;
                     case ARROW -> EnchantmentResolver.getLevel(stack, EnchantmentType.PROJECTILE_PROTECTION) * 2;
+                    case FALL -> EnchantmentResolver.getLevel(stack, EnchantmentType.FEATHER_FALLING) * 3;
                     default -> 0;
                 };
             }
         }
         return Math.min(25, total);
+    }
+
+    private static boolean isValidArmorSlot(ItemStack stack, ArmorSlot slot) {
+        return stack != null && !stack.isEmpty() && ArmorMaterial.slotOf(stack.getType()) == slot;
     }
 }

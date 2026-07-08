@@ -20,9 +20,10 @@ public class Navigator {
     private boolean hasTarget;
 
     // Pathfinding limits
-    private static final int MAX_ITERATIONS = 240; // Max A* iterations
-    private static final int MAX_PATH_LENGTH = 32; // Max nodes in path
-    private static final int RECALC_INTERVAL = 20; // Ticks between recalculations
+    private static final int MAX_ITERATIONS = 512;
+    private static final int MAX_PATH_LENGTH = 64;
+    private static final int RECALC_INTERVAL = 10;
+    private static final float PARTIAL_PATH_MIN_PROGRESS = 1.0f;
 
     private int recalcCooldown = 0;
 
@@ -74,6 +75,10 @@ public class Navigator {
         return hasTarget && currentPath != null && !currentPath.isDone();
     }
 
+    public boolean hasTarget() {
+        return hasTarget;
+    }
+
     /**
      * Check if we've reached the destination.
      */
@@ -103,7 +108,10 @@ public class Navigator {
 
         // Recalculate path periodically or if needed
         recalcCooldown--;
-        if (recalcCooldown <= 0 || currentPath == null || !currentPath.isValid()) {
+        if (recalcCooldown <= 0
+                || currentPath == null
+                || !currentPath.isValid()
+                || currentPath.isTargetStale(targetX, targetY, targetZ)) {
             recalculatePath();
             recalcCooldown = RECALC_INTERVAL;
         }
@@ -163,11 +171,16 @@ public class Navigator {
         startNode.calculateHeuristic(goalX, goalY, goalZ);
         startNode.calculateFCost();
         evaluator.evaluateNode(startNode);
+        if (!evaluator.canUseForPath(startNode)) {
+            return Path.empty();
+        }
 
         openSet.add(startNode);
         nodeCache.put(nodeKey(startX, startY, startZ), startNode);
 
         int iterations = 0;
+        PathNode bestNode = startNode;
+        float bestNodeScore = partialPathScore(startNode, goalX, goalY, goalZ);
 
         while (!openSet.isEmpty() && iterations < MAX_ITERATIONS) {
             iterations++;
@@ -177,10 +190,17 @@ public class Navigator {
 
             if (current == null)
                 break;
+            current.inOpenSet = false;
 
             // Check if we've reached the goal
             if (current.x == goalX && current.z == goalZ && Math.abs(current.y - goalY) <= 1) {
                 return reconstructPath(current, goalNode);
+            }
+
+            float currentScore = partialPathScore(current, goalX, goalY, goalZ);
+            if (currentScore + PARTIAL_PATH_MIN_PROGRESS < bestNodeScore) {
+                bestNode = current;
+                bestNodeScore = currentScore;
             }
 
             closedSet.add(current);
@@ -209,6 +229,9 @@ public class Navigator {
                             neighbor = new PathNode(nx, ny, nz);
                             evaluator.evaluateNode(neighbor);
                             nodeCache.put(key, neighbor);
+                            key = cacheAdjustedNode(nodeCache, key, neighbor);
+                        } else if (neighbor.x != nx || neighbor.y != ny || neighbor.z != nz) {
+                            key = nodeKey(neighbor.x, neighbor.y, neighbor.z);
                         }
 
                         // Skip if already visited
@@ -225,23 +248,45 @@ public class Navigator {
 
                         // Check if this is a better path
                         if (!neighbor.inOpenSet || tentativeG < neighbor.gCost) {
+                            if (neighbor.inOpenSet) {
+                                openSet.remove(neighbor);
+                            }
                             neighbor.parent = current;
                             neighbor.gCost = tentativeG;
                             neighbor.calculateHeuristic(goalX, goalY, goalZ);
                             neighbor.calculateFCost();
 
-                            if (!neighbor.inOpenSet) {
-                                neighbor.inOpenSet = true;
-                                openSet.add(neighbor);
-                            }
+                            neighbor.inOpenSet = true;
+                            openSet.add(neighbor);
                         }
                     }
                 }
             }
         }
 
-        // No path found
+        if (bestNode != null && bestNode != startNode && bestNode.parent != null) {
+            return reconstructPath(bestNode, goalNode);
+        }
+
         return Path.empty();
+    }
+
+    private long cacheAdjustedNode(Map<Long, PathNode> nodeCache, long originalKey, PathNode node) {
+        long adjustedKey = nodeKey(node.x, node.y, node.z);
+        if (adjustedKey != originalKey) {
+            PathNode existing = nodeCache.get(adjustedKey);
+            if (existing == null) {
+                nodeCache.put(adjustedKey, node);
+            }
+        }
+        return adjustedKey;
+    }
+
+    private static float partialPathScore(PathNode node, int goalX, int goalY, int goalZ) {
+        int dx = node.x - goalX;
+        int dy = node.y - goalY;
+        int dz = node.z - goalZ;
+        return dx * dx + dz * dz + Math.abs(dy) * 1.5f;
     }
 
     /**

@@ -6,7 +6,6 @@ import com.craftzero.progression.PotionType;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -16,14 +15,18 @@ import static org.junit.jupiter.api.Assertions.*;
 class CreativeCatalogTest {
 
     @Test
-    @DisplayName("Creative catalog should include every implemented non-potion item type")
-    void includesEveryImplementedItemType() {
+    @DisplayName("Creative catalog should include every implemented creative-visible non-potion item type")
+    void includesEveryCreativeVisibleItemType() {
         List<CreativeCatalogEntry> entries = CreativeCatalog.entries();
         Set<ItemType> visibleTypes = entries.stream()
                 .map(CreativeCatalogEntry::type)
                 .collect(Collectors.toSet());
         for (ItemType type : ItemType.values()) {
-            assertTrue(visibleTypes.contains(type), "Missing creative catalog item " + type);
+            if (CreativeCatalog.isCommandOnly(type)) {
+                assertFalse(visibleTypes.contains(type), type + " should stay command/editor-only");
+            } else {
+                assertTrue(visibleTypes.contains(type), "Missing creative catalog item " + type);
+            }
         }
     }
 

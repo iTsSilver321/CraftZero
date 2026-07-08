@@ -12,6 +12,8 @@ public class BaseMenuScreen implements Screen, ScreenManager.EscapeHandler {
     private final List<MenuSlider> sliders = new ArrayList<>();
     private final List<TextField> textFields = new ArrayList<>();
     private final List<MenuList<?>> lists = new ArrayList<>();
+    private final List<MenuLabel> labels = new ArrayList<>();
+    private final List<MenuComponent> customComponents = new ArrayList<>();
     private Runnable tickAction;
     private float time;
 
@@ -42,6 +44,31 @@ public class BaseMenuScreen implements Screen, ScreenManager.EscapeHandler {
         return this;
     }
 
+    public BaseMenuScreen add(MenuLabel label) {
+        labels.add(label);
+        return this;
+    }
+
+    public BaseMenuScreen add(MenuComponent component) {
+        if (component instanceof MenuButton button) {
+            return add(button);
+        }
+        if (component instanceof MenuSlider slider) {
+            return add(slider);
+        }
+        if (component instanceof TextField field) {
+            return add(field);
+        }
+        if (component instanceof MenuList<?> list) {
+            return add(list);
+        }
+        if (component instanceof MenuLabel label) {
+            return add(label);
+        }
+        customComponents.add(component);
+        return this;
+    }
+
     public BaseMenuScreen onTick(Runnable tickAction) {
         this.tickAction = tickAction;
         return this;
@@ -51,6 +78,11 @@ public class BaseMenuScreen implements Screen, ScreenManager.EscapeHandler {
     public void update(MenuInput input) {
         if (tickAction != null) {
             tickAction.run();
+        }
+        for (MenuComponent component : customComponents) {
+            if (component.isVisible()) {
+                component.update(input);
+            }
         }
         for (MenuList<?> list : lists) {
             if (list.visible()) {
@@ -84,6 +116,12 @@ public class BaseMenuScreen implements Screen, ScreenManager.EscapeHandler {
         }
         if (title != null && !title.isEmpty()) {
             renderer.drawTitle(title, panoramaBackground ? 72 : 34, panoramaBackground ? 3.0f : 2.0f);
+        }
+        for (MenuLabel label : labels) {
+            renderer.drawComponent(label);
+        }
+        for (MenuComponent component : customComponents) {
+            renderer.drawComponent(component);
         }
         for (MenuList<?> list : lists) {
             renderer.drawComponent(list);
@@ -124,9 +162,17 @@ public class BaseMenuScreen implements Screen, ScreenManager.EscapeHandler {
         return lists;
     }
 
+    public List<MenuLabel> labels() {
+        return labels;
+    }
+
     @Override
     public List<MenuComponent> components() {
-        List<MenuComponent> components = new ArrayList<>(lists.size() + textFields.size() + sliders.size() + buttons.size());
+        List<MenuComponent> components = new ArrayList<>(
+                labels.size() + customComponents.size() + lists.size() + textFields.size()
+                        + sliders.size() + buttons.size());
+        components.addAll(labels);
+        components.addAll(customComponents);
         components.addAll(lists);
         components.addAll(textFields);
         components.addAll(sliders);

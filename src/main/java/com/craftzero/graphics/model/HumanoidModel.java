@@ -131,6 +131,39 @@ public class HumanoidModel {
                 body.setRotation(breathe, 0, 0);
         }
 
+        public void animateEnderman(float limbSwing, float limbSwingAmount, float ageInTicks,
+                        float headYaw, float headPitch, boolean carryingBlock) {
+                headYaw = Math.max(-60, Math.min(60, headYaw));
+                headPitch = Math.max(-45, Math.min(45, headPitch));
+
+                head.setRotation(
+                                (float) Math.toRadians(headPitch),
+                                (float) Math.toRadians(headYaw),
+                                0);
+
+                float legSwing = clamp((float) Math.cos(limbSwing * 0.6662f) * 0.7f * limbSwingAmount,
+                                -0.4f, 0.4f);
+                rightLeg.setRotation(legSwing, 0, 0);
+                leftLeg.setRotation(-legSwing, 0, 0);
+
+                float armSwing = clamp((float) Math.cos(limbSwing * 0.6662f + Math.PI) * 0.5f * limbSwingAmount,
+                                -0.4f, 0.4f);
+                rightArm.setRotation(armSwing, 0, 0);
+                leftArm.setRotation(-armSwing, 0, 0);
+
+                if (carryingBlock) {
+                        rightArm.setRotation(0.5f, 0, 0.05f);
+                        leftArm.setRotation(0.5f, 0, -0.05f);
+                }
+
+                float breathe = (float) Math.sin(ageInTicks * 0.1f) * 0.015f;
+                body.setRotation(breathe, 0, 0);
+        }
+
+        private static float clamp(float value, float min, float max) {
+                return Math.max(min, Math.min(max, value));
+        }
+
         /**
          * Set attack animation (arm swing).
          * 

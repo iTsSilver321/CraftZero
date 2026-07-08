@@ -1,20 +1,19 @@
 package com.craftzero.entity.ai;
 
-import com.craftzero.entity.LivingEntity;
-
-import java.util.Random;
+import com.craftzero.entity.mob.Mob;
 
 /**
- * AI Goal: Panic and run when damaged.
- * Used by passive mobs to flee when hurt.
+ * AI Goal: Panic and run when damaged or burning.
+ * Used by passive mobs to flee when hurt or set on fire.
  * Includes cliff-awareness to avoid running off edges.
  */
 public class PanicGoal implements Goal {
+    public record State(boolean panicking, int panicTime, float fleeX, float fleeZ) {
+    }
 
-    private final LivingEntity mob;
+    private final Mob mob;
     private final MobAI ai;
     private final float panicSpeed;
-    private final Random random;
 
     private float fleeX, fleeZ;
     private int panicTime;
@@ -24,12 +23,25 @@ public class PanicGoal implements Goal {
     private static final float FLEE_RADIUS = 10.0f;
     private static final int MAX_FLEE_ATTEMPTS = 8;
 
-    public PanicGoal(LivingEntity mob, MobAI ai, float panicSpeed) {
+    public PanicGoal(Mob mob, MobAI ai, float panicSpeed) {
         this.mob = mob;
         this.ai = ai;
         this.panicSpeed = panicSpeed;
-        this.random = new Random();
         this.panicking = false;
+    }
+
+    public State getState() {
+        return new State(panicking, panicTime, fleeX, fleeZ);
+    }
+
+    public void restoreState(State state) {
+        if (state == null) {
+            return;
+        }
+        panicTime = Math.max(0, state.panicTime());
+        panicking = state.panicking() && panicTime > 0;
+        fleeX = state.fleeX();
+        fleeZ = state.fleeZ();
     }
 
     @Override
@@ -39,13 +51,8 @@ public class PanicGoal implements Goal {
 
     @Override
     public boolean canUse() {
-        // Start panicking if just hurt
-        if (mob.getHurtTime() > 0 && mob.getHurtTime() == 10) { // Just got hit
-            if (pickSafeFleeDirection()) {
-                panicking = true;
-                panicTime = PANIC_DURATION;
-                return true;
-            }
+        if ((mob.isOnFire() && !panicking) || wasJustHurt()) {
+            return startPanic();
         }
         return panicking;
     }
@@ -102,9 +109,8 @@ public class PanicGoal implements Goal {
         }
 
         // If hit again, extend panic time
-        if (mob.getHurtTime() > 0 && mob.getHurtTime() == 10) {
-            panicTime = PANIC_DURATION;
-            pickSafeFleeDirection();
+        if (wasJustHurt()) {
+            startPanic();
         }
     }
 
@@ -114,28 +120,45 @@ public class PanicGoal implements Goal {
         ai.requestStopMoving();
     }
 
+    private boolean wasJustHurt() {
+        return mob.getHurtTime() > 0 && mob.getHurtTime() == 10;
+    }
+
+    private boolean startPanic() {
+        if (!pickSafeFleeDirection()) {
+            return false;
+        }
+        panicking = true;
+        panicTime = PANIC_DURATION;
+        return true;
+    }
+
     /**
      * Pick a safe flee direction that doesn't lead off a cliff.
      */
     private boolean pickSafeFleeDirection() {
         float baseAngle;
 
-        if (mob.getLastDamageSource() != null) {
-            // Run away from damage source
+        if (mob.hasLastDamagePosition()) {
+            // Run away from the remembered hit point, including player melee.
+            float dx = mob.getX() - mob.getLastDamageSourceX();
+            float dz = mob.getZ() - mob.getLastDamageSourceZ();
+            baseAngle = (float) Math.atan2(dz, dx);
+        } else if (mob.getLastDamageSource() != null) {
             float dx = mob.getX() - mob.getLastDamageSource().getX();
             float dz = mob.getZ() - mob.getLastDamageSource().getZ();
             baseAngle = (float) Math.atan2(dz, dx);
         } else {
             // Random direction
-            baseAngle = random.nextFloat() * (float) Math.PI * 2;
+            baseAngle = mob.getRandom().nextFloat() * (float) Math.PI * 2;
         }
 
         // Try multiple angles to find a safe one
         for (int attempt = 0; attempt < MAX_FLEE_ATTEMPTS; attempt++) {
-            float angle = baseAngle + (random.nextFloat() - 0.5f) * (float) Math.PI * 0.5f;
+            float angle = baseAngle + (mob.getRandom().nextFloat() - 0.5f) * (float) Math.PI * 0.5f;
             // Each attempt, widen the search cone
             if (attempt > 2) {
-                angle = random.nextFloat() * (float) Math.PI * 2;
+                angle = mob.getRandom().nextFloat() * (float) Math.PI * 2;
             }
 
             float testX = mob.getX() + (float) Math.cos(angle) * FLEE_RADIUS;
@@ -159,7 +182,7 @@ public class PanicGoal implements Goal {
         }
 
         // Fallback: just run in a random direction, better than staying still
-        float angle = random.nextFloat() * (float) Math.PI * 2;
+        float angle = mob.getRandom().nextFloat() * (float) Math.PI * 2;
         fleeX = mob.getX() + (float) Math.cos(angle) * 4.0f;
         fleeZ = mob.getZ() + (float) Math.sin(angle) * 4.0f;
         return true;

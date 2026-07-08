@@ -1,8 +1,10 @@
 package com.craftzero.entity.mob;
 
+import com.craftzero.entity.Entity;
 import com.craftzero.entity.ai.*;
 import com.craftzero.inventory.ItemType;
 import com.craftzero.main.CombatRules;
+import com.craftzero.world.WorldSoundEvent;
 
 /**
  * Zombie mob - hostile humanoid that burns in sunlight.
@@ -35,6 +37,23 @@ public class Zombie extends Mob {
     @Override
     public void dropLoot() {
         dropItems(ItemType.ROTTEN_FLESH, 0, 2);
+    }
+
+    @Override
+    protected void onHurt(float amount, Entity source) {
+        super.onHurt(amount, source);
+        playMobHurtSound(WorldSoundEvent.ZOMBIE_HURT);
+    }
+
+    @Override
+    protected void onDeath() {
+        playMobDeathSound(WorldSoundEvent.ZOMBIE_DEATH);
+        super.onDeath();
+    }
+
+    @Override
+    protected String getAmbientSoundId() {
+        return WorldSoundEvent.ZOMBIE_IDLE;
     }
 
     @Override

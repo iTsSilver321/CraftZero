@@ -18,16 +18,21 @@ public final class MobFactory {
             MobDefinition.COW,
             MobDefinition.SHEEP,
             MobDefinition.CHICKEN,
+            MobDefinition.WOLF,
+            MobDefinition.MOOSHROOM,
+            MobDefinition.VILLAGER,
             MobDefinition.SLIME,
             MobDefinition.SQUID,
             MobDefinition.ENDERMAN,
             MobDefinition.CAVE_SPIDER,
             MobDefinition.SILVERFISH,
+            MobDefinition.GIANT,
             MobDefinition.GHAST,
             MobDefinition.ZOMBIE_PIGMAN,
             MobDefinition.BLAZE,
             MobDefinition.MAGMA_CUBE,
-            MobDefinition.ENDER_DRAGON);
+            MobDefinition.ENDER_DRAGON,
+            MobDefinition.SNOW_GOLEM);
 
     private MobFactory() {
     }
@@ -53,16 +58,21 @@ public final class MobFactory {
             case COW -> new Cow();
             case SHEEP -> new Sheep();
             case CHICKEN -> new Chicken();
+            case WOLF -> new Wolf();
+            case MOOSHROOM -> new Mooshroom();
+            case VILLAGER -> new Villager();
             case SLIME -> new Slime(4);
             case SQUID -> new Squid();
             case ENDERMAN -> new Enderman();
             case CAVE_SPIDER -> new CaveSpider();
             case SILVERFISH -> new Silverfish();
+            case GIANT -> new Giant();
             case GHAST -> new Ghast();
             case ZOMBIE_PIGMAN -> new ZombiePigman();
             case BLAZE -> new Blaze();
             case MAGMA_CUBE -> new MagmaCube(4);
             case ENDER_DRAGON -> new EnderDragon();
+            case SNOW_GOLEM -> new SnowGolem();
             default -> null;
         };
     }

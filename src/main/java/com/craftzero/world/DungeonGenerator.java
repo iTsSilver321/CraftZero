@@ -9,111 +9,123 @@ import com.craftzero.world.tile.MonsterSpawnerTileEntity;
 import java.util.Random;
 
 public final class DungeonGenerator {
-    private static final ItemType[] LOOT = {
-            ItemType.IRON_INGOT, ItemType.WHEAT, ItemType.BREAD, ItemType.STRING, ItemType.GUNPOWDER,
-            ItemType.REDSTONE, ItemType.SADDLE, ItemType.BUCKET, ItemType.BONE, ItemType.RECORD_13,
-            ItemType.RECORD_CAT
-    };
-    private static final MobDefinition[] SPAWNER_MOBS = {
-            MobDefinition.ZOMBIE, MobDefinition.SKELETON, MobDefinition.SPIDER
-    };
+    private static final int ROOM_HEIGHT = 3;
+    private static final int DUNGEON_ATTEMPTS_PER_CHUNK = 8;
+
+    @FunctionalInterface
+    interface BlockReader {
+        BlockType getBlock(int worldX, int y, int worldZ);
+    }
+
+    @FunctionalInterface
+    interface BlockWriter {
+        boolean setBlock(int worldX, int y, int worldZ, BlockType block);
+    }
 
     public void generate(World world, Chunk chunk, long seed, int chunkX, int chunkZ) {
-        Random random = new Random(seed ^ 0xD06E0A11L ^ chunkX * 341873128712L ^ chunkZ * 132897987541L);
-        for (int attempt = 0; attempt < 8; attempt++) {
-            if (tryGenerateRoom(world, chunk, random, chunkX, chunkZ)) {
-                return;
+        for (int originChunkX = chunkX - 1; originChunkX <= chunkX; originChunkX++) {
+            for (int originChunkZ = chunkZ - 1; originChunkZ <= chunkZ; originChunkZ++) {
+                Random random = populationRandom(seed, originChunkX, originChunkZ);
+                generateFromOrigin(world, chunk, random, chunkX, chunkZ, originChunkX, originChunkZ);
             }
         }
     }
 
-    private boolean tryGenerateRoom(World world, Chunk chunk, Random random, int chunkX, int chunkZ) {
-        int centerX = 2 + random.nextInt(12);
-        int centerZ = 2 + random.nextInt(12);
-        int centerY = 10 + random.nextInt(52);
+    void generateFromOrigin(World world, Chunk chunk, Random random, int chunkX, int chunkZ,
+            int originChunkX, int originChunkZ) {
+        generateFromOrigin(world, chunk, random, chunkX, chunkZ, originChunkX, originChunkZ,
+                defaultReader(chunk, chunkX, chunkZ));
+    }
+
+    void generateFromOrigin(World world, Chunk chunk, Random random, int chunkX, int chunkZ,
+            int originChunkX, int originChunkZ, BlockReader blocks) {
+        generateFromOrigin(world, chunk, random, chunkX, chunkZ, originChunkX, originChunkZ,
+                blocks, defaultWriter(chunk, chunkX, chunkZ));
+    }
+
+    void generateFromOrigin(World world, Chunk chunk, Random random, int chunkX, int chunkZ,
+            int originChunkX, int originChunkZ, BlockReader blocks, BlockWriter writer) {
+        int originX = originChunkX * Chunk.WIDTH;
+        int originZ = originChunkZ * Chunk.DEPTH;
+        for (int attempt = 0; attempt < DUNGEON_ATTEMPTS_PER_CHUNK; attempt++) {
+            int centerX = originX + random.nextInt(16) + 8;
+            int centerY = random.nextInt(128);
+            int centerZ = originZ + random.nextInt(16) + 8;
+            tryGenerateRoom(world, chunk, random, chunkX, chunkZ, centerX, centerY, centerZ, blocks, writer);
+        }
+    }
+
+    boolean tryGenerateRoom(World world, Chunk chunk, Random random, int chunkX, int chunkZ,
+            int centerX, int centerY, int centerZ) {
+        return tryGenerateRoom(world, chunk, random, chunkX, chunkZ, centerX, centerY, centerZ,
+                defaultReader(chunk, chunkX, chunkZ), defaultWriter(chunk, chunkX, chunkZ));
+    }
+
+    boolean tryGenerateRoom(World world, Chunk chunk, Random random, int chunkX, int chunkZ,
+            int centerX, int centerY, int centerZ, BlockReader blocks, BlockWriter writer) {
         int halfWidth = 2 + random.nextInt(2);
         int halfDepth = 2 + random.nextInt(2);
-        int x0 = centerX - halfWidth - 1;
-        int x1 = centerX + halfWidth + 1;
-        int z0 = centerZ - halfDepth - 1;
-        int z1 = centerZ + halfDepth + 1;
-        int y0 = centerY - 1;
-        int y1 = centerY + 4;
 
-        if (x0 < 1 || x1 >= Chunk.WIDTH - 1 || z0 < 1 || z1 >= Chunk.DEPTH - 1) {
+        int openings = countSideOpenings(blocks, centerX, centerY, centerZ, halfWidth, halfDepth);
+        if (openings < 1 || openings > 5) {
             return false;
         }
-        int openings = countSideOpenings(chunk, x0, centerY, z0, x1, z1);
-        if (!hasValidEnvelope(chunk, x0, y0, z0, x1, y1, z1, openings)) {
+        if (!hasValidEnvelope(blocks, centerX, centerY, centerZ, halfWidth, halfDepth)) {
             return false;
         }
 
-        for (int y = y0; y <= y1; y++) {
-            for (int z = z0; z <= z1; z++) {
-                for (int x = x0; x <= x1; x++) {
-                    boolean wall = x == x0 || x == x1 || z == z0 || z == z1 || y == y0 || y == y1;
-                    if (wall) {
-                        chunk.setBlock(x, y, z, random.nextInt(4) == 0 ? BlockType.MOSSY_COBBLESTONE : BlockType.COBBLESTONE);
-                    } else {
-                        chunk.setBlock(x, y, z, BlockType.AIR);
-                    }
-                }
-            }
-        }
-
-        int worldX = chunkX * Chunk.WIDTH + centerX;
-        int worldZ = chunkZ * Chunk.DEPTH + centerZ;
-        chunk.setBlock(centerX, centerY, centerZ, BlockType.MOB_SPAWNER);
-        MonsterSpawnerTileEntity spawner = new MonsterSpawnerTileEntity(worldX, centerY, worldZ);
-        spawner.setMobDefinition(SPAWNER_MOBS[random.nextInt(SPAWNER_MOBS.length)]);
-        spawner.setDelay(20 + random.nextInt(120));
-        spawner.clearDirty();
-        world.stageGeneratedTileEntity(spawner);
-
-        int chestCount = random.nextInt(3);
-        for (int i = 0; i < chestCount; i++) {
-            placeChest(world, chunk, random, chunkX, chunkZ, x0, centerY, z0, x1, z1);
-        }
+        placeShell(blocks, writer, random, centerX, centerY, centerZ, halfWidth, halfDepth);
+        placeChests(world, blocks, writer, random, centerX, centerY, centerZ, halfWidth, halfDepth);
+        placeSpawner(world, writer, random, centerX, centerY, centerZ);
         return true;
     }
 
-    private static int countSideOpenings(Chunk chunk, int x0, int y, int z0, int x1, int z1) {
+    private static int countSideOpenings(BlockReader blocks, int centerX, int centerY, int centerZ,
+            int halfWidth, int halfDepth) {
         int openings = 0;
-        for (int x = x0; x <= x1; x++) {
-            if (isTwoHighAir(chunk, x, y, z0) || isTwoHighAir(chunk, x, y, z1)) {
+        int minX = centerX - halfWidth - 1;
+        int maxX = centerX + halfWidth + 1;
+        int minZ = centerZ - halfDepth - 1;
+        int maxZ = centerZ + halfDepth + 1;
+        for (int x = minX; x <= maxX; x++) {
+            if (isTwoHighAir(blocks, x, centerY, minZ)) {
+                openings++;
+            }
+            if (isTwoHighAir(blocks, x, centerY, maxZ)) {
                 openings++;
             }
         }
-        for (int z = z0; z <= z1; z++) {
-            if (isTwoHighAir(chunk, x0, y, z) || isTwoHighAir(chunk, x1, y, z)) {
+        for (int z = minZ; z <= maxZ; z++) {
+            if (isTwoHighAir(blocks, minX, centerY, z)) {
+                openings++;
+            }
+            if (isTwoHighAir(blocks, maxX, centerY, z)) {
                 openings++;
             }
         }
         return openings;
     }
 
-    private static boolean isTwoHighAir(Chunk chunk, int x, int y, int z) {
-        return chunk.getBlock(x, y, z) == BlockType.AIR && chunk.getBlock(x, y + 1, z) == BlockType.AIR;
+    private static boolean isTwoHighAir(BlockReader blocks, int x, int y, int z) {
+        return blocks.getBlock(x, y, z) == BlockType.AIR
+                && blocks.getBlock(x, y + 1, z) == BlockType.AIR;
     }
 
-    private static boolean hasValidEnvelope(Chunk chunk, int x0, int y0, int z0, int x1, int y1, int z1,
-            int openings) {
-        if (!(openings == 0 || (openings >= 1 && openings <= 5))) {
-            return false;
-        }
-        for (int y = y0; y <= y1; y++) {
-            for (int z = z0; z <= z1; z++) {
-                for (int x = x0; x <= x1; x++) {
-                    boolean floorOrCeiling = y == y0 || y == y1;
-                    if (floorOrCeiling && !isSolidDungeonBlock(chunk.getBlock(x, y, z))) {
+    private static boolean hasValidEnvelope(BlockReader blocks, int centerX, int centerY, int centerZ,
+            int halfWidth, int halfDepth) {
+        int minX = centerX - halfWidth - 1;
+        int maxX = centerX + halfWidth + 1;
+        int minZ = centerZ - halfDepth - 1;
+        int maxZ = centerZ + halfDepth + 1;
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = centerY - 1; y <= centerY + ROOM_HEIGHT + 1; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    BlockType block = blocks.getBlock(x, y, z);
+                    if (y == centerY - 1 && !isSolidDungeonBlock(block)) {
                         return false;
                     }
-                    boolean sideWall = x == x0 || x == x1 || z == z0 || z == z1;
-                    if (sideWall && !floorOrCeiling) {
-                        BlockType block = chunk.getBlock(x, y, z);
-                        if (!isSolidDungeonBlock(block) && block != BlockType.AIR) {
-                            return false;
-                        }
+                    if (y == centerY + ROOM_HEIGHT + 1 && !isSolidDungeonBlock(block)) {
+                        return false;
                     }
                 }
             }
@@ -121,32 +133,190 @@ public final class DungeonGenerator {
         return true;
     }
 
-    private static boolean isSolidDungeonBlock(BlockType block) {
-        return block == BlockType.STONE || block == BlockType.DIRT || block == BlockType.GRAVEL
-                || block == BlockType.COBBLESTONE || block == BlockType.MOSSY_COBBLESTONE;
+    private static void placeShell(BlockReader blocks, BlockWriter writer, Random random,
+            int centerX, int centerY, int centerZ, int halfWidth, int halfDepth) {
+        for (int x = centerX - halfWidth - 1; x <= centerX + halfWidth + 1; x++) {
+            for (int y = centerY + ROOM_HEIGHT; y >= centerY - 1; y--) {
+                for (int z = centerZ - halfDepth - 1; z <= centerZ + halfDepth + 1; z++) {
+                    boolean boundary = x == centerX - halfWidth - 1
+                            || x == centerX + halfWidth + 1
+                            || z == centerZ - halfDepth - 1
+                            || z == centerZ + halfDepth + 1
+                            || y == centerY - 1;
+                    if (boundary) {
+                        if (y >= 0 && !isSolidDungeonBlock(blocks.getBlock(x, y - 1, z))) {
+                            writer.setBlock(x, y, z, BlockType.AIR);
+                            continue;
+                        }
+                        if (!isSolidDungeonBlock(blocks.getBlock(x, y, z))) {
+                            continue;
+                        }
+                        if (y == centerY - 1 && random.nextInt(4) != 0) {
+                            writer.setBlock(x, y, z, BlockType.MOSSY_COBBLESTONE);
+                        } else {
+                            writer.setBlock(x, y, z, BlockType.COBBLESTONE);
+                        }
+                    } else {
+                        writer.setBlock(x, y, z, BlockType.AIR);
+                    }
+                }
+            }
+        }
     }
 
-    private static void placeChest(World world, Chunk chunk, Random random, int chunkX, int chunkZ,
-            int x0, int y, int z0, int x1, int z1) {
-        int side = random.nextInt(4);
-        int x = side < 2 ? (side == 0 ? x0 + 1 : x1 - 1) : x0 + 2 + random.nextInt(Math.max(1, x1 - x0 - 3));
-        int z = side >= 2 ? (side == 2 ? z0 + 1 : z1 - 1) : z0 + 2 + random.nextInt(Math.max(1, z1 - z0 - 3));
-        if (chunk.getBlock(x, y, z) != BlockType.AIR || chunk.getBlock(x, y - 1, z) == BlockType.AIR) {
+    private void placeChests(World world, BlockReader blocks, BlockWriter writer, Random random,
+            int centerX, int centerY, int centerZ, int halfWidth, int halfDepth) {
+        for (int chestIndex = 0; chestIndex < 2; chestIndex++) {
+            for (int attempt = 0; attempt < 3; attempt++) {
+                int x = centerX + random.nextInt(halfWidth * 2 + 1) - halfWidth;
+                int z = centerZ + random.nextInt(halfDepth * 2 + 1) - halfDepth;
+                if (blocks.getBlock(x, centerY, z) != BlockType.AIR
+                        || countSolidHorizontalNeighbors(blocks, x, centerY, z) != 1) {
+                    continue;
+                }
+                boolean inChunk = writer.setBlock(x, centerY, z, BlockType.CHEST);
+                ChestTileEntity chest = inChunk ? new ChestTileEntity(x, centerY, z) : null;
+                fillChest(chest, random);
+                if (chest != null && world != null) {
+                    chest.clearDirty();
+                    world.stageGeneratedTileEntity(chest);
+                }
+                break;
+            }
+        }
+    }
+
+    private static int countSolidHorizontalNeighbors(BlockReader blocks, int x, int y, int z) {
+        int count = 0;
+        if (isSolidDungeonBlock(blocks.getBlock(x - 1, y, z))) {
+            count++;
+        }
+        if (isSolidDungeonBlock(blocks.getBlock(x + 1, y, z))) {
+            count++;
+        }
+        if (isSolidDungeonBlock(blocks.getBlock(x, y, z - 1))) {
+            count++;
+        }
+        if (isSolidDungeonBlock(blocks.getBlock(x, y, z + 1))) {
+            count++;
+        }
+        return count;
+    }
+
+    private static void placeSpawner(World world, BlockWriter writer, Random random,
+            int centerX, int centerY, int centerZ) {
+        if (!writer.setBlock(centerX, centerY, centerZ, BlockType.MOB_SPAWNER) || world == null) {
+            pickMobSpawner(random);
             return;
         }
-        chunk.setBlock(x, y, z, BlockType.CHEST);
-        ChestTileEntity chest = new ChestTileEntity(chunkX * Chunk.WIDTH + x, y, chunkZ * Chunk.DEPTH + z);
-        fillChest(chest, random, 4 + random.nextInt(5));
-        chest.clearDirty();
-        world.stageGeneratedTileEntity(chest);
+        MonsterSpawnerTileEntity spawner = new MonsterSpawnerTileEntity(centerX, centerY, centerZ);
+        spawner.setMobDefinition(pickMobSpawner(random));
+        spawner.clearDirty();
+        world.stageGeneratedTileEntity(spawner);
     }
 
-    static void fillChest(ChestTileEntity chest, Random random, int rolls) {
-        ItemStack[] inventory = chest.getInventory();
-        for (int i = 0; i < rolls; i++) {
-            ItemType item = LOOT[random.nextInt(LOOT.length)];
-            int count = item.getMaxStackSize() == 1 ? 1 : 1 + random.nextInt(Math.min(6, item.getMaxStackSize()));
-            inventory[random.nextInt(inventory.length)] = new ItemStack(item, count);
+    private static ItemStack pickChestLootItem(Random random) {
+        int roll = random.nextInt(11);
+        if (roll == 0) {
+            return new ItemStack(ItemType.SADDLE, 1);
+        }
+        if (roll == 1) {
+            return new ItemStack(ItemType.IRON_INGOT, random.nextInt(4) + 1);
+        }
+        if (roll == 2) {
+            return new ItemStack(ItemType.BREAD, 1);
+        }
+        if (roll == 3) {
+            return new ItemStack(ItemType.WHEAT, random.nextInt(4) + 1);
+        }
+        if (roll == 4) {
+            return new ItemStack(ItemType.GUNPOWDER, random.nextInt(4) + 1);
+        }
+        if (roll == 5) {
+            return new ItemStack(ItemType.STRING, random.nextInt(4) + 1);
+        }
+        if (roll == 6) {
+            return new ItemStack(ItemType.BUCKET, 1);
+        }
+        if (roll == 7 && random.nextInt(100) == 0) {
+            return new ItemStack(ItemType.GOLDEN_APPLE, 1);
+        }
+        if (roll == 8 && random.nextInt(2) == 0) {
+            return new ItemStack(ItemType.REDSTONE, random.nextInt(4) + 1);
+        }
+        if (roll == 9 && random.nextInt(10) == 0) {
+            return new ItemStack(random.nextInt(2) == 0 ? ItemType.RECORD_13 : ItemType.RECORD_CAT, 1);
+        }
+        if (roll == 10) {
+            return new ItemStack(ItemType.COCOA_BEANS, 1);
+        }
+        return null;
+    }
+
+    private static MobDefinition pickMobSpawner(Random random) {
+        return switch (random.nextInt(4)) {
+            case 0 -> MobDefinition.SKELETON;
+            case 1, 2 -> MobDefinition.ZOMBIE;
+            case 3 -> MobDefinition.SPIDER;
+            default -> MobDefinition.ZOMBIE;
+        };
+    }
+
+    private static Random populationRandom(long seed, int chunkX, int chunkZ) {
+        Random random = new Random(seed);
+        long xSeed = (random.nextLong() / 2L) * 2L + 1L;
+        long zSeed = (random.nextLong() / 2L) * 2L + 1L;
+        random.setSeed((long) chunkX * xSeed + (long) chunkZ * zSeed ^ seed);
+        return random;
+    }
+
+    private static BlockReader defaultReader(Chunk chunk, int chunkX, int chunkZ) {
+        return (worldX, y, worldZ) -> blockAt(chunk, chunkX, chunkZ, worldX, y, worldZ);
+    }
+
+    private static BlockWriter defaultWriter(Chunk chunk, int chunkX, int chunkZ) {
+        return (worldX, y, worldZ, block) -> setIfInChunk(chunk, chunkX, chunkZ, worldX, y, worldZ, block);
+    }
+
+    private static BlockType blockAt(Chunk chunk, int chunkX, int chunkZ, int worldX, int y, int worldZ) {
+        if (y < 0 || y >= Chunk.HEIGHT) {
+            return BlockType.BEDROCK;
+        }
+        if (containsBlock(chunkX, chunkZ, worldX, worldZ)) {
+            return chunk.getBlock(worldX - chunkX * Chunk.WIDTH, y, worldZ - chunkZ * Chunk.DEPTH);
+        }
+        return BlockType.STONE;
+    }
+
+    private static boolean setIfInChunk(Chunk chunk, int chunkX, int chunkZ,
+            int worldX, int y, int worldZ, BlockType block) {
+        if (!containsBlock(chunkX, chunkZ, worldX, worldZ) || y < 0 || y >= Chunk.HEIGHT) {
+            return false;
+        }
+        chunk.setBlock(worldX - chunkX * Chunk.WIDTH, y, worldZ - chunkZ * Chunk.DEPTH, block);
+        return true;
+    }
+
+    private static boolean containsBlock(int chunkX, int chunkZ, int worldX, int worldZ) {
+        int minX = chunkX * Chunk.WIDTH;
+        int minZ = chunkZ * Chunk.DEPTH;
+        return worldX >= minX && worldX < minX + Chunk.WIDTH
+                && worldZ >= minZ && worldZ < minZ + Chunk.DEPTH;
+    }
+
+    private static boolean isSolidDungeonBlock(BlockType block) {
+        return block != null && block != BlockType.AIR && !block.isFluid() && block != BlockType.FIRE;
+    }
+
+    static void fillChest(ChestTileEntity chest, Random random) {
+        for (int i = 0; i < 8; i++) {
+            ItemStack item = pickChestLootItem(random);
+            if (item != null) {
+                int slot = random.nextInt(ChestTileEntity.SIZE);
+                if (chest != null) {
+                    chest.getInventory()[slot] = item;
+                }
+            }
         }
     }
 }

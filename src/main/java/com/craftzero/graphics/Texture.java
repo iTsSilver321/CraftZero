@@ -87,6 +87,10 @@ public class Texture {
         java.io.InputStream is = ResourcePackManager.openActive(resourcePath)
                 .orElseGet(() -> Texture.class.getResourceAsStream(resourcePath));
         if (is == null) {
+            byte[] generatedBytes = generatedFallbackBytes(resourcePath);
+            if (generatedBytes != null) {
+                return toByteBuffer(generatedBytes);
+            }
             throw new Exception("Resource not found: " + resourcePath);
         }
 
@@ -99,7 +103,17 @@ public class Texture {
         }
         is.close();
 
-        byte[] bytes = baos.toByteArray();
+        return toByteBuffer(baos.toByteArray());
+    }
+
+    private static byte[] generatedFallbackBytes(String resourcePath) throws IOException {
+        if ("/textures/terrain/Terrain.png".equals(resourcePath)) {
+            return TextureGenerator.createAtlasPngBytes();
+        }
+        return null;
+    }
+
+    private static ByteBuffer toByteBuffer(byte[] bytes) {
         ByteBuffer imageBuffer = org.lwjgl.BufferUtils.createByteBuffer(bytes.length);
         imageBuffer.put(bytes).flip();
         return imageBuffer;
@@ -118,6 +132,17 @@ public class Texture {
         glBindTexture(GL_TEXTURE_2D, 0);
     }
 
+    public void updateRgba(byte[] pixels) {
+        if (pixels == null || pixels.length != width * height * 4) {
+            return;
+        }
+        ByteBuffer buffer = org.lwjgl.BufferUtils.createByteBuffer(pixels.length);
+        buffer.put(pixels).flip();
+        glBindTexture(GL_TEXTURE_2D, textureId);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
     public int getId() {
         return textureId;
     }
@@ -128,6 +153,13 @@ public class Texture {
 
     public int getHeight() {
         return height;
+    }
+
+    public void setRepeatWrapping() {
+        glBindTexture(GL_TEXTURE_2D, textureId);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glBindTexture(GL_TEXTURE_2D, 0);
     }
 
     public void cleanup() {

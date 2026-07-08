@@ -38,11 +38,19 @@ public class MobTexture {
                 "/textures/mob/skeleton.png",
                 "/textures/mob/creeper.png",
                 "/textures/mob/spider.png",
+                "/textures/mob/spider_eyes.png",
                 "/textures/mob/pig.png",
+                "/textures/mob/saddle.png",
                 "/textures/mob/cow.png",
+                "/textures/mob/redcow.png",
                 "/textures/mob/sheep.png",
                 "/textures/mob/sheep_fur.png",
-                "/textures/mob/chicken.png"
+                "/textures/mob/chicken.png",
+                "/textures/mob/wolf.png",
+                "/textures/mob/wolf_angry.png",
+                "/textures/mob/wolf_tame.png",
+                "/textures/armor/power.png",
+                "/textures/mob/snowman.png"
         };
 
         for (String path : textures) {

@@ -97,6 +97,47 @@ class ResourcePackManagerTest {
         assertArrayEquals("zip-items".getBytes(), zipTexture.get().bytes());
     }
 
+    @Test
+    @DisplayName("Resource resolution should support Release-era wrapped archives and legacy roots")
+    void resolvesReleaseEraResourceLayouts() throws Exception {
+        Path packsRoot = tempDir.resolve("texturepacks-release");
+        Path defaultRoot = tempDir.resolve("resources-release");
+        Path legacyRootSound = defaultRoot.resolve("resources").resolve("newsound").resolve("random")
+                .resolve("click.ogg");
+        Path wrappedFolderSound = packsRoot.resolve("Folder Sounds").resolve("Release Folder").resolve("music")
+                .resolve("calm1.ogg");
+        Files.createDirectories(legacyRootSound.getParent());
+        Files.createDirectories(wrappedFolderSound.getParent());
+        Files.writeString(legacyRootSound, "legacy-root-click");
+        Files.writeString(packsRoot.resolve("Folder Sounds").resolve("pack.txt"), "Folder resources");
+        Files.writeString(wrappedFolderSound, "wrapped-folder-music");
+        createZipPack(packsRoot.resolve("Wrapped Sounds.zip"), "Wrapped resources",
+                "Release Sounds/newsound/random/door_open.ogg", "wrapped-door");
+        createZipPack(packsRoot.resolve("minecraft.jar"), "Jar resources",
+                "assets/minecraft/sounds/random/pop.ogg", "jar-pop");
+
+        ResourcePackManager manager = new ResourcePackManager(packsRoot, defaultRoot);
+
+        ResourcePackManager.ResolvedTexture defaultSound =
+                manager.resolveResourcePath("default", "newsound/random/click.ogg").orElseThrow();
+        assertArrayEquals("legacy-root-click".getBytes(), defaultSound.bytes());
+
+        ResourcePackManager.ResolvedTexture wrappedZipSound =
+                manager.resolveResourcePath("Wrapped Sounds.zip", "newsound/random/door_open.ogg").orElseThrow();
+        assertEquals("Wrapped Sounds.zip", wrappedZipSound.pack().id());
+        assertArrayEquals("wrapped-door".getBytes(), wrappedZipSound.bytes());
+
+        ResourcePackManager.ResolvedTexture jarSound =
+                manager.resolveResourcePath("minecraft.jar", "sounds/random/pop.ogg").orElseThrow();
+        assertEquals("minecraft.jar", jarSound.pack().id());
+        assertArrayEquals("jar-pop".getBytes(), jarSound.bytes());
+
+        ResourcePackManager.ResolvedTexture folderSound =
+                manager.resolveResourcePath("Folder Sounds", "music/calm1.ogg").orElseThrow();
+        assertEquals("Folder Sounds", folderSound.pack().id());
+        assertArrayEquals("wrapped-folder-music".getBytes(), folderSound.bytes());
+    }
+
     private static void createZipPack(Path zipPath, String description, String texturePath, String textureContent)
             throws Exception {
         Files.createDirectories(zipPath.getParent());

@@ -103,6 +103,13 @@ public class PlayerModel {
          */
         public void animate(float limbSwing, float limbSwingAmount, float ageInTicks,
                         float headYaw, float headPitch, float swingProgress, boolean isSneaking) {
+                animate(limbSwing, limbSwingAmount, ageInTicks, headYaw, headPitch, swingProgress, isSneaking,
+                                false, false, false, 0.0f);
+        }
+
+        public void animate(float limbSwing, float limbSwingAmount, float ageInTicks,
+                        float headYaw, float headPitch, float swingProgress, boolean isSneaking,
+                        boolean isBlocking, boolean isDrawingBow, boolean isConsuming, float useProgress) {
 
                 // Reset defaults first
                 head.setPivot(0, 24, 0);
@@ -138,13 +145,12 @@ public class PlayerModel {
                                 (float) Math.toRadians(-headYaw),
                                 0);
 
-                // Leg swing animation - Faster multiplier for aggressive movement
-                float legSwing = (float) Math.cos(limbSwing * 1.5f) * 1.4f * limbSwingAmount;
+                float legSwing = (float) Math.cos(limbSwing * 0.6662f) * 1.4f * limbSwingAmount;
                 rightLeg.setRotation(-legSwing, 0, 0);
                 leftLeg.setRotation(legSwing, 0, 0);
 
                 // Arm swing (opposite of legs)
-                float armSwing = (float) Math.cos(limbSwing * 1.5f) * 1.0f * limbSwingAmount;
+                float armSwing = (float) Math.cos(limbSwing * 0.6662f) * 1.0f * limbSwingAmount;
 
                 // VISUAL RIGHT ARM (Named 'leftArm' in code, Pivot +6)
                 // If swinging, we override the walking animation
@@ -154,11 +160,39 @@ public class PlayerModel {
 
                 // VISUAL LEFT ARM (Named 'rightArm' in code, Pivot -6)
                 float visualLeftArmRotX = -armSwing;
+                float visualLeftArmRotY = 0;
+                float visualLeftArmRotZ = 0;
 
                 // Sync arms to torso tilt during sneak
                 if (isSneaking) {
                         visualRightArmRotX -= 0.4f;
                         visualLeftArmRotX -= 0.4f;
+                }
+
+                if (swingProgress <= 0) {
+                        float p = clamp01(useProgress);
+                        if (isDrawingBow) {
+                                float pull = clamp01((p * p + p * 2.0f) / 3.0f);
+                                body.setRotation(isSneaking ? -0.4f : 0.0f, -0.08f - pull * 0.10f, 0.0f);
+                                visualRightArmRotX = (float) Math.toRadians(68.0f - pull * 10.0f);
+                                visualRightArmRotY = (float) Math.toRadians(-30.0f - pull * 18.0f);
+                                visualRightArmRotZ = (float) Math.toRadians(4.0f);
+                                visualLeftArmRotX = (float) Math.toRadians(64.0f);
+                                visualLeftArmRotY = (float) Math.toRadians(26.0f + pull * 12.0f);
+                                visualLeftArmRotZ = (float) Math.toRadians(-4.0f);
+                        } else if (isBlocking) {
+                                visualRightArmRotX = (float) Math.toRadians(42.0f);
+                                visualRightArmRotY = (float) Math.toRadians(-36.0f);
+                                visualRightArmRotZ = (float) Math.toRadians(-24.0f);
+                        } else if (isConsuming) {
+                                float pull = 1.0f - (float) Math.pow(1.0f - p, 8.0f);
+                                float biteBob = p > 0.2f
+                                                ? Math.abs((float) Math.cos(p * 32.0f / 4.0f * Math.PI)) * 0.10f
+                                                : 0.0f;
+                                visualRightArmRotX = (float) Math.toRadians(34.0f + pull * 30.0f) + biteBob;
+                                visualRightArmRotY = (float) Math.toRadians(-18.0f * pull);
+                                visualRightArmRotZ = (float) Math.toRadians(12.0f * pull);
+                        }
                 }
 
                 // Attack Swing Logic (Authentic Minecraft-style PUNCH)
@@ -181,7 +215,19 @@ public class PlayerModel {
 
                 // Apply
                 leftArm.setRotation(visualRightArmRotX, visualRightArmRotY, visualRightArmRotZ);
-                rightArm.setRotation(visualLeftArmRotX, 0, 0);
+                rightArm.setRotation(visualLeftArmRotX, visualLeftArmRotY, visualLeftArmRotZ);
+        }
+
+        private static float clamp01(float value) {
+                return Math.max(0.0f, Math.min(1.0f, value));
+        }
+
+        public void animateSleeping() {
+                animate(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false);
+                rightArm.setRotation(0.0f, 0.0f, 0.0f);
+                leftArm.setRotation(0.0f, 0.0f, 0.0f);
+                rightLeg.setRotation(0.0f, 0.0f, 0.0f);
+                leftLeg.setRotation(0.0f, 0.0f, 0.0f);
         }
 
         /**

@@ -33,4 +33,7 @@ public interface MenuComponent {
     default boolean charTyped(char character) {
         return false;
     }
+
+    default void update(MenuInput input) {
+    }
 }

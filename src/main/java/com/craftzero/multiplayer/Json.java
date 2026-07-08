@@ -249,13 +249,20 @@ final class Json {
 
             String token = text.substring(start, index);
             if (decimal) {
-                return Double.parseDouble(token);
+                return finiteNumber(Double.parseDouble(token));
             }
             try {
                 return Long.parseLong(token);
             } catch (NumberFormatException ignored) {
-                return Double.parseDouble(token);
+                return finiteNumber(Double.parseDouble(token));
             }
+        }
+
+        private Number finiteNumber(double value) {
+            if (!Double.isFinite(value)) {
+                throw error("Non-finite number");
+            }
+            return value;
         }
 
         private void consumeDigits() {

@@ -4,6 +4,8 @@ import com.craftzero.world.BlockType;
 import com.craftzero.world.World;
 
 public final class BookshelfPower {
+    private static final int MAX_POWER = 30;
+
     private BookshelfPower() {
     }
 
@@ -12,28 +14,36 @@ public final class BookshelfPower {
             return 0;
         }
         int shelves = 0;
-        for (int dx = -2; dx <= 2; dx++) {
-            for (int dz = -2; dz <= 2; dz++) {
-                if (Math.abs(dx) != 2 && Math.abs(dz) != 2) {
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                if (dx == 0 && dz == 0) {
                     continue;
                 }
-                if (dx != 0 && dz != 0 && Math.abs(dx) != 2 && Math.abs(dz) != 2) {
+                if (!hasOpenGap(world, tableX + dx, tableY, tableZ + dz)) {
                     continue;
                 }
-                int gapX = tableX + Integer.signum(dx);
-                int gapZ = tableZ + Integer.signum(dz);
-                if (world.getBlockIfLoaded(gapX, tableY, gapZ, BlockType.AIR) != BlockType.AIR
-                        || world.getBlockIfLoaded(gapX, tableY + 1, gapZ, BlockType.AIR) != BlockType.AIR) {
-                    continue;
-                }
-                for (int dy = 0; dy <= 1; dy++) {
-                    if (world.getBlockIfLoaded(tableX + dx, tableY + dy, tableZ + dz, BlockType.AIR)
-                            == BlockType.BOOKSHELF) {
-                        shelves++;
-                    }
+                shelves += shelfPowerAt(world, tableX + dx * 2, tableY, tableZ + dz * 2);
+                if (dx != 0 && dz != 0) {
+                    shelves += shelfPowerAt(world, tableX + dx * 2, tableY, tableZ + dz);
+                    shelves += shelfPowerAt(world, tableX + dx, tableY, tableZ + dz * 2);
                 }
             }
         }
-        return Math.min(30, shelves);
+        return Math.min(MAX_POWER, shelves);
+    }
+
+    private static boolean hasOpenGap(World world, int x, int y, int z) {
+        return world.getBlockIfLoaded(x, y, z, BlockType.AIR) == BlockType.AIR
+                && world.getBlockIfLoaded(x, y + 1, z, BlockType.AIR) == BlockType.AIR;
+    }
+
+    private static int shelfPowerAt(World world, int x, int y, int z) {
+        int shelves = 0;
+        for (int dy = 0; dy <= 1; dy++) {
+            if (world.getBlockIfLoaded(x, y + dy, z, BlockType.AIR) == BlockType.BOOKSHELF) {
+                shelves++;
+            }
+        }
+        return shelves;
     }
 }

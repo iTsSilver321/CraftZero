@@ -20,10 +20,14 @@ class MenuRenderingTest {
         TextField hiddenField = new TextField("hidden-field", new Rect(10, 70, 100, 20), "", 10);
         MenuList<String> hiddenList = new MenuList<>("hidden-list", new Rect(10, 100, 100, 20), 20,
                 List.of("world"), value -> value);
+        MenuLabel shownLabel = MenuLabel.centered("score", "Score: 12", 160, 120, 200);
+        MenuLabel hiddenLabel = MenuLabel.centered("hidden-label", "Hidden", 160, 132, 200).visible(false);
         hiddenSlider.setVisible(false);
         hiddenField.setVisible(false);
         hiddenList.setVisible(false);
 
+        screen.add(hiddenLabel);
+        screen.add(shownLabel);
         screen.add(hiddenList);
         screen.add(hiddenField);
         screen.add(hiddenSlider);
@@ -32,8 +36,8 @@ class MenuRenderingTest {
         RecordingMenuRenderer renderer = new RecordingMenuRenderer();
         screen.render(renderer, emptyInput(), 0.016f);
 
-        assertEquals(List.of("dirt", "title:Options", "button:shown"), renderer.calls);
-        assertEquals(4, screen.components().size());
+        assertEquals(List.of("dirt", "title:Options", "label:score:Score: 12", "button:shown"), renderer.calls);
+        assertEquals(6, screen.components().size());
     }
 
     @Test
@@ -90,6 +94,13 @@ class MenuRenderingTest {
         @Override
         public <T> void drawList(MenuList<T> list) {
             calls.add("list:" + list.id());
+        }
+
+        @Override
+        public void drawLabel(MenuLabel label) {
+            if (label.visible()) {
+                calls.add("label:" + label.id() + ":" + label.text());
+            }
         }
     }
 }

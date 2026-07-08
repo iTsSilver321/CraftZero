@@ -43,4 +43,75 @@ class BucketInteractionTest {
             world.cleanup();
         }
     }
+
+    @Test
+    @DisplayName("Water buckets should evaporate instead of placing water in the Nether")
+    void waterBucketsEvaporateInTheNether() {
+        World world = new World(65L, WorldGenerator.RELEASE_ONE, Dimension.NETHER);
+        try {
+            world.setBlock(0, 100, 0, BlockType.AIR, 0);
+            assertTrue(world.placeFluidSource(0, 100, 0, true, null));
+
+            assertSame(BlockType.AIR, world.getBlock(0, 100, 0));
+            assertEquals(1, world.getSoundEvents().size());
+            assertEquals(WorldSoundEvent.FIZZ, world.getSoundEvents().get(0).soundId());
+            assertEquals(8, world.getParticles().stream()
+                    .filter(particle -> particle.getType() == WorldParticle.Type.LARGE_SMOKE)
+                    .count());
+            assertEquals(0, world.getParticles().stream()
+                    .filter(particle -> particle.getType() == WorldParticle.Type.SMOKE)
+                    .count());
+
+            world.setBlock(10, 100, 0, BlockType.AIR, 0);
+            assertTrue(world.placeFluidSource(10, 100, 0, false, null));
+            assertSame(BlockType.LAVA, world.getBlock(10, 100, 0));
+        } finally {
+            world.cleanup();
+        }
+    }
+
+    @Test
+    @DisplayName("Cauldrons should fill from water buckets and drain one level per bottle")
+    void cauldronWaterLevelInteractions() {
+        World world = new World(63L);
+        try {
+            world.setBlock(0, 100, 0, BlockType.CAULDRON, 0);
+
+            assertEquals(0, world.getCauldronLevel(0, 100, 0));
+            assertTrue(world.fillCauldronFromWaterBucket(0, 100, 0));
+            assertEquals(World.CAULDRON_MAX_LEVEL, world.getCauldronLevel(0, 100, 0));
+            assertEquals(World.CAULDRON_MAX_LEVEL, world.getBlockMetadata(0, 100, 0));
+            assertFalse(world.fillCauldronFromWaterBucket(0, 100, 0));
+
+            assertNull(world.pickupFluidSource(0, 100, 0));
+            assertEquals(World.CAULDRON_MAX_LEVEL, world.getCauldronLevel(0, 100, 0));
+
+            assertTrue(world.drainCauldronIntoBottle(0, 100, 0));
+            assertEquals(2, world.getCauldronLevel(0, 100, 0));
+            assertTrue(world.drainCauldronIntoBottle(0, 100, 0));
+            assertEquals(1, world.getCauldronLevel(0, 100, 0));
+            assertTrue(world.drainCauldronIntoBottle(0, 100, 0));
+            assertEquals(0, world.getCauldronLevel(0, 100, 0));
+            assertFalse(world.drainCauldronIntoBottle(0, 100, 0));
+        } finally {
+            world.cleanup();
+        }
+    }
+
+    @Test
+    @DisplayName("Cauldron helpers should ignore non-cauldron blocks")
+    void cauldronInteractionsRejectOtherBlocks() {
+        World world = new World(64L);
+        try {
+            world.setBlock(0, 100, 0, BlockType.STONE, 2);
+
+            assertEquals(0, world.getCauldronLevel(0, 100, 0));
+            assertFalse(world.fillCauldronFromWaterBucket(0, 100, 0));
+            assertFalse(world.drainCauldronIntoBottle(0, 100, 0));
+            assertSame(BlockType.STONE, world.getBlock(0, 100, 0));
+            assertEquals(2, world.getBlockMetadata(0, 100, 0));
+        } finally {
+            world.cleanup();
+        }
+    }
 }

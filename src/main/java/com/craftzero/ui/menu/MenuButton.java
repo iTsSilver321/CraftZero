@@ -8,6 +8,9 @@ public final class MenuButton implements MenuComponent {
     private Rect bounds;
     private String label;
     private Runnable action;
+    private Runnable clickSound = () -> {
+    };
+    private float[] textColor;
     private boolean visible = true;
     private boolean enabled = true;
     private boolean hovered;
@@ -52,6 +55,18 @@ public final class MenuButton implements MenuComponent {
 
     public void setLabel(String label) {
         this.label = Objects.requireNonNull(label, "label");
+    }
+
+    public float[] textColor() {
+        return textColor == null ? null : textColor.clone();
+    }
+
+    public void setTextColor(float r, float g, float b, float a) {
+        this.textColor = new float[] { r, g, b, a };
+    }
+
+    public void clearTextColor() {
+        this.textColor = null;
     }
 
     @Override
@@ -124,8 +139,19 @@ public final class MenuButton implements MenuComponent {
         } : action;
     }
 
+    public void setClickSound(Runnable clickSound) {
+        this.clickSound = clickSound == null ? () -> {
+        } : clickSound;
+    }
+
+    public MenuButton clickSound(Runnable clickSound) {
+        setClickSound(clickSound);
+        return this;
+    }
+
     public void click() {
         if (visible && enabled) {
+            clickSound.run();
             action.run();
         }
     }
@@ -178,6 +204,7 @@ public final class MenuButton implements MenuComponent {
         boolean wasPressed = pressed;
         pressed = false;
         if (wasPressed && enabled && hitTest(x, y)) {
+            clickSound.run();
             action.run();
             return true;
         }

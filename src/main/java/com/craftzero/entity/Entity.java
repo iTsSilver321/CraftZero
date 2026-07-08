@@ -39,6 +39,9 @@ public abstract class Entity {
     protected boolean collidedHorizontally;
     protected boolean collidedVertically;
     protected boolean inWater;
+    protected boolean inLava;
+    protected boolean falling;
+    protected float fallStartY;
 
     // Physics constants
     // Physics constants (Standard Minecraft Values)
@@ -46,10 +49,19 @@ public abstract class Entity {
     protected static final float TERMINAL_VELOCITY = -78.4f;
     protected static final float AIR_RESISTANCE = 0.98f;
     protected static final float GROUND_FRICTION = 0.6f;
+    protected static final float COBWEB_HORIZONTAL_DRAG = 0.25f;
+    protected static final float COBWEB_VERTICAL_DRAG = 0.05f;
+    protected static final float SOUL_SAND_HORIZONTAL_DRAG = 0.4f;
+    protected static final float CLIMBABLE_AXIS_MOTION = 0.15f;
+    protected static final float CLIMBABLE_WALL_BUMP_MOTION = 0.2f;
+    protected static final float COLLISION_EPSILON = 0.0001f;
+    public static final float DEFAULT_COLLISION_BORDER_SIZE = 0.1f;
 
     // State
     protected boolean removed = false;
     protected int ticksExisted = 0;
+    private boolean waterParticleStateInitialized;
+    private boolean wasInWaterForParticles;
 
     // Animation tracking
     protected float distanceWalked = 0.0f;
@@ -69,12 +81,40 @@ public abstract class Entity {
      * Set the entity's position (bottom-center).
      */
     public void setPosition(float x, float y, float z) {
+        if (!allFinite(x, y, z)) {
+            return;
+        }
         this.x = x;
         this.y = y;
         this.z = z;
         this.prevX = x;
         this.prevY = y;
         this.prevZ = z;
+        this.fallStartY = y;
+        this.falling = false;
+    }
+
+    public void applyRemotePose(float x, float y, float z, float yaw, float pitch,
+            float motionX, float motionY, float motionZ, boolean onGround) {
+        if (!allFinite(x, y, z)) {
+            return;
+        }
+        float dx = x - this.x;
+        float dz = z - this.z;
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevZ = this.z;
+        this.prevYaw = this.yaw;
+        this.prevPitch = this.pitch;
+        this.prevDistanceWalked = this.distanceWalked;
+        this.x = x;
+        this.y = y;
+        this.z = z;
+        setYaw(yaw);
+        setPitch(pitch);
+        setMotion(motionX, motionY, motionZ);
+        this.onGround = onGround;
+        this.distanceWalked += Math.sqrt(dx * dx + dz * dz);
     }
 
     /**
@@ -89,20 +129,27 @@ public abstract class Entity {
      * Uses bottom-center coordinate system.
      */
     public AABB getBoundingBox() {
-        float halfWidth = width / 2.0f;
+        float halfWidth = getWidth() / 2.0f;
         return new AABB(
                 x - halfWidth, y, z - halfWidth,
-                x + halfWidth, y + height, z + halfWidth);
+                x + halfWidth, y + getHeight(), z + halfWidth);
+    }
+
+    /**
+     * Release-era ray picking expands entity hit boxes by a small collision border.
+     */
+    public float getCollisionBorderSize() {
+        return DEFAULT_COLLISION_BORDER_SIZE;
     }
 
     /**
      * Create the AABB at a specific position.
      */
     protected AABB getBoundingBoxAt(float px, float py, float pz) {
-        float halfWidth = width / 2.0f;
+        float halfWidth = getWidth() / 2.0f;
         return new AABB(
                 px - halfWidth, py, pz - halfWidth,
-                px + halfWidth, py + height, pz + halfWidth);
+                px + halfWidth, py + getHeight(), pz + halfWidth);
     }
 
     /**
@@ -134,43 +181,34 @@ public abstract class Entity {
         if (world == null)
             return;
 
+        boolean wasOnGround = onGround;
+
         // Check water state first
         updateInWater();
+        updateWaterEntryParticles();
+        updateInLava();
+        boolean inCobweb = isTouchingBlock(BlockType.COBWEB);
+        boolean touchingSoulSand = isTouchingBlock(BlockType.SOUL_SAND);
+        boolean onClimbable = usesClimbablePhysics() && isTouchingClimbableBlock();
 
         if (inWater) {
-            // === WATER PHYSICS ===
-            // Reduced gravity (sink slower)
-            if (!onGround) {
-                motionY -= getWaterGravityPerTick();
-                float terminalVelocity = getWaterTerminalVelocity();
-                if (motionY < terminalVelocity) {
-                    motionY = terminalVelocity;
-                }
-            }
-
-            // Water drag (slows movement significantly)
             float waterDrag = getWaterHorizontalDrag();
             motionX *= waterDrag;
             motionZ *= waterDrag;
             motionY *= getWaterVerticalDrag();
-
-            // Bobbing effect - subtle buoyancy when in water
-            // Keep this weak to avoid glitchy appearance
-            if (usesDefaultWaterBobbing()) {
-                float bobbing = (float) Math.sin(ticksExisted * 0.15f) * 0.01f;
-                motionY += bobbing;
+            if (!onGround) {
+                motionY -= getWaterGravityPerTick();
             }
+            applyFluidCurrent(true);
 
-            // Swim up (try to reach surface)
-            BlockType blockAbove = world.getBlockIfLoaded((int) Math.floor(x),
-                    (int) Math.floor(y + height + 0.5f), (int) Math.floor(z), BlockType.AIR);
-            if (shouldSurfaceFloatInWater() && !blockAbove.isWater()) {
-                // Near surface - gentle upward force to help exit water
-                if (motionY < 0.15f) {
-                    motionY += getWaterSurfaceLift();
-                }
+        } else if (inLava) {
+            motionX *= getLavaHorizontalDrag();
+            motionZ *= getLavaHorizontalDrag();
+            motionY *= getLavaVerticalDrag();
+            if (!onGround) {
+                motionY -= getLavaGravityPerTick();
             }
-
+            applyFluidCurrent(false);
         } else {
             // === NORMAL PHYSICS ===
             // Apply gravity if not on ground
@@ -189,14 +227,64 @@ public abstract class Entity {
             motionY *= 0.98f; // Y drag usually stays standard
         }
 
+        if (inCobweb) {
+            motionX *= COBWEB_HORIZONTAL_DRAG;
+            motionY *= COBWEB_VERTICAL_DRAG;
+            motionZ *= COBWEB_HORIZONTAL_DRAG;
+        }
+
+        if (onClimbable) {
+            motionX = clampFloat(motionX, -CLIMBABLE_AXIS_MOTION, CLIMBABLE_AXIS_MOTION);
+            motionZ = clampFloat(motionZ, -CLIMBABLE_AXIS_MOTION, CLIMBABLE_AXIS_MOTION);
+            if (motionY < -CLIMBABLE_AXIS_MOTION) {
+                motionY = -CLIMBABLE_AXIS_MOTION;
+            }
+        }
+
+        if (inWater || inLava || inCobweb || onClimbable) {
+            fallStartY = y;
+            falling = false;
+        } else {
+            boolean nowFalling = motionY < -0.1f && !onGround;
+            if (nowFalling && !falling) {
+                fallStartY = y;
+            }
+            falling = nowFalling;
+        }
+
         // Move with collision (motion is already per-tick, no deltaTime needed)
         moveWithCollision(motionX, motionY, motionZ);
+        if (inCobweb) {
+            motionX = 0.0f;
+            motionY = 0.0f;
+            motionZ = 0.0f;
+        } else if (onClimbable && collidedHorizontally) {
+            motionY = CLIMBABLE_WALL_BUMP_MOTION;
+        }
+        if (onClimbable) {
+            fallStartY = y;
+            falling = false;
+        }
+
+        if (onGround && !wasOnGround) {
+            float fallDistance = Math.max(0.0f, fallStartY - y);
+            onLanded(fallDistance);
+            fallStartY = y;
+            falling = false;
+        } else if (onGround) {
+            fallStartY = y;
+            falling = false;
+        }
 
         // Ground friction (slipperiness - Minecraft uses 0.6 for dirt/stone)
         if (onGround) {
-            float friction = 0.6f;
+            float friction = getGroundFriction();
             motionX *= friction;
             motionZ *= friction;
+        }
+        if (touchingSoulSand || isTouchingBlock(BlockType.SOUL_SAND)) {
+            motionX *= SOUL_SAND_HORIZONTAL_DRAG;
+            motionZ *= SOUL_SAND_HORIZONTAL_DRAG;
         }
 
         // Track distance walked for animation
@@ -214,55 +302,117 @@ public abstract class Entity {
         if (world == null)
             return;
 
-        // Store original values
         float originalDx = dx;
         float originalDy = dy;
         float originalDz = dz;
+        boolean wasOnGround = onGround;
 
-        // Get current bounding box
-        AABB box = getBoundingBox();
+        AABB startBox = getBoundingBox();
+        List<AABB> colliders = getCollidingBlockBoxes(startBox, dx, dy, dz);
+        MovementClip clipped = clipMovement(startBox, dx, dy, dz, colliders);
+        boolean flatHorizontalCollision = horizontalCollision(originalDx, originalDz, clipped);
+        boolean stepped = false;
+        float stepHeight = getStepHeight();
 
-        // Get all blocks that could collide
-        List<AABB> colliders = getCollidingBlockBoxes(box, dx, dy, dz);
+        if (flatHorizontalCollision && wasOnGround && stepHeight > 0.0f && !inWater && !inLava) {
+            MovementClip steppedClip = clipStepMovement(startBox, dx, dy, dz, stepHeight);
+            if (steppedClip != null
+                    && steppedClip.horizontalDistanceSq() > clipped.horizontalDistanceSq() + COLLISION_EPSILON) {
+                clipped = steppedClip;
+                stepped = true;
+            }
+        }
 
-        // Resolve Y axis first (gravity/jumping)
+        x = (clipped.box().getMin().x + clipped.box().getMax().x) * 0.5f;
+        y = clipped.box().getMin().y;
+        z = (clipped.box().getMin().z + clipped.box().getMax().z) * 0.5f;
+
+        collidedHorizontally = horizontalCollision(originalDx, originalDz, clipped);
+        collidedVertically = Math.abs(originalDy - clipped.dy()) > COLLISION_EPSILON;
+        onGround = (collidedVertically && originalDy < 0) || stepped;
+
+        if (Math.abs(originalDx - clipped.dx()) > COLLISION_EPSILON) {
+            motionX = 0.0f;
+        }
+        if (collidedVertically) {
+            motionY = 0.0f;
+        }
+        if (Math.abs(originalDz - clipped.dz()) > COLLISION_EPSILON) {
+            motionZ = 0.0f;
+        }
+
+        // Push out of other entities
+        pushOutOfEntities();
+    }
+
+    private MovementClip clipMovement(AABB startBox, float dx, float dy, float dz, List<AABB> colliders) {
+        AABB box = copyBox(startBox);
         for (AABB blockBox : colliders) {
             dy = box.clipYCollide(blockBox, dy);
         }
         box.move(0, dy, 0);
 
-        // Resolve X axis
         for (AABB blockBox : colliders) {
             dx = box.clipXCollide(blockBox, dx);
         }
         box.move(dx, 0, 0);
 
-        // Resolve Z axis
         for (AABB blockBox : colliders) {
             dz = box.clipZCollide(blockBox, dz);
         }
         box.move(0, 0, dz);
+        return new MovementClip(box, dx, dy, dz);
+    }
 
-        // Update position
-        x += dx;
-        y += dy;
-        z += dz;
+    private MovementClip clipStepMovement(AABB startBox, float dx, float dy, float dz, float stepHeight) {
+        List<AABB> colliders = getCollidingBlockBoxes(startBox, dx, dy + stepHeight, dz);
+        AABB box = copyBox(startBox);
+        float stepUp = stepHeight;
+        for (AABB blockBox : colliders) {
+            stepUp = box.clipYCollide(blockBox, stepUp);
+        }
+        if (stepUp <= COLLISION_EPSILON) {
+            return null;
+        }
+        box.move(0, stepUp, 0);
 
-        // Update collision flags
-        collidedHorizontally = (dx != originalDx) || (dz != originalDz);
-        collidedVertically = dy != originalDy;
-        onGround = collidedVertically && originalDy < 0;
+        float steppedDx = dx;
+        for (AABB blockBox : colliders) {
+            steppedDx = box.clipXCollide(blockBox, steppedDx);
+        }
+        box.move(steppedDx, 0, 0);
 
-        // Cancel velocity on collision
-        if (dx != originalDx)
-            motionX = 0;
-        if (dy != originalDy)
-            motionY = 0;
-        if (dz != originalDz)
-            motionZ = 0;
+        float steppedDz = dz;
+        for (AABB blockBox : colliders) {
+            steppedDz = box.clipZCollide(blockBox, steppedDz);
+        }
+        box.move(0, 0, steppedDz);
 
-        // Push out of other entities
-        pushOutOfEntities();
+        float stepDown = dy - stepUp;
+        for (AABB blockBox : colliders) {
+            stepDown = box.clipYCollide(blockBox, stepDown);
+        }
+        box.move(0, stepDown, 0);
+        return new MovementClip(box, steppedDx, stepUp + stepDown, steppedDz);
+    }
+
+    private boolean horizontalCollision(float originalDx, float originalDz, MovementClip clip) {
+        return Math.abs(originalDx - clip.dx()) > COLLISION_EPSILON
+                || Math.abs(originalDz - clip.dz()) > COLLISION_EPSILON;
+    }
+
+    private static AABB copyBox(AABB box) {
+        return new AABB(box.getMin(), box.getMax());
+    }
+
+    protected float getStepHeight() {
+        return 0.0f;
+    }
+
+    private record MovementClip(AABB box, float dx, float dy, float dz) {
+        float horizontalDistanceSq() {
+            return dx * dx + dz * dz;
+        }
     }
 
     /**
@@ -285,14 +435,14 @@ public abstract class Entity {
                 // Calculate push vector
                 float dx = x - other.x;
                 float dz = z - other.z;
-                float dist = (float) Math.abs(Math.max(Math.abs(dx), Math.abs(dz)));
+                float dist = Math.max(Math.abs(dx), Math.abs(dz));
 
                 if (dist >= 0.01f) {
                     dist = (float) Math.sqrt(dist);
                     dx /= dist;
                     dz /= dist;
 
-                    float pushStrength = 0.02f; // Reduced from 0.1f
+                    float pushStrength = Math.min(1.0f, 1.0f / dist) * 0.05f;
 
                     // Apply push to both
                     if (this instanceof LivingEntity) {
@@ -337,8 +487,70 @@ public abstract class Entity {
                 }
             }
         }
+        colliders.addAll(world.getMovingPistonCollisionBoxes(
+                new AABB(minX, minY, minZ, maxX, maxY, maxZ)));
 
         return colliders;
+    }
+
+    protected boolean isTouchingBlock(BlockType target) {
+        if (world == null || target == null) {
+            return false;
+        }
+        AABB box = getBoundingBox();
+        int minX = (int) Math.floor(box.getMin().x);
+        int minY = (int) Math.floor(box.getMin().y);
+        int minZ = (int) Math.floor(box.getMin().z);
+        int maxX = (int) Math.floor(box.getMax().x - 0.0001f);
+        int maxY = (int) Math.floor(box.getMax().y - 0.0001f);
+        int maxZ = (int) Math.floor(box.getMax().z - 0.0001f);
+        for (int bx = minX; bx <= maxX; bx++) {
+            for (int by = minY; by <= maxY; by++) {
+                for (int bz = minZ; bz <= maxZ; bz++) {
+                    if (world.getBlockIfLoaded(bx, by, bz, BlockType.AIR) == target) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    protected boolean usesClimbablePhysics() {
+        return false;
+    }
+
+    protected boolean isTouchingClimbableBlock() {
+        if (world == null) {
+            return false;
+        }
+        BlockType type = world.getBlockIfLoaded((int) Math.floor(x),
+                (int) Math.floor(getBoundingBox().getMin().y),
+                (int) Math.floor(z), BlockType.AIR);
+        return type == BlockType.LADDER || type == BlockType.VINES;
+    }
+
+    private static float clampFloat(float value, float min, float max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    protected void onLanded(float fallDistance) {
+    }
+
+    protected float getGroundFriction() {
+        BlockType below = getBlockBelowFeet();
+        if (below == BlockType.ICE) {
+            return 0.98f;
+        }
+        return GROUND_FRICTION;
+    }
+
+    protected BlockType getBlockBelowFeet() {
+        if (world == null) {
+            return BlockType.AIR;
+        }
+        return world.getBlockIfLoaded((int) Math.floor(x), (int) Math.floor(y - 0.0001f),
+                (int) Math.floor(z), BlockType.AIR);
     }
 
     /**
@@ -351,11 +563,52 @@ public abstract class Entity {
         }
 
         int blockX = (int) Math.floor(x);
-        int blockY = (int) Math.floor(y + height * 0.1f); // Check at feet level for natural water exit
+        int blockY = (int) Math.floor(y + getHeight() * 0.1f); // Check at feet level for natural water exit
         int blockZ = (int) Math.floor(z);
 
         BlockType block = world.getBlockIfLoaded(blockX, blockY, blockZ, BlockType.AIR);
         inWater = block.isWater();
+    }
+
+    protected void updateWaterEntryParticles() {
+        if (world == null) {
+            waterParticleStateInitialized = false;
+            wasInWaterForParticles = false;
+            return;
+        }
+        if (!waterParticleStateInitialized) {
+            waterParticleStateInitialized = true;
+            wasInWaterForParticles = inWater;
+            return;
+        }
+        if (inWater && !wasInWaterForParticles) {
+            world.spawnEntityWaterEntryParticles(x, y, z, width, motionX, motionY, motionZ);
+        }
+        wasInWaterForParticles = inWater;
+    }
+
+    protected void updateInLava() {
+        if (world == null) {
+            inLava = false;
+            return;
+        }
+
+        int blockX = (int) Math.floor(x);
+        int blockY = (int) Math.floor(y + getHeight() * 0.1f);
+        int blockZ = (int) Math.floor(z);
+
+        BlockType block = world.getBlockIfLoaded(blockX, blockY, blockZ, BlockType.AIR);
+        inLava = block.isLava();
+    }
+
+    private void applyFluidCurrent(boolean water) {
+        Vector3f current = world.getFluidFlowVector(getBoundingBox(), water);
+        if (current.lengthSquared() <= 0.000001f) {
+            return;
+        }
+        motionX += current.x * World.FLUID_CURRENT_PUSH_PER_TICK;
+        motionY += current.y * World.FLUID_CURRENT_PUSH_PER_TICK;
+        motionZ += current.z * World.FLUID_CURRENT_PUSH_PER_TICK;
     }
 
     /**
@@ -410,26 +663,17 @@ public abstract class Entity {
      * Look at a specific position.
      */
     public void lookAt(float targetX, float targetY, float targetZ) {
+        if (!allFinite(targetX, targetY, targetZ, x, y, z)) {
+            return;
+        }
         float dx = targetX - x;
-        float dy = targetY - (y + height * 0.85f); // Eye level
+        float dy = targetY - (y + getHeight() * 0.85f); // Eye level
         float dz = targetZ - z;
 
         float horizontalDist = (float) Math.sqrt(dx * dx + dz * dz);
 
-        yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
-        pitch = (float) Math.toDegrees(Math.atan2(dy, horizontalDist));
-
-        // Normalize yaw
-        while (yaw < 0)
-            yaw += 360;
-        while (yaw >= 360)
-            yaw -= 360;
-
-        // Clamp pitch
-        if (pitch > 90)
-            pitch = 90;
-        if (pitch < -90)
-            pitch = -90;
+        setYaw((float) Math.toDegrees(Math.atan2(-dx, dz)));
+        setPitch((float) Math.toDegrees(Math.atan2(dy, horizontalDist)));
     }
 
     /**
@@ -539,6 +783,10 @@ public abstract class Entity {
         return inWater;
     }
 
+    public boolean isInLava() {
+        return inLava;
+    }
+
     public int getTicksExisted() {
         return ticksExisted;
     }
@@ -549,11 +797,28 @@ public abstract class Entity {
         return onGround;
     }
 
+    public float getFallStartY() {
+        return fallStartY;
+    }
+
+    public boolean isFalling() {
+        return falling;
+    }
+
+    public void restoreSavedPhysicsState(boolean onGround, float fallStartY, boolean falling) {
+        if (!Float.isFinite(fallStartY)) {
+            return;
+        }
+        this.onGround = onGround;
+        this.fallStartY = fallStartY;
+        this.falling = falling && !onGround;
+    }
+
     // Setters
     public void setMotion(float mx, float my, float mz) {
-        this.motionX = mx;
-        this.motionY = my;
-        this.motionZ = mz;
+        this.motionX = finiteMotion(mx);
+        this.motionY = finiteMotion(my);
+        this.motionZ = finiteMotion(mz);
     }
 
     public void setTicksExisted(int ticksExisted) {
@@ -561,17 +826,48 @@ public abstract class Entity {
     }
 
     public void addMotion(float mx, float my, float mz) {
-        this.motionX += mx;
-        this.motionY += my;
-        this.motionZ += mz;
+        this.motionX = finiteMotion(this.motionX + mx);
+        this.motionY = finiteMotion(this.motionY + my);
+        this.motionZ = finiteMotion(this.motionZ + mz);
+    }
+
+    private static float finiteMotion(float value) {
+        return Float.isFinite(value) ? value : 0.0f;
+    }
+
+    private static boolean allFinite(float... values) {
+        if (values == null) {
+            return false;
+        }
+        for (float value : values) {
+            if (!Float.isFinite(value)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public void setYaw(float yaw) {
-        this.yaw = yaw;
+        this.yaw = normalizeYaw(yaw);
     }
 
     public void setPitch(float pitch) {
-        this.pitch = pitch;
+        this.pitch = clampPitch(pitch);
+    }
+
+    private static float normalizeYaw(float yaw) {
+        if (!Float.isFinite(yaw)) {
+            return 0.0f;
+        }
+        float normalized = yaw % 360.0f;
+        return normalized < 0.0f ? normalized + 360.0f : normalized;
+    }
+
+    private static float clampPitch(float pitch) {
+        if (!Float.isFinite(pitch)) {
+            return 0.0f;
+        }
+        return Math.max(-90.0f, Math.min(90.0f, pitch));
     }
 
     // Physics hooks for subclasses to override (e.g. for knockback effects)
@@ -588,27 +884,23 @@ public abstract class Entity {
         return 0.02f;
     }
 
-    protected float getWaterTerminalVelocity() {
-        return -0.8f;
-    }
-
     protected float getWaterHorizontalDrag() {
         return 0.8f;
     }
 
     protected float getWaterVerticalDrag() {
-        return 0.9f;
+        return 0.8f;
     }
 
-    protected boolean usesDefaultWaterBobbing() {
-        return true;
+    protected float getLavaGravityPerTick() {
+        return 0.02f;
     }
 
-    protected boolean shouldSurfaceFloatInWater() {
-        return true;
+    protected float getLavaHorizontalDrag() {
+        return 0.5f;
     }
 
-    protected float getWaterSurfaceLift() {
-        return 0.06f;
+    protected float getLavaVerticalDrag() {
+        return 0.5f;
     }
 }

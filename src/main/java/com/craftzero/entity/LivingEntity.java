@@ -1,9 +1,14 @@
 package com.craftzero.entity;
 
 import com.craftzero.combat.DamageSource;
+import com.craftzero.entity.mob.Wolf;
 import com.craftzero.main.CombatRules;
 import com.craftzero.progression.StatusEffectInstance;
+import com.craftzero.progression.StatusEffectMath;
 import com.craftzero.progression.StatusEffectType;
+import com.craftzero.progression.StatusEffectVisuals;
+import com.craftzero.world.BlockType;
+import com.craftzero.world.WorldParticle;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -20,6 +25,25 @@ import java.util.List;
  * - limbSwingAmount: Amplitude of leg swing (based on movement speed)
  */
 public abstract class LivingEntity extends Entity {
+    public static final int MAX_AIR_TICKS = 300;
+    public static final int DROWN_DAMAGE_AIR_TICKS = -20;
+    public static final float DROWN_DAMAGE = 2.0f;
+    public static final int MAX_HURT_TIME = 10;
+    public static final int MAX_INVULNERABLE_TIME = 20;
+    public static final int RECENT_PLAYER_HIT_TICKS = 100;
+    private static final int DROWN_BUBBLE_PARTICLES = 8;
+    private static final float DROWN_BUBBLE_SCALE = 0.055f;
+    private static final int DROWN_BUBBLE_LIFETIME_TICKS = 8;
+    private static final int STATUS_EFFECT_PARTICLE_INTERVAL_TICKS = 5;
+    private static final float STATUS_EFFECT_PARTICLE_SCALE = 0.20f;
+    private static final int STATUS_EFFECT_PARTICLE_LIFETIME_TICKS = 20;
+    private static final float BASE_JUMP_MOTION = 0.42f;
+    private static final float JUMP_BOOST_MOTION_PER_LEVEL = 0.1f;
+    private static final float WATER_MOVEMENT_SCALE = 0.35f;
+    private static final float LAVA_MOVEMENT_SCALE = 0.18f;
+    private static final float LAND_STEERING_RESPONSE = 0.20f;
+    private static final float WATER_STEERING_RESPONSE = 0.16f;
+    private static final float LAVA_STEERING_RESPONSE = 0.08f;
 
     // Health
     protected float health;
@@ -27,12 +51,18 @@ public abstract class LivingEntity extends Entity {
 
     // Damage state
     protected int hurtTime; // Ticks since last damage (for animation)
-    protected int hurtDuration = 10; // Duration of hurt animation
+    protected int hurtDuration = MAX_HURT_TIME; // Duration of hurt animation
     protected int invulnerableTime; // Ticks of invulnerability after damage
-    protected int maxInvulnerableTime = 20; // 1 second of invulnerability
+    protected int maxInvulnerableTime = MAX_INVULNERABLE_TIME; // 1 second of invulnerability
     protected Entity lastDamageSource;
+    protected DamageSource lastDamageDetails;
+    protected boolean lastDamageSourceHasPosition;
+    protected float lastDamageSourceX;
+    protected float lastDamageSourceY;
+    protected float lastDamageSourceZ;
     protected float lastDamageAmount; // Amount of last damage for invuln frame comparison
     protected int recentPlayerHitTicks;
+    protected int recentPlayerLootingLevel;
 
     // Death state
     protected int deathTime; // Ticks since death (for death animation)
@@ -45,6 +75,7 @@ public abstract class LivingEntity extends Entity {
     // Fire
     protected int fireTicks; // Ticks remaining on fire
     protected int lastFireDamage; // Tick counter for fire damage
+    protected int airTicks = MAX_AIR_TICKS;
     protected final List<StatusEffectInstance> activeEffects = new ArrayList<>();
 
     // Movement AI
@@ -104,6 +135,17 @@ public abstract class LivingEntity extends Entity {
     }
 
     @Override
+    protected float getStepHeight() {
+        return 0.5f;
+    }
+
+    @Override
+    public void updatePhysics(float deltaTime) {
+        super.updatePhysics(deltaTime);
+        updateAirSupply();
+    }
+
+    @Override
     public void tick() {
         super.tick();
 
@@ -120,17 +162,24 @@ public abstract class LivingEntity extends Entity {
             attackCooldown--;
         if (knockbackControlTicks > 0)
             knockbackControlTicks--;
-        if (recentPlayerHitTicks > 0)
-            recentPlayerHitTicks--;
+        if (recentPlayerHitTicks > 0 && --recentPlayerHitTicks <= 0) {
+            recentPlayerLootingLevel = 0;
+        }
         tickStatusEffects();
 
         // Fire damage
         if (fireTicks > 0) {
-            fireTicks--;
-            // Deal fire damage every 20 ticks (1 second)
-            if (!hasEffect(StatusEffectType.FIRE_RESISTANCE) && ticksExisted - lastFireDamage >= 20) {
-                damage(1.0f, DamageSource.point(DamageSource.Type.FIRE, x, y, z, 0.0f, 0.0f));
-                lastFireDamage = ticksExisted;
+            if (hasEffect(StatusEffectType.FIRE_RESISTANCE)) {
+                extinguish();
+            } else if (isWetFromWaterOrRain()) {
+                extinguish();
+            } else {
+                fireTicks--;
+                // Deal fire damage every 20 ticks (1 second)
+                if (!hasEffect(StatusEffectType.FIRE_RESISTANCE) && ticksExisted - lastFireDamage >= 20) {
+                    damage(1.0f, DamageSource.point(DamageSource.Type.FIRE, x, y, z, 0.0f, 0.0f));
+                    lastFireDamage = ticksExisted;
+                }
             }
         }
 
@@ -215,7 +264,7 @@ public abstract class LivingEntity extends Entity {
                 float cz = z + dz * checkDist;
 
                 if (canJumpAtLocation(cx, cz) && jumpCooldown <= 0) {
-                    motionY = 0.42f;
+                    motionY = jumpMotion();
                     jumpCooldown = 15;
                     continuousStuckTicks = 0;
                 }
@@ -292,7 +341,7 @@ public abstract class LivingEntity extends Entity {
             float jz = z - (float) Math.cos(rad) * 0.7f;
 
             if (canJumpAtLocation(jx, jz)) {
-                motionY = 0.42f;
+                motionY = jumpMotion();
                 jumpCooldown = 20;
             } else {
                 // Obstacle too high - kill jump request
@@ -473,12 +522,14 @@ public abstract class LivingEntity extends Entity {
             // MATCHING PLAYER.JAVA COORDINATE SYSTEM:
             // forward * sinYaw for X, -forward * cosYaw for Z
             // This makes -Z the forward direction (0 degrees)
-            float targetMx = (float) Math.sin(bodyYawRad) * forwardSpeed * moveSpeed;
-            float targetMz = -(float) Math.cos(bodyYawRad) * forwardSpeed * moveSpeed;
+            float modifiedMoveSpeed = moveSpeed * getMovementSpeedMultiplier() * fluidMovementScale();
+            float targetMx = (float) Math.sin(bodyYawRad) * forwardSpeed * modifiedMoveSpeed;
+            float targetMz = -(float) Math.cos(bodyYawRad) * forwardSpeed * modifiedMoveSpeed;
 
             // Interpolate velocity for "soft" movement (allows being pushed)
-            motionX += (targetMx - motionX) * 0.2f;
-            motionZ += (targetMz - motionZ) * 0.2f;
+            float steeringResponse = fluidSteeringResponse();
+            motionX += (targetMx - motionX) * steeringResponse;
+            motionZ += (targetMz - motionZ) * steeringResponse;
         } else {
             // Not moving: slow down
             motionX *= 0.8f;
@@ -512,6 +563,26 @@ public abstract class LivingEntity extends Entity {
         }
     }
 
+    private float fluidMovementScale() {
+        if (inWater) {
+            return WATER_MOVEMENT_SCALE;
+        }
+        if (inLava) {
+            return LAVA_MOVEMENT_SCALE;
+        }
+        return 1.0f;
+    }
+
+    private float fluidSteeringResponse() {
+        if (inWater) {
+            return WATER_STEERING_RESPONSE;
+        }
+        if (inLava) {
+            return LAVA_STEERING_RESPONSE;
+        }
+        return LAND_STEERING_RESPONSE;
+    }
+
     /**
      * Update head look behavior - look at player, random glances, idle behavior.
      */
@@ -521,7 +592,7 @@ public abstract class LivingEntity extends Entity {
         if (hasLookTarget) {
             // Calculate angle to look target
             float dx = lookAtX - x;
-            float dy = lookAtY - (y + height * 0.85f); // Eye level
+            float dy = lookAtY - (y + getHeight() * 0.85f); // Eye level
             float dz = lookAtZ - z;
             float distXZ = (float) Math.sqrt(dx * dx + dz * dz);
 
@@ -587,6 +658,77 @@ public abstract class LivingEntity extends Entity {
         return angle;
     }
 
+    @Override
+    protected void onLanded(float fallDistance) {
+        if (world != null) {
+            world.trampleFarmlandBelow(getBoundingBox(), fallDistance);
+        }
+        if (isFallDamageImmune() || fallDistance <= 3.0f) {
+            return;
+        }
+        int damage = (int) Math.ceil(fallDistance - 3.0f);
+        if (world != null) {
+            world.playFallSound(x, y, z, fallDistance);
+        }
+        damage(damage, DamageSource.point(DamageSource.Type.FALL, x, y, z, 0.0f, 0.0f));
+    }
+
+    protected boolean isFallDamageImmune() {
+        return false;
+    }
+
+    protected boolean canBreatheUnderwater() {
+        return hasEffect(StatusEffectType.WATER_BREATHING);
+    }
+
+    protected boolean isHeadUnderwater() {
+        if (world == null) {
+            return false;
+        }
+        int blockX = (int) Math.floor(x);
+        int blockY = (int) Math.floor(y + getHeight() * 0.85f);
+        int blockZ = (int) Math.floor(z);
+        return world.getBlockIfLoaded(blockX, blockY, blockZ, BlockType.AIR).isWater();
+    }
+
+    private void updateAirSupply() {
+        if (dead || canBreatheUnderwater()) {
+            airTicks = MAX_AIR_TICKS;
+            return;
+        }
+        if (isHeadUnderwater()) {
+            airTicks--;
+            if (airTicks <= DROWN_DAMAGE_AIR_TICKS) {
+                airTicks = 0;
+                spawnDrowningBubbles();
+                damage(DROWN_DAMAGE, DamageSource.point(DamageSource.Type.DROWN, x, y, z, 0.0f, 0.0f));
+            }
+        } else {
+            airTicks = MAX_AIR_TICKS;
+        }
+    }
+
+    private void spawnDrowningBubbles() {
+        if (world == null) {
+            return;
+        }
+        for (int i = 0; i < DROWN_BUBBLE_PARTICLES; i++) {
+            float particleX = x + lookRandom.nextFloat() - lookRandom.nextFloat();
+            float particleY = y + lookRandom.nextFloat() - lookRandom.nextFloat();
+            float particleZ = z + lookRandom.nextFloat() - lookRandom.nextFloat();
+            world.spawnParticle(WorldParticle.Type.BUBBLE,
+                    particleX, particleY, particleZ,
+                    motionX, motionY, motionZ,
+                    DROWN_BUBBLE_SCALE,
+                    DROWN_BUBBLE_LIFETIME_TICKS);
+        }
+    }
+
+    @Override
+    protected boolean usesClimbablePhysics() {
+        return true;
+    }
+
     /**
      * Deal damage to this entity.
      * Implements Minecraft invulnerability frame logic:
@@ -607,20 +749,31 @@ public abstract class LivingEntity extends Entity {
     public boolean damage(float amount, DamageSource source) {
         if (dead)
             return false;
+        if (!Float.isFinite(amount) || amount <= 0.0f) {
+            return false;
+        }
         if (source == null) {
             source = DamageSource.generic();
         }
         if (source.type() == DamageSource.Type.FIRE && hasEffect(StatusEffectType.FIRE_RESISTANCE)) {
             return false;
         }
-        if (source.type() == DamageSource.Type.PLAYER_ATTACK
-                || (source.type() == DamageSource.Type.ARROW
-                        && source.entity() instanceof ArrowEntity arrow && arrow.isPlayerOwned())) {
-            recentPlayerHitTicks = 100;
+        amount = StatusEffectMath.applyResistanceReduction(amount, getEffectAmplifier(StatusEffectType.RESISTANCE));
+        if (!Float.isFinite(amount) || amount <= 0.0f) {
+            return false;
         }
+        boolean playerCredit = source.playerCredit()
+                || source.type() == DamageSource.Type.PLAYER_ATTACK
+                || (source.type() == DamageSource.Type.ARROW
+                        && source.entity() instanceof ArrowEntity arrow && arrow.isPlayerOwned())
+                || (source.type() == DamageSource.Type.MOB_MELEE
+                        && source.entity() instanceof Wolf wolf && wolf.isTamed());
+
+        int hurtResistanceThreshold = source.usesHalfHurtResistanceWindow() ? maxInvulnerableTime / 2 : 0;
+        boolean comparingAgainstRecentDamage = invulnerableTime > hurtResistanceThreshold;
 
         // Invulnerability frame logic (Minecraft style)
-        if (invulnerableTime > 0) {
+        if (comparingAgainstRecentDamage) {
             // During invulnerability, only deal damage if new damage is higher
             if (amount <= lastDamageAmount) {
                 return false; // Reject weaker or equal damage
@@ -630,12 +783,19 @@ public abstract class LivingEntity extends Entity {
         }
 
         // Track this damage for future comparisons
-        lastDamageAmount = invulnerableTime > 0 ? lastDamageAmount + amount : amount;
+        lastDamageAmount = comparingAgainstRecentDamage ? lastDamageAmount + amount : amount;
+
+        if (playerCredit) {
+            recentPlayerHitTicks = RECENT_PLAYER_HIT_TICKS;
+            recentPlayerLootingLevel = source.type() == DamageSource.Type.PLAYER_ATTACK ? source.lootingLevel() : 0;
+        } else {
+            recentPlayerLootingLevel = 0;
+        }
 
         health -= amount;
         hurtTime = hurtDuration;
         invulnerableTime = maxInvulnerableTime;
-        lastDamageSource = source.entity();
+        rememberDamageSource(source);
 
         // Note: Knockback is now applied externally by Player.attackEntity()
         // The source-based knockback below is for mob attacks
@@ -646,13 +806,10 @@ public abstract class LivingEntity extends Entity {
             float dz = z - source.sourceZ();
             float dist = (float) Math.sqrt(dx * dx + dz * dz);
 
-            if (dist > 0.01f) {
+            if (Float.isFinite(dist) && dist > 0.01f) {
                 float knockback = source.horizontalKnockback();
                 float verticalKnockback = source.verticalKnockback();
-                motionX += (dx / dist) * knockback;
-                motionY += verticalKnockback;
-                motionZ += (dz / dist) * knockback;
-                knockbackControlTicks = 10;
+                addMotion((dx / dist) * knockback, verticalKnockback, (dz / dist) * knockback);
             }
         }
 
@@ -660,10 +817,24 @@ public abstract class LivingEntity extends Entity {
         return true;
     }
 
+    protected void rememberDamageSource(DamageSource source) {
+        lastDamageDetails = source;
+        lastDamageSource = source == null ? null : source.entity();
+        lastDamageSourceHasPosition = source != null && source.hasPosition();
+        if (lastDamageSourceHasPosition) {
+            lastDamageSourceX = source.sourceX();
+            lastDamageSourceY = source.sourceY();
+            lastDamageSourceZ = source.sourceZ();
+        }
+    }
+
     /**
      * Heal this entity.
      */
     public void heal(float amount) {
+        if (!Float.isFinite(amount) || amount <= 0.0f) {
+            return;
+        }
         health = Math.min(health + amount, maxHealth);
     }
 
@@ -673,10 +844,22 @@ public abstract class LivingEntity extends Entity {
      * @param ticks Duration in ticks
      */
     public void setOnFire(int ticks) {
+        if (hasEffect(StatusEffectType.FIRE_RESISTANCE)) {
+            extinguish();
+            return;
+        }
         if (fireTicks < ticks) {
             fireTicks = ticks;
             lastFireDamage = ticksExisted;
         }
+    }
+
+    public void setFireTicks(int ticks) {
+        int clampedTicks = Math.max(0, ticks);
+        if (clampedTicks > 0 && fireTicks <= 0) {
+            lastFireDamage = ticksExisted;
+        }
+        fireTicks = clampedTicks;
     }
 
     /**
@@ -684,6 +867,20 @@ public abstract class LivingEntity extends Entity {
      */
     public void extinguish() {
         fireTicks = 0;
+    }
+
+    protected boolean isWetFromWaterOrRain() {
+        if (world == null) {
+            return false;
+        }
+        int blockX = (int) Math.floor(x);
+        int blockZ = (int) Math.floor(z);
+        int feetY = (int) Math.floor(y + 0.1f);
+        int headY = (int) Math.floor(y + getHeight() * 0.85f);
+        return world.getBlockIfLoaded(blockX, feetY, blockZ, com.craftzero.world.BlockType.AIR).isWater()
+                || world.getBlockIfLoaded(blockX, headY, blockZ, com.craftzero.world.BlockType.AIR).isWater()
+                || world.isRainingAt(blockX, feetY, blockZ)
+                || world.isRainingAt(blockX, headY, blockZ);
     }
 
     private void tickStatusEffects() {
@@ -697,25 +894,49 @@ public abstract class LivingEntity extends Entity {
                 activeEffects.set(i, next);
             }
         }
+        spawnStatusEffectParticle();
     }
 
     private void applyStatusEffectTick(StatusEffectInstance effect) {
-        if (effect.type() == StatusEffectType.REGENERATION && effect.durationTicks() % 50 == 0) {
-            heal(1.0f + effect.amplifier());
-        } else if (effect.type() == StatusEffectType.POISON && effect.durationTicks() % 25 == 0 && health > 1.0f) {
-            health = Math.max(1.0f, health - (1.0f + effect.amplifier()));
+        if (effect.type() == StatusEffectType.REGENERATION && isEffectReady(effect, 50)) {
+            heal(1.0f);
+        } else if (effect.type() == StatusEffectType.POISON && isEffectReady(effect, 25) && health > 1.0f) {
+            health = Math.max(1.0f, health - 1.0f);
         }
     }
 
+    private static boolean isEffectReady(StatusEffectInstance effect, int baseInterval) {
+        int interval = effect.amplifier() >= 31 ? 0 : baseInterval >> effect.amplifier();
+        return interval <= 0 || effect.durationTicks() % interval == 0;
+    }
+
+    private void spawnStatusEffectParticle() {
+        if (world == null || activeEffects.isEmpty()
+                || ticksExisted % STATUS_EFFECT_PARTICLE_INTERVAL_TICKS != 0) {
+            return;
+        }
+
+        float particleX = x + (lookRandom.nextFloat() - 0.5f) * width;
+        float particleY = y + 0.2f + lookRandom.nextFloat() * Math.max(0.1f, height - 0.2f);
+        float particleZ = z + (lookRandom.nextFloat() - 0.5f) * width;
+        world.spawnParticle(WorldParticle.Type.MOB_SPELL,
+                particleX, particleY, particleZ,
+                0.0f, 0.02f, 0.0f,
+                STATUS_EFFECT_PARTICLE_SCALE,
+                STATUS_EFFECT_PARTICLE_LIFETIME_TICKS,
+                StatusEffectVisuals.mixedColor(activeEffects));
+    }
+
     public void addEffect(StatusEffectInstance effect) {
-        if (effect == null || effect.expired()) {
+        if (effect == null || effect.expired() || !isStatusEffectApplicable(effect)) {
             return;
         }
         for (int i = 0; i < activeEffects.size(); i++) {
             StatusEffectInstance existing = activeEffects.get(i);
             if (existing.type() == effect.type()) {
                 if (effect.amplifier() > existing.amplifier()
-                        || effect.durationTicks() > existing.durationTicks()) {
+                        || (effect.amplifier() == existing.amplifier()
+                                && effect.durationTicks() > existing.durationTicks())) {
                     activeEffects.set(i, effect);
                 }
                 return;
@@ -736,23 +957,45 @@ public abstract class LivingEntity extends Entity {
         activeEffects.clear();
         if (effects != null) {
             for (StatusEffectInstance effect : effects) {
-                if (effect != null && !effect.expired()) {
+                if (effect != null && !effect.expired() && isStatusEffectApplicable(effect)) {
                     activeEffects.add(effect);
                 }
             }
         }
     }
 
+    protected boolean isStatusEffectApplicable(StatusEffectInstance effect) {
+        return true;
+    }
+
     public boolean hasEffect(StatusEffectType type) {
+        return getEffectAmplifier(type) >= 0;
+    }
+
+    public int getEffectAmplifier(StatusEffectType type) {
         if (type == null) {
-            return false;
+            return -1;
         }
+        int best = -1;
         for (StatusEffectInstance effect : activeEffects) {
             if (effect.type() == type && !effect.expired()) {
-                return true;
+                best = Math.max(best, effect.amplifier());
             }
         }
-        return false;
+        return best;
+    }
+
+    public float getMovementSpeedMultiplier() {
+        float multiplier = 1.0f;
+        int speed = getEffectAmplifier(StatusEffectType.SPEED);
+        if (speed >= 0) {
+            multiplier += 0.2f * (speed + 1);
+        }
+        int slowness = getEffectAmplifier(StatusEffectType.SLOWNESS);
+        if (slowness >= 0) {
+            multiplier -= 0.15f * (slowness + 1);
+        }
+        return Math.max(0.1f, multiplier);
     }
 
     /**
@@ -760,6 +1003,14 @@ public abstract class LivingEntity extends Entity {
      */
     public boolean canAttack() {
         return attackCooldown <= 0;
+    }
+
+    public int getAttackCooldown() {
+        return attackCooldown;
+    }
+
+    public void setAttackCooldown(int attackCooldown) {
+        this.attackCooldown = Math.max(0, attackCooldown);
     }
 
     /**
@@ -780,11 +1031,56 @@ public abstract class LivingEntity extends Entity {
      * Called when entity dies.
      */
     protected void onDeath() {
-        // Override in subclasses for drops, effects, etc.
+        spawnDeathSmokeParticles();
+    }
+
+    protected void spawnDeathSmokeParticles() {
+        if (world != null) {
+            world.spawnMobDeathParticles(x, y, z, width, height);
+        }
     }
 
     public boolean hasRecentPlayerDamage() {
         return recentPlayerHitTicks > 0;
+    }
+
+    public int getRecentPlayerLootingLevel() {
+        return recentPlayerLootingLevel;
+    }
+
+    public int getRecentPlayerHitTicks() {
+        return recentPlayerHitTicks;
+    }
+
+    public int getInvulnerableTime() {
+        return invulnerableTime;
+    }
+
+    public float getLastDamageAmount() {
+        return lastDamageAmount;
+    }
+
+    public void restoreDamageState(int hurtTime, int invulnerableTime, float lastDamageAmount,
+            int recentPlayerHitTicks, int recentPlayerLootingLevel) {
+        this.hurtTime = clampTicks(hurtTime, hurtDuration);
+        this.invulnerableTime = clampTicks(invulnerableTime, maxInvulnerableTime);
+        this.lastDamageAmount = Float.isFinite(lastDamageAmount) ? Math.max(0.0f, lastDamageAmount) : 0.0f;
+        this.recentPlayerHitTicks = clampTicks(recentPlayerHitTicks, RECENT_PLAYER_HIT_TICKS);
+        this.recentPlayerLootingLevel = this.recentPlayerHitTicks > 0
+                ? Math.max(0, recentPlayerLootingLevel)
+                : 0;
+    }
+
+    public void restoreDeathAnimationState(boolean dead, int deathTime) {
+        this.dead = dead;
+        this.deathTime = dead ? clampTicks(deathTime, 20) : 0;
+        if (dead && health > 0.0f) {
+            health = 0.0f;
+        }
+    }
+
+    private static int clampTicks(int ticks, int maxTicks) {
+        return Math.max(0, Math.min(maxTicks, ticks));
     }
 
     /**
@@ -831,8 +1127,9 @@ public abstract class LivingEntity extends Entity {
             return;
 
         float rad = (float) Math.toRadians(yaw);
-        float moveX = -(float) Math.sin(rad) * speed * moveSpeed;
-        float moveZ = (float) Math.cos(rad) * speed * moveSpeed;
+        float modifiedMoveSpeed = moveSpeed * getMovementSpeedMultiplier();
+        float moveX = -(float) Math.sin(rad) * speed * modifiedMoveSpeed;
+        float moveZ = (float) Math.cos(rad) * speed * modifiedMoveSpeed;
 
         motionX = moveX;
         motionZ = moveZ;
@@ -842,12 +1139,17 @@ public abstract class LivingEntity extends Entity {
      * Add velocity to the entity (e.g. from knockback or pushing).
      */
     public void addMotion(float x, float y, float z) {
-        this.motionX += x;
-        this.motionY += y;
-        this.motionZ += z;
-        if (Math.abs(x) > 0.001f || Math.abs(z) > 0.001f || y > 0.001f) {
+        float motionX = finiteMotion(x);
+        float motionY = finiteMotion(y);
+        float motionZ = finiteMotion(z);
+        super.addMotion(motionX, motionY, motionZ);
+        if (Math.abs(motionX) > 0.001f || Math.abs(motionZ) > 0.001f || motionY > 0.001f) {
             knockbackControlTicks = Math.max(knockbackControlTicks, 10);
         }
+    }
+
+    private static float finiteMotion(float value) {
+        return Float.isFinite(value) ? value : 0.0f;
     }
 
     /**
@@ -855,8 +1157,13 @@ public abstract class LivingEntity extends Entity {
      */
     public void jump() {
         if (onGround) {
-            motionY = 0.42f;
+            motionY = jumpMotion();
         }
+    }
+
+    protected float jumpMotion() {
+        int jumpBoost = getEffectAmplifier(StatusEffectType.JUMP_BOOST);
+        return BASE_JUMP_MOTION + (jumpBoost >= 0 ? JUMP_BOOST_MOTION_PER_LEVEL * (jumpBoost + 1) : 0.0f);
     }
 
     /**
@@ -895,8 +1202,36 @@ public abstract class LivingEntity extends Entity {
         return fireTicks;
     }
 
+    public int getAirTicks() {
+        return airTicks;
+    }
+
+    public void setAirTicks(int airTicks) {
+        this.airTicks = Math.max(DROWN_DAMAGE_AIR_TICKS, Math.min(MAX_AIR_TICKS, airTicks));
+    }
+
     public Entity getLastDamageSource() {
         return lastDamageSource;
+    }
+
+    public DamageSource getLastDamageDetails() {
+        return lastDamageDetails;
+    }
+
+    public boolean hasLastDamagePosition() {
+        return lastDamageSourceHasPosition;
+    }
+
+    public float getLastDamageSourceX() {
+        return lastDamageSourceX;
+    }
+
+    public float getLastDamageSourceY() {
+        return lastDamageSourceY;
+    }
+
+    public float getLastDamageSourceZ() {
+        return lastDamageSourceZ;
     }
 
     public float getMoveSpeed() {
@@ -966,6 +1301,15 @@ public abstract class LivingEntity extends Entity {
 
     public float getPrevBodyYaw() {
         return prevBodyYaw;
+    }
+
+    public void setRenderBodyYaw(float bodyYaw) {
+        float wrapped = wrapDegrees(bodyYaw);
+        this.bodyYaw = wrapped;
+        this.prevBodyYaw = wrapped;
+        this.targetYaw = wrapped;
+        this.yaw = wrapped;
+        this.prevYaw = wrapped;
     }
 
     public float getHeadYaw() {

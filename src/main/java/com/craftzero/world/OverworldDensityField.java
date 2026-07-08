@@ -1,7 +1,6 @@
 package com.craftzero.world;
 
-import com.craftzero.math.Noise;
-
+import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -10,22 +9,36 @@ import java.util.concurrent.ConcurrentHashMap;
 final class OverworldDensityField {
     private static final int XZ_STEP = 4;
     private static final int Y_STEP = 8;
-    private static final int BIOME_BLEND_RADIUS = 16;
-    private static final int BIOME_BLEND_STEP = 16;
+    private static final int MAX_DENSITY_CACHE_ENTRIES = 262_144;
 
-    private final Noise terrainNoise;
-    private final Noise detailNoise;
+    private final ReleaseOneOctaveNoise noiseGen1;
+    private final ReleaseOneOctaveNoise noiseGen2;
+    private final ReleaseOneOctaveNoise noiseGen3;
+    private final ReleaseOneOctaveNoise noiseGen4;
+    private final ReleaseOneOctaveNoise noiseGen5;
+    private final ReleaseOneOctaveNoise noiseGen6;
     private final BiomeSampler biomeSampler;
-    private final ConcurrentHashMap<Long, Double> surfaceCache = new ConcurrentHashMap<>();
+    private final float[] parabolicField = new float[25];
+    private final ConcurrentHashMap<DensityKey, Double> densityCache = new ConcurrentHashMap<>();
 
     interface BiomeSampler {
-        BiomeType getBiome(int blockX, int blockZ);
+        BiomeType getBiome(int layerX, int layerZ);
     }
 
-    OverworldDensityField(Noise terrainNoise, Noise detailNoise, BiomeSampler biomeSampler) {
-        this.terrainNoise = terrainNoise;
-        this.detailNoise = detailNoise;
+    OverworldDensityField(long seed, BiomeSampler biomeSampler) {
+        Random random = new Random(seed);
+        this.noiseGen1 = new ReleaseOneOctaveNoise(random, 16);
+        this.noiseGen2 = new ReleaseOneOctaveNoise(random, 16);
+        this.noiseGen3 = new ReleaseOneOctaveNoise(random, 8);
+        this.noiseGen4 = new ReleaseOneOctaveNoise(random, 4);
+        this.noiseGen5 = new ReleaseOneOctaveNoise(random, 10);
+        this.noiseGen6 = new ReleaseOneOctaveNoise(random, 16);
         this.biomeSampler = biomeSampler;
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                parabolicField[dx + 2 + (dz + 2) * 5] = 10.0F / (float) Math.sqrt(dx * dx + dz * dz + 0.2F);
+            }
+        }
     }
 
     boolean isSolid(int blockX, int y, int blockZ, BiomeType biome) {
@@ -39,6 +52,12 @@ final class OverworldDensityField {
             }
         }
         return 1;
+    }
+
+    double[] stoneNoiseForChunk(int chunkX, int chunkZ) {
+        double scale = 0.03125 * 2.0;
+        return noiseGen4.generateNoiseOctaves(null, chunkX * 16, chunkZ * 16, 0,
+                16, 16, 1, scale, scale, scale);
     }
 
     double density(int blockX, int y, int blockZ, BiomeType biome) {
@@ -72,80 +91,100 @@ final class OverworldDensityField {
     }
 
     double sampleDensity(int blockX, int y, int blockZ, BiomeType biome) {
-        double surface = surfaceAnchor(blockX, blockZ, biome);
-        double vertical = (surface - y) / 16.0;
-        double shape = terrainNoise.octaveNoise3D(blockX * 0.012, y * 0.018, blockZ * 0.012, 4, 0.55);
-        double warp = detailNoise.octaveNoise3D((blockX + 3000) * 0.025, y * 0.025,
-                (blockZ - 3000) * 0.025, 2, 0.5);
-        double shelf = detailNoise.octaveNoise2D(blockX * 0.018, blockZ * 0.018, 3, 0.5) * 0.12;
-        double density = vertical + shape * 0.52 + warp * 0.16 + shelf;
-        if (y < 8) {
-            density += (8 - y) * 0.35;
+        int gridX = Math.floorDiv(blockX, XZ_STEP);
+        int gridY = Math.floorDiv(y, Y_STEP);
+        int gridZ = Math.floorDiv(blockZ, XZ_STEP);
+        DensityKey key = new DensityKey(gridX, gridY, gridZ);
+        Double cached = densityCache.get(key);
+        if (cached != null) {
+            return cached;
         }
-        if (y > 118) {
-            density -= (y - 118) * 0.25;
+        double computed = computeProviderDensity(gridX, gridY, gridZ);
+        if (densityCache.size() > MAX_DENSITY_CACHE_ENTRIES) {
+            densityCache.clear();
+        }
+        densityCache.put(key, computed);
+        return computed;
+    }
+
+    private double computeProviderDensity(int gridX, int gridY, int gridZ) {
+        double horizontalScale = 684.41200000000003;
+        double verticalScale = 684.41200000000003;
+        double depthNoise = noiseGen6.generateNoiseOctaves(null, gridX, gridZ, 1, 1,
+                200.0, 200.0, 0.5)[0] / 8000.0;
+        double minLimit = noiseGen1.sampleNoiseOctaves3D(gridX, gridY, gridZ,
+                horizontalScale, verticalScale, horizontalScale) / 512.0;
+        double maxLimit = noiseGen2.sampleNoiseOctaves3D(gridX, gridY, gridZ,
+                horizontalScale, verticalScale, horizontalScale) / 512.0;
+        double selector = (noiseGen3.sampleNoiseOctaves3D(gridX, gridY, gridZ,
+                horizontalScale / 80.0, verticalScale / 160.0, horizontalScale / 80.0) / 10.0 + 1.0) / 2.0;
+
+        float blendedMaxHeight = 0.0F;
+        float blendedMinHeight = 0.0F;
+        float totalWeight = 0.0F;
+        BiomeType centerBiome = biomeAtGrid(gridX, gridZ);
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                BiomeType sampleBiome = biomeAtGrid(gridX + dx, gridZ + dz);
+                float weight = parabolicField[dx + 2 + (dz + 2) * 5] / (sampleBiome.minHeight() + 2.0F);
+                if (sampleBiome.minHeight() > centerBiome.minHeight()) {
+                    weight /= 2.0F;
+                }
+                blendedMaxHeight += sampleBiome.maxHeight() * weight;
+                blendedMinHeight += sampleBiome.minHeight() * weight;
+                totalWeight += weight;
+            }
+        }
+        blendedMaxHeight /= totalWeight;
+        blendedMinHeight /= totalWeight;
+        blendedMaxHeight = blendedMaxHeight * 0.9F + 0.1F;
+        blendedMinHeight = (blendedMinHeight * 4.0F - 1.0F) / 8.0F;
+
+        if (depthNoise < 0.0) {
+            depthNoise = -depthNoise * 0.3;
+        }
+        depthNoise = depthNoise * 3.0 - 2.0;
+        if (depthNoise < 0.0) {
+            depthNoise /= 2.0;
+            if (depthNoise < -1.0) {
+                depthNoise = -1.0;
+            }
+            depthNoise /= 1.4;
+            depthNoise /= 2.0;
+        } else {
+            if (depthNoise > 1.0) {
+                depthNoise = 1.0;
+            }
+            depthNoise /= 8.0;
+        }
+
+        double minHeight = blendedMinHeight + depthNoise * 0.2;
+        minHeight = minHeight * 17.0 / 16.0;
+        double terrainCenter = 17.0 / 2.0 + minHeight * 4.0;
+        double vertical = ((gridY - terrainCenter) * 12.0) / blendedMaxHeight;
+        if (vertical < 0.0) {
+            vertical *= 4.0;
+        }
+
+        double density;
+        if (selector < 0.0) {
+            density = minLimit;
+        } else if (selector > 1.0) {
+            density = maxLimit;
+        } else {
+            density = minLimit + (maxLimit - minLimit) * selector;
+        }
+        density -= vertical;
+
+        if (gridY > 13) {
+            double fade = (double) (gridY - 13) / 3.0;
+            density = density * (1.0 - fade) + -10.0 * fade;
         }
         return density;
     }
 
-    double surfaceAnchor(int blockX, int blockZ, BiomeType biome) {
-        long key = (((long) blockX) << 32) ^ (blockZ & 0xFFFFFFFFL);
-        Double cached = surfaceCache.get(key);
-        if (cached != null) {
-            return cached;
-        }
-        double computed = computeSurfaceAnchor(blockX, blockZ, biome);
-        surfaceCache.put(key, computed);
-        return computed;
-    }
-
-    private double computeSurfaceAnchor(int blockX, int blockZ, BiomeType biome) {
-        if (biomeSampler == null || biome == BiomeType.HELL || biome == BiomeType.SKY) {
-            return rawSurfaceAnchor(blockX, blockZ, biome);
-        }
-
-        BiomeType centerBiome = biomeSampler.getBiome(blockX, blockZ);
-        double weightedHeight = 0.0;
-        double totalWeight = 0.0;
-        for (int dx = -BIOME_BLEND_RADIUS; dx <= BIOME_BLEND_RADIUS; dx += BIOME_BLEND_STEP) {
-            for (int dz = -BIOME_BLEND_RADIUS; dz <= BIOME_BLEND_RADIUS; dz += BIOME_BLEND_STEP) {
-                int sx = blockX + dx;
-                int sz = blockZ + dz;
-                BiomeType sampleBiome = dx == 0 && dz == 0 ? centerBiome : biomeSampler.getBiome(sx, sz);
-                double distanceSq = dx * dx + dz * dz;
-                double weight = 1.0 / (1.0 + distanceSq / 96.0);
-                weightedHeight += rawSurfaceAnchor(sx, sz, sampleBiome) * weight;
-                totalWeight += weight;
-            }
-        }
-
-        double blended = weightedHeight / Math.max(0.0001, totalWeight);
-        double local = rawSurfaceAnchor(blockX, blockZ, centerBiome);
-        double height = lerp(0.62, local, blended);
-        return Math.max(5.0, Math.min(Chunk.HEIGHT - 6.0, height));
-    }
-
-    private double rawSurfaceAnchor(int blockX, int blockZ, BiomeType biome) {
-        double broad = terrainNoise.octaveNoise2D(blockX * 0.0035, blockZ * 0.0035, 4, 0.5);
-        double medium = detailNoise.octaveNoise2D(blockX * 0.011, blockZ * 0.011, 3, 0.52);
-        double rough = terrainNoise.octaveNoise2D((blockX - 5000) * 0.028, (blockZ + 5000) * 0.028, 2, 0.5);
-        double ridged = 1.0 - Math.abs(detailNoise.octaveNoise2D(blockX * 0.006, blockZ * 0.006, 3, 0.5));
-
-        double height = ReleaseOneWorldGenerator.SEA_LEVEL + broad * 12.0 + medium * 4.5 + rough * 1.4;
-        if (biome.isOceanic() || biome == BiomeType.RIVER || biome == BiomeType.FROZEN_RIVER) {
-            height -= 13.0 + Math.max(0.0, -broad) * 5.0;
-        } else if (biome == BiomeType.EXTREME_HILLS || biome == BiomeType.ICE_MOUNTAINS) {
-            height += 12.0 + ridged * 14.0;
-        } else if (biome == BiomeType.EXTREME_HILLS_EDGE) {
-            height += 6.0 + ridged * 7.0;
-        } else if (biome == BiomeType.FOREST_HILLS || biome == BiomeType.TAIGA_HILLS || biome == BiomeType.DESERT_HILLS) {
-            height += 5.0 + ridged * 6.0;
-        } else if (biome == BiomeType.PLAINS || biome == BiomeType.DESERT) {
-            height = ReleaseOneWorldGenerator.SEA_LEVEL + broad * 5.5 + medium * 1.8;
-        } else if (biome == BiomeType.SWAMPLAND) {
-            height = Math.min(height, ReleaseOneWorldGenerator.SEA_LEVEL + 2.0);
-        }
-        return Math.max(5.0, Math.min(Chunk.HEIGHT - 6.0, height));
+    private BiomeType biomeAtGrid(int gridX, int gridZ) {
+        return biomeSampler == null ? BiomeType.PLAINS : biomeSampler.getBiome(gridX, gridZ);
     }
 
     private static int floorToStep(int value, int step) {
@@ -153,11 +192,9 @@ final class OverworldDensityField {
     }
 
     private static double lerp(double t, double a, double b) {
-        return a + (b - a) * smooth(t);
+        return a + (b - a) * t;
     }
 
-    private static double smooth(double t) {
-        t = Math.max(0.0, Math.min(1.0, t));
-        return t * t * (3.0 - 2.0 * t);
+    private record DensityKey(int gridX, int gridY, int gridZ) {
     }
 }

@@ -197,14 +197,16 @@ public class Input {
 
     public static void setCursorLocked(boolean locked) {
         cursorLocked = locked;
-        if (locked) {
-            glfwSetInputMode(windowHandle, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-            // Check if raw mouse motion is supported
-            if (glfwRawMouseMotionSupported()) {
-                glfwSetInputMode(windowHandle, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+        if (windowHandle != 0L) {
+            if (locked) {
+                glfwSetInputMode(windowHandle, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                // Check if raw mouse motion is supported
+                if (glfwRawMouseMotionSupported()) {
+                    glfwSetInputMode(windowHandle, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+                }
+            } else {
+                glfwSetInputMode(windowHandle, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
             }
-        } else {
-            glfwSetInputMode(windowHandle, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         }
         firstMouse = true;
     }

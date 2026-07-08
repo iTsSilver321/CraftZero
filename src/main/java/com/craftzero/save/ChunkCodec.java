@@ -10,29 +10,38 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * Binary RLE codec for modified chunk block IDs and metadata.
+ * Binary RLE codec for modified chunk block IDs, metadata, and cached lighting.
  */
 public final class ChunkCodec {
     private static final int MAGIC = 0x435A4331; // CZC1
     private static final int VERSION_BLOCK_IDS_ONLY = 1;
     private static final int VERSION_BLOCKS_WITH_METADATA = 2;
+    private static final int VERSION_BLOCKS_WITH_LIGHTING = 3;
 
     private ChunkCodec() {
     }
 
     public static void write(Path path, Chunk chunk) throws IOException {
-        write(path, chunk.copyBlockIds(), chunk.copyBlockMetadata());
+        chunk.calculateSkyLight();
+        write(path, chunk.copyBlockIds(), chunk.copyBlockMetadata(), chunk.copySkyLight(),
+                chunk.copyBlockLight(), chunk.copyHeightMap());
     }
 
     public static void write(Path path, short[] blocks, byte[] metadata) throws IOException {
+        write(path, blocks, metadata, null, null, null);
+    }
+
+    public static void write(Path path, short[] blocks, byte[] metadata, byte[] skyLight,
+            byte[] blockLight, int[] heightMap) throws IOException {
         if (blocks.length != Chunk.TOTAL_BLOCKS || metadata.length != Chunk.TOTAL_BLOCKS) {
             throw new IOException("Chunk dimensions do not match runtime");
         }
+        boolean hasLighting = hasCompleteLightingData(skyLight, blockLight, heightMap);
 
         SafeFiles.writeAtomicBytes(path, stream -> {
             DataOutputStream out = new DataOutputStream(stream);
             out.writeInt(MAGIC);
-            out.writeInt(VERSION_BLOCKS_WITH_METADATA);
+            out.writeInt(hasLighting ? VERSION_BLOCKS_WITH_LIGHTING : VERSION_BLOCKS_WITH_METADATA);
             out.writeInt(Chunk.WIDTH);
             out.writeInt(Chunk.HEIGHT);
             out.writeInt(Chunk.DEPTH);
@@ -53,8 +62,18 @@ public final class ChunkCodec {
                 out.writeInt(count);
                 index += count;
             }
+            if (hasLighting) {
+                out.writeInt(skyLight.length);
+                out.write(skyLight);
+                out.writeInt(blockLight.length);
+                out.write(blockLight);
+                out.writeInt(heightMap.length);
+                for (int heightValue : heightMap) {
+                    out.writeInt(heightValue);
+                }
+            }
             out.flush();
-        }, SafeFiles.BackupPolicy.NONE);
+        }, SafeFiles.BackupPolicy.BAK);
     }
 
     public static ChunkData read(Path path) throws IOException {
@@ -65,7 +84,9 @@ public final class ChunkCodec {
             }
 
             int version = in.readInt();
-            if (version != VERSION_BLOCK_IDS_ONLY && version != VERSION_BLOCKS_WITH_METADATA) {
+            if (version != VERSION_BLOCK_IDS_ONLY
+                    && version != VERSION_BLOCKS_WITH_METADATA
+                    && version != VERSION_BLOCKS_WITH_LIGHTING) {
                 throw new IOException("Unsupported chunk version: " + version);
             }
 
@@ -83,7 +104,7 @@ public final class ChunkCodec {
             int index = 0;
             while (index < total) {
                 short id = in.readShort();
-                byte meta = version == VERSION_BLOCKS_WITH_METADATA ? in.readByte() : 0;
+                byte meta = version == VERSION_BLOCK_IDS_ONLY ? 0 : in.readByte();
                 int count = in.readInt();
                 if (count <= 0 || index + count > total) {
                     throw new IOException("Invalid chunk RLE run length: " + count);
@@ -94,6 +115,13 @@ public final class ChunkCodec {
                     index++;
                 }
             }
+
+            if (version == VERSION_BLOCKS_WITH_LIGHTING) {
+                byte[] skyLight = readByteArray(in, Chunk.LIGHT_DATA_BYTES, "sky light");
+                byte[] blockLight = readByteArray(in, Chunk.LIGHT_DATA_BYTES, "block light");
+                int[] heightMap = readHeightMap(in);
+                return new ChunkData(blocks, metadata, skyLight, blockLight, heightMap);
+            }
             return new ChunkData(blocks, metadata);
         }
     }
@@ -102,6 +130,50 @@ public final class ChunkCodec {
         return read(path).blockIds();
     }
 
-    public record ChunkData(short[] blockIds, byte[] metadata) {
+    private static boolean hasCompleteLightingData(byte[] skyLight, byte[] blockLight, int[] heightMap)
+            throws IOException {
+        if (skyLight == null && blockLight == null && heightMap == null) {
+            return false;
+        }
+        if (skyLight == null || blockLight == null || heightMap == null) {
+            throw new IOException("Incomplete chunk lighting payload");
+        }
+        if (skyLight.length != Chunk.LIGHT_DATA_BYTES || blockLight.length != Chunk.LIGHT_DATA_BYTES
+                || heightMap.length != Chunk.HEIGHT_MAP_SIZE) {
+            throw new IOException("Chunk lighting dimensions do not match runtime");
+        }
+        return true;
+    }
+
+    private static byte[] readByteArray(DataInputStream in, int expectedLength, String label) throws IOException {
+        int length = in.readInt();
+        if (length != expectedLength) {
+            throw new IOException("Invalid " + label + " length: " + length);
+        }
+        byte[] values = new byte[length];
+        in.readFully(values);
+        return values;
+    }
+
+    private static int[] readHeightMap(DataInputStream in) throws IOException {
+        int length = in.readInt();
+        if (length != Chunk.HEIGHT_MAP_SIZE) {
+            throw new IOException("Invalid height map length: " + length);
+        }
+        int[] values = new int[length];
+        for (int i = 0; i < values.length; i++) {
+            values[i] = in.readInt();
+        }
+        return values;
+    }
+
+    public record ChunkData(short[] blockIds, byte[] metadata, byte[] skyLight, byte[] blockLight, int[] heightMap) {
+        public ChunkData(short[] blockIds, byte[] metadata) {
+            this(blockIds, metadata, null, null, null);
+        }
+
+        public boolean hasLightingData() {
+            return skyLight != null && blockLight != null && heightMap != null;
+        }
     }
 }

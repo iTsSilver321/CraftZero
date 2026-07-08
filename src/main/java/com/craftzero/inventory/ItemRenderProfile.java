@@ -21,6 +21,13 @@ public record ItemRenderProfile(
         float thirdPersonOffsetY,
         float thirdPersonOffsetZ) {
 
+    private static final float RELEASE_SPRITE_FIRST_PERSON_SCALE = 0.37f;
+    private static final float RELEASE_SPRITE_FIRST_PERSON_X = 0.57f;
+    private static final float RELEASE_SPRITE_FIRST_PERSON_Y = -0.57f;
+    private static final float RELEASE_SPRITE_FIRST_PERSON_Z = -0.88f;
+    private static final float RELEASE_SPRITE_FIRST_PERSON_YAW = 31.0f;
+    private static final float RELEASE_SPRITE_FIRST_PERSON_EQUIP_DROP = 0.60f;
+
     public enum ModelKind {
         BLOCK,
         SPRITE
@@ -38,28 +45,36 @@ public record ItemRenderProfile(
     }
 
     public static ItemRenderProfile toolSprite() {
-        return sprite(0.48f, 0.40f, 0.0f, -80.0f, 30.0f, 0.62f, -0.50f, -0.82f);
+        return sprite(RELEASE_SPRITE_FIRST_PERSON_SCALE, 0.40f,
+                0.0f, RELEASE_SPRITE_FIRST_PERSON_YAW, 0.0f);
     }
 
     public static ItemRenderProfile materialSprite() {
-        return sprite(0.46f, 0.32f, 0.0f, 45.0f, 0.0f);
+        return sprite(RELEASE_SPRITE_FIRST_PERSON_SCALE, 0.32f,
+                0.0f, RELEASE_SPRITE_FIRST_PERSON_YAW, 0.0f);
     }
 
     public static ItemRenderProfile skinnySprite() {
-        return sprite(0.42f, 0.34f, 0.0f, -56.0f, 30.0f, 0.60f, -0.50f, -0.82f);
+        return sprite(RELEASE_SPRITE_FIRST_PERSON_SCALE, 0.34f,
+                0.0f, RELEASE_SPRITE_FIRST_PERSON_YAW, 0.0f);
     }
 
     public static ItemRenderProfile largeSprite() {
-        return sprite(0.50f, 0.36f, 0.0f, 12.0f, 0.0f, 0.52f, -0.46f, -0.74f);
+        return sprite(RELEASE_SPRITE_FIRST_PERSON_SCALE, 0.36f,
+                0.0f, RELEASE_SPRITE_FIRST_PERSON_YAW, 0.0f);
     }
 
     public static ItemRenderProfile terrainSprite() {
-        return sprite(0.48f, 0.34f, 0.0f, 12.0f, 0.0f, 0.52f, -0.46f, -0.74f);
+        return sprite(RELEASE_SPRITE_FIRST_PERSON_SCALE, 0.34f,
+                0.0f, RELEASE_SPRITE_FIRST_PERSON_YAW, 0.0f);
     }
 
     private static ItemRenderProfile sprite(float firstScale, float thirdScale,
             float firstRotX, float firstRotY, float firstRotZ) {
-        return sprite(firstScale, thirdScale, firstRotX, firstRotY, firstRotZ, 0.58f, -0.50f, -0.72f);
+        return sprite(firstScale, thirdScale, firstRotX, firstRotY, firstRotZ,
+                RELEASE_SPRITE_FIRST_PERSON_X,
+                RELEASE_SPRITE_FIRST_PERSON_Y,
+                RELEASE_SPRITE_FIRST_PERSON_Z);
     }
 
     private static ItemRenderProfile sprite(float firstScale, float thirdScale,
@@ -69,7 +84,7 @@ public record ItemRenderProfile(
                 ModelKind.SPRITE,
                 firstScale,
                 thirdScale,
-                firstOffsetX, firstOffsetY, firstOffsetZ, 0.70f,
+                firstOffsetX, firstOffsetY, firstOffsetZ, RELEASE_SPRITE_FIRST_PERSON_EQUIP_DROP,
                 firstRotX, firstRotY, firstRotZ,
                 180.0f, 0.0f, 45.0f,
                 0.15f, -0.75f, -0.55f);

@@ -11,8 +11,13 @@ public record SpawnRule(MobDefinition definition, int weight, int minY, int maxY
             return false;
         }
         if (waterSpawn) {
-            return world.getBlockIfLoaded(x, y + 1, z, BlockType.AIR).isWater();
+            return isWaterSpawnCell(world, x, y, z);
         }
         return true;
+    }
+
+    static boolean isWaterSpawnCell(World world, int x, int y, int z) {
+        return world.getBlockIfLoaded(x, y, z, BlockType.AIR).isWater()
+                && !BlockShape.isOpaqueCube(world.getBlockIfLoaded(x, y + 1, z, BlockType.BEDROCK));
     }
 }

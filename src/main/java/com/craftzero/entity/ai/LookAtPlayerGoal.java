@@ -1,7 +1,8 @@
 package com.craftzero.entity.ai;
 
-import com.craftzero.entity.LivingEntity;
+import com.craftzero.entity.mob.Mob;
 import com.craftzero.main.Player;
+import com.craftzero.world.World;
 
 /**
  * AI Goal: Look at nearby player.
@@ -10,15 +11,18 @@ import com.craftzero.main.Player;
  */
 public class LookAtPlayerGoal implements Goal {
 
-    private final LivingEntity mob;
+    private final Mob mob;
     private final float range;
     private float lookDuration;
     private float lookX, lookY, lookZ;
     private boolean hasTarget;
+    private Player targetPlayer;
+    private String targetRemotePlayerId = "";
 
     private static final float MAX_LOOK_TIME = 40; // 2 seconds
+    private static final float IDLE_MOTION_THRESHOLD_SQ = 0.0004f;
 
-    public LookAtPlayerGoal(LivingEntity mob, float range) {
+    public LookAtPlayerGoal(Mob mob, float range) {
         this.mob = mob;
         this.range = range;
         this.hasTarget = false;
@@ -33,24 +37,18 @@ public class LookAtPlayerGoal implements Goal {
     public boolean canUse() {
         if (mob.getWorld() == null)
             return false;
-
-        Player player = mob.getWorld().getPlayer();
-        if (player == null)
+        if (!isIdleEnoughToLook())
             return false;
 
-        // Check if player is in range
-        float dist = distanceToPlayer(player);
-        if (dist > range)
+        LookTarget target = findLookTarget(range);
+        if (target == null)
             return false;
 
         // Random chance to start looking (not constant staring)
-        if (Math.random() > 0.1f)
+        if (mob.getRandom().nextFloat() > 0.1f)
             return false;
 
-        // Set look target
-        lookX = player.getPosition().x;
-        lookY = player.getPosition().y + 1.6f; // Eye level
-        lookZ = player.getPosition().z;
+        setLookTarget(target);
         lookDuration = MAX_LOOK_TIME;
         hasTarget = true;
 
@@ -63,14 +61,15 @@ public class LookAtPlayerGoal implements Goal {
             return false;
         if (lookDuration <= 0)
             return false;
-
-        Player player = mob.getWorld() != null ? mob.getWorld().getPlayer() : null;
-        if (player == null)
+        if (!isIdleEnoughToLook())
             return false;
 
-        // Stop if player moved too far
-        float dist = distanceToPlayer(player);
-        return dist <= range * 1.5f;
+        LookTarget target = currentLookTarget(range * 1.5f);
+        if (target == null) {
+            return false;
+        }
+        setLookTarget(target);
+        return true;
     }
 
     @Override
@@ -82,12 +81,9 @@ public class LookAtPlayerGoal implements Goal {
     public void tick() {
         lookDuration--;
 
-        Player player = mob.getWorld() != null ? mob.getWorld().getPlayer() : null;
-        if (player != null) {
-            // Update look position (player might move)
-            lookX = player.getPosition().x;
-            lookY = player.getPosition().y + 1.6f;
-            lookZ = player.getPosition().z;
+        LookTarget target = currentLookTarget(range * 1.5f);
+        if (target != null) {
+            setLookTarget(target);
         }
 
         // Look at player (just head rotation, not body)
@@ -97,6 +93,64 @@ public class LookAtPlayerGoal implements Goal {
     @Override
     public void stop() {
         hasTarget = false;
+        targetPlayer = null;
+        targetRemotePlayerId = "";
+    }
+
+    private LookTarget findLookTarget(float maxRange) {
+        Player player = mob.getWorld() != null ? mob.getWorld().getPlayer() : null;
+        boolean localValid = player != null && distanceToPlayer(player) <= maxRange;
+        float localDistance = localValid ? distanceToPlayer(player) : Float.MAX_VALUE;
+        World.RemotePlayerTarget remote = nearestRemoteLookTarget(maxRange);
+        if (remote != null && remote.valid() && remote.distance() <= localDistance) {
+            return LookTarget.remote(remote);
+        }
+        return localValid ? LookTarget.local(player) : null;
+    }
+
+    private LookTarget currentLookTarget(float maxRange) {
+        if (mob.getWorld() == null) {
+            return null;
+        }
+        if (targetRemotePlayerId != null && !targetRemotePlayerId.isBlank()) {
+            World.RemotePlayerTarget remote = mob.getWorld().remotePlayerViewById(targetRemotePlayerId);
+            return remote != null && remote.valid() && distanceToRemoteTarget(remote) <= maxRange
+                    ? LookTarget.remote(remote)
+                    : null;
+        }
+        return targetPlayer != null && distanceToPlayer(targetPlayer) <= maxRange
+                ? LookTarget.local(targetPlayer)
+                : null;
+    }
+
+    private World.RemotePlayerTarget nearestRemoteLookTarget(float maxRange) {
+        if (mob.getWorld() == null) {
+            return null;
+        }
+        for (World.RemotePlayerTarget target : mob.getWorld().remotePlayerViews(
+                mob.getX(), mob.getY(), mob.getZ(), maxRange, false)) {
+            if (target != null && target.valid()) {
+                return target;
+            }
+        }
+        return null;
+    }
+
+    private void setLookTarget(LookTarget target) {
+        if (target == null) {
+            return;
+        }
+        targetPlayer = target.player();
+        targetRemotePlayerId = target.remoteTarget() == null ? "" : target.remoteTarget().playerId();
+        if (target.player() != null) {
+            lookX = target.player().getPosition().x;
+            lookY = target.player().getPosition().y + 1.6f;
+            lookZ = target.player().getPosition().z;
+        } else if (target.remoteTarget() != null) {
+            lookX = target.remoteTarget().x();
+            lookY = target.remoteTarget().eyeY();
+            lookZ = target.remoteTarget().z();
+        }
     }
 
     private float distanceToPlayer(Player player) {
@@ -106,8 +160,32 @@ public class LookAtPlayerGoal implements Goal {
         return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
 
+    private float distanceToRemoteTarget(World.RemotePlayerTarget target) {
+        float dx = target.x() - mob.getX();
+        float dy = target.y() - mob.getY();
+        float dz = target.z() - mob.getZ();
+        return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    private boolean isIdleEnoughToLook() {
+        float horizontalMotionSq = mob.getMotionX() * mob.getMotionX() + mob.getMotionZ() * mob.getMotionZ();
+        return horizontalMotionSq <= IDLE_MOTION_THRESHOLD_SQ
+                && !mob.getAI().hasMoveTarget()
+                && !mob.getAI().isNavigating();
+    }
+
     @Override
     public boolean isExclusive() {
         return false; // Looking doesn't prevent other actions
+    }
+
+    private record LookTarget(Player player, World.RemotePlayerTarget remoteTarget) {
+        static LookTarget local(Player player) {
+            return new LookTarget(player, null);
+        }
+
+        static LookTarget remote(World.RemotePlayerTarget target) {
+            return new LookTarget(null, target);
+        }
     }
 }

@@ -26,6 +26,7 @@ public class TextRenderer {
     private ShaderProgram shader;
     private int fontTextureId;
     private int windowWidth, windowHeight;
+    private final String fontTexturePath;
 
     // Minecraft font uses 8x8 pixel characters in a 16x16 grid
     private static final int CHAR_WIDTH = 8;
@@ -38,6 +39,16 @@ public class TextRenderer {
 
     private int textureWidth = 128;
     private int textureHeight = 128;
+
+    public TextRenderer() {
+        this("/textures/font/default.png");
+    }
+
+    public TextRenderer(String fontTexturePath) {
+        this.fontTexturePath = fontTexturePath == null || fontTexturePath.isBlank()
+                ? "/textures/font/default.png"
+                : fontTexturePath;
+    }
 
     public void init(int windowWidth, int windowHeight) throws Exception {
         this.windowWidth = windowWidth;
@@ -87,10 +98,10 @@ public class TextRenderer {
 
     private void loadFontTexture() throws Exception {
         // Load the Minecraft font from resources
-        InputStream is = ResourcePackManager.openActive("/textures/font/default.png")
-                .orElseGet(() -> getClass().getResourceAsStream("/textures/font/default.png"));
+        InputStream is = ResourcePackManager.openActive(fontTexturePath)
+                .orElseGet(() -> getClass().getResourceAsStream(fontTexturePath));
         if (is == null) {
-            throw new Exception("Could not find font texture: /textures/font/default.png");
+            throw new Exception("Could not find font texture: " + fontTexturePath);
         }
 
         BufferedImage image = ImageIO.read(is);
@@ -178,6 +189,23 @@ public class TextRenderer {
         if (text == null || text.isEmpty())
             return;
 
+        drawTextInternal(text, x, y, scale, color, 0.0f, x, y);
+    }
+
+    public void drawTextRotatedCentered(String text, float centerX, float centerY, float scale, float rotationDegrees,
+            float[] color) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        int cellHeight = textureHeight / GRID_ROWS;
+        float textWidth = getStringWidth(text, scale);
+        float x = centerX - textWidth / 2.0f;
+        float y = centerY - cellHeight * scale / 2.0f;
+        drawTextInternal(text, x, y, scale, color, (float) Math.toRadians(rotationDegrees), centerX, centerY);
+    }
+
+    private void drawTextInternal(String text, float x, float y, float scale, float[] color, float rotationRadians,
+            float originX, float originY) {
         glDisable(GL_CULL_FACE);
         glDisable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
@@ -198,6 +226,8 @@ public class TextRenderer {
 
         float charW = cellWidth * scale;
         float charH = cellHeight * scale;
+        float cos = (float) Math.cos(rotationRadians);
+        float sin = (float) Math.sin(rotationRadians);
 
         for (char c : text.toCharArray()) {
             int charIndex = (int) c;
@@ -213,15 +243,20 @@ public class TextRenderer {
             float u2 = (float) (col + 1) / GRID_COLS;
             float v2 = (float) (row + 1) / GRID_ROWS;
 
+            float[] bottomLeft = transformTextPoint(x, y + charH, originX, originY, cos, sin);
+            float[] topLeft = transformTextPoint(x, y, originX, originY, cos, sin);
+            float[] topRight = transformTextPoint(x + charW, y, originX, originY, cos, sin);
+            float[] bottomRight = transformTextPoint(x + charW, y + charH, originX, originY, cos, sin);
+
             // Vertices: Pos(x,y) Tex(u,v)
             float[] vertices = {
-                    x, y + charH, u1, v2,
-                    x, y, u1, v1,
-                    x + charW, y, u2, v1,
+                    bottomLeft[0], bottomLeft[1], u1, v2,
+                    topLeft[0], topLeft[1], u1, v1,
+                    topRight[0], topRight[1], u2, v1,
 
-                    x, y + charH, u1, v2,
-                    x + charW, y, u2, v1,
-                    x + charW, y + charH, u2, v2
+                    bottomLeft[0], bottomLeft[1], u1, v2,
+                    topRight[0], topRight[1], u2, v1,
+                    bottomRight[0], bottomRight[1], u2, v2
             };
 
             glBindBuffer(GL_ARRAY_BUFFER, vbo);
@@ -237,6 +272,15 @@ public class TextRenderer {
         glBindVertexArray(0);
         glBindTexture(GL_TEXTURE_2D, 0);
         shader.unbind();
+    }
+
+    private static float[] transformTextPoint(float x, float y, float originX, float originY, float cos, float sin) {
+        float dx = x - originX;
+        float dy = y - originY;
+        return new float[] {
+                originX + dx * cos - dy * sin,
+                originY + dx * sin + dy * cos
+        };
     }
 
     public int getStringWidth(String text, float scale) {

@@ -15,11 +15,26 @@ class FluidMeshTest {
         ChunkMeshData mesh = ChunkMeshBuilder.buildMeshData(chunk);
 
         assertTrue(mesh.hasTransparentMesh());
-        float maxY = Float.NEGATIVE_INFINITY;
-        for (int i = 1; i < mesh.transPositions.length; i += 3) {
-            maxY = Math.max(maxY, mesh.transPositions[i]);
-        }
-        assertEquals(10.0f + 4.0f / 9.0f, maxY, 0.0001f);
+        assertEquals(10.0f + 4.0f / 9.0f, maxTransparentY(mesh), 0.0001f);
+    }
+
+    @Test
+    @DisplayName("Fluid mesh should sample diagonal chunk neighbors for corner heights")
+    void fluidMeshSamplesDiagonalChunkNeighborsForCornerHeights() {
+        Chunk center = new Chunk(0, 0);
+        Chunk north = new Chunk(0, -1);
+        Chunk west = new Chunk(-1, 0);
+        Chunk northwest = new Chunk(-1, -1);
+        center.setNeighbors(north, null, null, west);
+        north.setNeighbors(null, center, null, northwest);
+        west.setNeighbors(northwest, null, center, null);
+
+        center.setBlock(0, 10, 0, BlockType.FLOWING_WATER, 7);
+        northwest.setBlock(15, 10, 15, BlockType.WATER, 0);
+
+        ChunkMeshData mesh = ChunkMeshBuilder.buildMeshData(center);
+
+        assertEquals(10.5f, maxTransparentY(mesh), 0.0001f);
     }
 
     @Test
@@ -46,5 +61,13 @@ class FluidMeshTest {
 
         int faceCount = mesh.transIndices.length / 6;
         assertEquals(5, faceCount);
+    }
+
+    private static float maxTransparentY(ChunkMeshData mesh) {
+        float maxY = Float.NEGATIVE_INFINITY;
+        for (int i = 1; i < mesh.transPositions.length; i += 3) {
+            maxY = Math.max(maxY, mesh.transPositions[i]);
+        }
+        return maxY;
     }
 }

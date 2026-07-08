@@ -10,7 +10,6 @@ public enum PotionType {
     FIRE_RESISTANCE,
     POISON,
     HEALING,
-    NIGHT_VISION,
     WEAKNESS,
     STRENGTH,
     SLOWNESS,

@@ -25,6 +25,7 @@ import java.util.zip.ZipFile;
 public final class ResourcePackManager {
     public static final Path DEFAULT_TEXTURE_PACKS_ROOT = Paths.get("texturepacks");
     public static final Path DEFAULT_RESOURCES_ROOT = Paths.get("src", "main", "resources");
+    public static final Path DEFAULT_LEGACY_RESOURCES_ROOT = Paths.get("resources");
     public static final String DEFAULT_PACK_ID = "default";
     public static final String DEFAULT_PACK_NAME = "Default";
 
@@ -32,6 +33,7 @@ public final class ResourcePackManager {
     private final Path defaultResourcesRoot;
     private String selectedPackId = DEFAULT_PACK_ID;
     private static ResourcePackManager active;
+    private static long activeResourceRevision;
 
     public ResourcePackManager() {
         this(DEFAULT_TEXTURE_PACKS_ROOT, DEFAULT_RESOURCES_ROOT);
@@ -62,11 +64,24 @@ public final class ResourcePackManager {
     }
 
     public void setSelectedPackId(String selectedPackId) {
-        this.selectedPackId = normalizePackId(selectedPackId);
+        String normalized = normalizePackId(selectedPackId);
+        if (!this.selectedPackId.equals(normalized)) {
+            this.selectedPackId = normalized;
+            if (active == this) {
+                activeResourceRevision++;
+            }
+        }
     }
 
     public static void setActive(ResourcePackManager manager) {
-        active = manager;
+        if (active != manager) {
+            active = manager;
+            activeResourceRevision++;
+        }
+    }
+
+    public static long activeResourceRevision() {
+        return activeResourceRevision;
     }
 
     public static Optional<InputStream> openActive(String resourcePath) {
@@ -75,6 +90,17 @@ public final class ResourcePackManager {
         }
         try {
             return active.resolveSelectedTexturePath(resourcePath).map(ResolvedTexture::openStream);
+        } catch (IOException | IllegalArgumentException e) {
+            return Optional.empty();
+        }
+    }
+
+    public static Optional<InputStream> openActiveResource(String resourcePath) {
+        if (active == null) {
+            return Optional.empty();
+        }
+        try {
+            return active.resolveSelectedResourcePath(resourcePath).map(ResolvedTexture::openStream);
         } catch (IOException | IllegalArgumentException e) {
             return Optional.empty();
         }
@@ -116,8 +142,19 @@ public final class ResourcePackManager {
         return resolveTexturePath(selectedPackId, texturePath);
     }
 
+    public Optional<ResolvedTexture> resolveSelectedResourcePath(String resourcePath) throws IOException {
+        return resolveResourcePath(selectedPackId, resourcePath);
+    }
+
     public Optional<ResolvedTexture> resolveTexturePath(String packId, String texturePath) throws IOException {
-        String logicalPath = normalizeTexturePath(texturePath);
+        return resolveNormalizedPath(packId, normalizeTexturePath(texturePath));
+    }
+
+    public Optional<ResolvedTexture> resolveResourcePath(String packId, String resourcePath) throws IOException {
+        return resolveNormalizedPath(packId, normalizeResourcePath(resourcePath));
+    }
+
+    private Optional<ResolvedTexture> resolveNormalizedPath(String packId, String logicalPath) throws IOException {
         String requestedPackId = normalizePackId(packId);
         boolean requestedDefault = DEFAULT_PACK_ID.equals(requestedPackId);
         PackInfo requestedPack = findPack(requestedPackId).orElse(defaultPackInfo());
@@ -148,7 +185,7 @@ public final class ResourcePackManager {
             return true;
         }
         String name = entry.getFileName().toString().toLowerCase(Locale.ROOT);
-        return Files.isRegularFile(entry) && name.endsWith(".zip");
+        return Files.isRegularFile(entry) && (name.endsWith(".zip") || name.endsWith(".jar"));
     }
 
     private PackInfo readPackInfo(Path path) throws IOException {
@@ -157,53 +194,160 @@ public final class ResourcePackManager {
         String fileName = path.getFileName().toString();
         String displayName = metadata != null && metadata.name() != null && !metadata.name().isBlank()
                 ? metadata.name().trim()
-                : stripZipExtension(fileName);
+                : stripArchiveExtension(fileName);
         return new PackInfo(fileName, displayName, source, path, metadata);
     }
 
     private Optional<byte[]> readPackBytes(PackInfo pack, String logicalPath) throws IOException {
         if (pack.source() == PackSource.FOLDER) {
-            Path packRoot = pack.path().toAbsolutePath().normalize();
-            Path candidate = packRoot.resolve(logicalPath).normalize();
-            if (candidate.startsWith(packRoot) && Files.isRegularFile(candidate)) {
-                return Optional.of(Files.readAllBytes(candidate));
-            }
-            return Optional.empty();
+            return readFolderBytes(pack.path().toAbsolutePath().normalize(), logicalPath);
         }
 
         if (pack.source() == PackSource.ZIP) {
-            try (ZipFile zipFile = new ZipFile(pack.path().toFile())) {
-                ZipEntry entry = zipFile.getEntry(logicalPath);
-                if (entry == null || entry.isDirectory()) {
-                    return Optional.empty();
-                }
-                try (InputStream stream = zipFile.getInputStream(entry)) {
-                    return Optional.of(stream.readAllBytes());
-                }
-            }
+            return readArchiveBytes(pack.path(), logicalPath);
         }
 
         return Optional.empty();
     }
 
     private Optional<byte[]> readDefaultBytes(String logicalPath) throws IOException {
-        Path candidate = defaultResourcesRoot.resolve(logicalPath).normalize();
-        if (candidate.startsWith(defaultResourcesRoot) && Files.isRegularFile(candidate)) {
-            return Optional.of(Files.readAllBytes(candidate));
+        List<String> candidates = resourceReadCandidates(logicalPath);
+        Optional<byte[]> defaultBytes = readFilesystemCandidates(defaultResourcesRoot, candidates);
+        if (defaultBytes.isPresent()) {
+            return defaultBytes;
         }
 
-        ClassLoader loader = Thread.currentThread().getContextClassLoader();
-        InputStream resourceStream = loader == null ? null : loader.getResourceAsStream(logicalPath);
-        if (resourceStream == null) {
-            ClassLoader fallbackLoader = ResourcePackManager.class.getClassLoader();
-            resourceStream = fallbackLoader == null ? null : fallbackLoader.getResourceAsStream(logicalPath);
+        Path builtInRoot = DEFAULT_RESOURCES_ROOT.toAbsolutePath().normalize();
+        Path legacyRoot = DEFAULT_LEGACY_RESOURCES_ROOT.toAbsolutePath().normalize();
+        if (defaultResourcesRoot.equals(builtInRoot) && !legacyRoot.equals(defaultResourcesRoot)) {
+            Optional<byte[]> legacyBytes = readFilesystemCandidates(legacyRoot, candidates);
+            if (legacyBytes.isPresent()) {
+                return legacyBytes;
+            }
         }
-        try (InputStream stream = resourceStream) {
-            if (stream != null) {
-                return Optional.of(stream.readAllBytes());
+
+        return readClasspathCandidates(candidates);
+    }
+
+    private Optional<byte[]> readFolderBytes(Path packRoot, String logicalPath) throws IOException {
+        List<String> candidates = resourceReadCandidates(logicalPath);
+        Optional<byte[]> exact = readFilesystemCandidates(packRoot, candidates);
+        if (exact.isPresent() || !Files.isDirectory(packRoot)) {
+            return exact;
+        }
+
+        try (var entries = Files.list(packRoot)) {
+            for (Path child : entries.filter(Files::isDirectory).toList()) {
+                Optional<byte[]> wrapped = readFilesystemCandidates(child.toAbsolutePath().normalize(), candidates);
+                if (wrapped.isPresent()) {
+                    return wrapped;
+                }
             }
         }
         return Optional.empty();
+    }
+
+    private Optional<byte[]> readArchiveBytes(Path archivePath, String logicalPath) throws IOException {
+        List<String> candidates = resourceReadCandidates(logicalPath);
+        try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
+            for (String candidate : candidates) {
+                Optional<byte[]> exact = readZipEntryBytes(zipFile, candidate);
+                if (exact.isPresent()) {
+                    return exact;
+                }
+            }
+
+            for (ZipEntry entry : zipFile.stream().toList()) {
+                if (entry.isDirectory()) {
+                    continue;
+                }
+                String entryName = normalizeArchiveEntryName(entry.getName());
+                for (String candidate : candidates) {
+                    if (isSingleRootWrappedResource(entryName, candidate)) {
+                        return readZipEntryBytes(zipFile, entry);
+                    }
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<byte[]> readFilesystemCandidates(Path root, List<String> candidates) throws IOException {
+        Path normalizedRoot = root.toAbsolutePath().normalize();
+        for (String candidatePath : candidates) {
+            Path candidate = normalizedRoot.resolve(candidatePath).normalize();
+            if (candidate.startsWith(normalizedRoot) && Files.isRegularFile(candidate)) {
+                return Optional.of(Files.readAllBytes(candidate));
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<byte[]> readClasspathCandidates(List<String> candidates) throws IOException {
+        ClassLoader loader = Thread.currentThread().getContextClassLoader();
+        ClassLoader fallbackLoader = ResourcePackManager.class.getClassLoader();
+        for (String candidate : candidates) {
+            InputStream resourceStream = loader == null ? null : loader.getResourceAsStream(candidate);
+            if (resourceStream == null) {
+                resourceStream = fallbackLoader == null ? null : fallbackLoader.getResourceAsStream(candidate);
+            }
+            try (InputStream stream = resourceStream) {
+                if (stream != null) {
+                    return Optional.of(stream.readAllBytes());
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<byte[]> readZipEntryBytes(ZipFile zipFile, String entryName) throws IOException {
+        ZipEntry entry = zipFile.getEntry(entryName);
+        if (entry == null || entry.isDirectory()) {
+            return Optional.empty();
+        }
+        return readZipEntryBytes(zipFile, entry);
+    }
+
+    private Optional<byte[]> readZipEntryBytes(ZipFile zipFile, ZipEntry entry) throws IOException {
+        try (InputStream stream = zipFile.getInputStream(entry)) {
+            return Optional.of(stream.readAllBytes());
+        }
+    }
+
+    private static List<String> resourceReadCandidates(String logicalPath) {
+        List<String> candidates = new ArrayList<>();
+        addResourceCandidate(candidates, logicalPath);
+        if (logicalPath.startsWith("resources/")) {
+            addResourceCandidate(candidates, logicalPath.substring("resources/".length()));
+        } else {
+            addResourceCandidate(candidates, "resources/" + logicalPath);
+        }
+        if (logicalPath.startsWith("assets/minecraft/")) {
+            addResourceCandidate(candidates, logicalPath.substring("assets/minecraft/".length()));
+        } else {
+            addResourceCandidate(candidates, "assets/minecraft/" + logicalPath);
+        }
+        return List.copyOf(candidates);
+    }
+
+    private static void addResourceCandidate(List<String> candidates, String logicalPath) {
+        if (logicalPath != null && !logicalPath.isBlank() && !candidates.contains(logicalPath)) {
+            candidates.add(logicalPath);
+        }
+    }
+
+    private static String normalizeArchiveEntryName(String entryName) {
+        String normalized = entryName == null ? "" : entryName.replace('\\', '/');
+        while (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        return normalized;
+    }
+
+    private static boolean isSingleRootWrappedResource(String entryName, String logicalPath) {
+        int separator = entryName.indexOf('/');
+        return separator > 0 && separator + 1 < entryName.length()
+                && entryName.substring(separator + 1).equals(logicalPath);
     }
 
     private PackMetadata readFolderMetadata(Path packRoot) throws IOException {
@@ -286,11 +430,16 @@ public final class ResourcePackManager {
     }
 
     private static String normalizeTexturePath(String texturePath) {
-        if (texturePath == null || texturePath.isBlank()) {
-            throw new IllegalArgumentException("texturePath cannot be blank");
+        String normalized = normalizeResourcePath(texturePath);
+        return normalized.startsWith("textures/") ? normalized : "textures/" + normalized;
+    }
+
+    private static String normalizeResourcePath(String resourcePath) {
+        if (resourcePath == null || resourcePath.isBlank()) {
+            throw new IllegalArgumentException("resourcePath cannot be blank");
         }
 
-        String raw = texturePath.trim().replace('\\', '/');
+        String raw = resourcePath.trim().replace('\\', '/');
         while (raw.startsWith("/")) {
             raw = raw.substring(1);
         }
@@ -301,20 +450,21 @@ public final class ResourcePackManager {
                 continue;
             }
             if ("..".equals(part)) {
-                throw new IllegalArgumentException("texturePath cannot escape the texture root");
+                throw new IllegalArgumentException("resourcePath cannot escape the resource root");
             }
             parts.add(part);
         }
 
         String normalized = String.join("/", parts);
         if (normalized.isBlank()) {
-            throw new IllegalArgumentException("texturePath cannot be blank");
+            throw new IllegalArgumentException("resourcePath cannot be blank");
         }
-        return normalized.startsWith("textures/") ? normalized : "textures/" + normalized;
+        return normalized;
     }
 
-    private static String stripZipExtension(String fileName) {
-        return fileName.toLowerCase(Locale.ROOT).endsWith(".zip")
+    private static String stripArchiveExtension(String fileName) {
+        String lowerName = fileName.toLowerCase(Locale.ROOT);
+        return lowerName.endsWith(".zip") || lowerName.endsWith(".jar")
                 ? fileName.substring(0, fileName.length() - 4)
                 : fileName;
     }

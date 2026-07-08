@@ -57,6 +57,28 @@ class ScreenManagerTest {
         assertEquals(1, clicks.get());
     }
 
+    @Test
+    @DisplayName("ScreenManager should wire button click sounds for pushed screens")
+    void wiresButtonClickSoundsForPushedScreens() {
+        AtomicInteger clicks = new AtomicInteger();
+        AtomicInteger sounds = new AtomicInteger();
+        MenuButton button = new MenuButton("done", "Done", new Rect(0, 0, 50, 20), clicks::incrementAndGet);
+
+        ScreenManager manager = new ScreenManager();
+        manager.setButtonClickSound(sounds::incrementAndGet);
+        manager.push(new MenuScreen("menu", "Menu", List.of(button)));
+
+        assertTrue(manager.mousePressed(5, 5, MouseButton.LEFT));
+        assertTrue(manager.mouseReleased(200, 200, MouseButton.LEFT));
+        assertEquals(0, clicks.get());
+        assertEquals(0, sounds.get());
+
+        assertTrue(manager.mousePressed(5, 5, MouseButton.LEFT));
+        assertTrue(manager.mouseReleased(5, 5, MouseButton.LEFT));
+        assertEquals(1, clicks.get());
+        assertEquals(1, sounds.get());
+    }
+
     private static Screen screen(String id, boolean closeOnBack, java.util.function.BooleanSupplier backHandler) {
         return new MenuScreen(id, id, List.of(), true, closeOnBack, backHandler);
     }

@@ -8,13 +8,18 @@ import com.craftzero.progression.BookshelfPower;
 import com.craftzero.progression.EnchantmentInstance;
 import com.craftzero.progression.EnchantmentResolver;
 import com.craftzero.progression.PlayerProgression;
+import com.craftzero.main.Player;
+import com.craftzero.world.BlockType;
 import com.craftzero.world.World;
 import org.joml.Vector3i;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Random;
+import java.util.Set;
+import java.util.function.BooleanSupplier;
 
 import static org.lwjgl.glfw.GLFW.*;
 
@@ -34,15 +39,25 @@ public class EnchantingTableScreen {
     public static final int TEX_OFFER_Y = 14;
     public static final int TEX_OFFER_W = 108;
     public static final int TEX_OFFER_H = 19;
+    public static final int TEX_OFFER_U = 0;
+    public static final int TEX_OFFER_NORMAL_V = 166;
+    public static final int TEX_OFFER_DISABLED_V = 185;
+    public static final int TEX_OFFER_HOVER_V = 204;
     public static final int TEX_MAIN_INV_X = 8;
     public static final int TEX_MAIN_INV_Y = 84;
     public static final int TEX_HOTBAR_X = 8;
     public static final int TEX_HOTBAR_Y = 142;
     public static final int COLS = 9;
     public static final int MAIN_ROWS = 3;
+    private static final String[] ENCHANTMENT_WORDS = ("the elder scrolls klaatu berata niktu xyzzy bless curse "
+            + "light darkness fire air earth water hot dry cold wet ignite snuff embiggen twist shorten stretch "
+            + "fiddle destroy imbue galvanize enchant free limited range of towards inside sphere cube self other "
+            + "ball mental physical grow shrink demon elemental spirit animal creature beast humanoid undead "
+            + "fresh stale").split(" ");
 
     private final Inventory inventory;
     private final List<ItemStack> itemsToThrow = new ArrayList<>();
+    private final BooleanSupplier inventoryCloseRequested;
     private World world;
     private PlayerProgression progression;
     private Vector3i tablePos;
@@ -52,12 +67,32 @@ public class EnchantingTableScreen {
     private int windowY;
     private int hoveredSlot = -1;
     private int hoveredOffer = -1;
+    private boolean isMouseDragging;
+    private boolean mouseDragRightClick;
+    private int dragStartSlot = -1;
+    private final Set<Integer> draggedSlots = new LinkedHashSet<>();
+    private final ContainerDoubleClickTracker doubleClickTracker = new ContainerDoubleClickTracker();
     private int bookshelfPower;
     private int[] offers = new int[] { 0, 0, 0 };
+    private String[] offerPhrases = new String[] { "", "", "" };
     private int lastOfferHash;
+    private long offerSeed;
+    private EnchantAction lastEnchantAction;
+    private final BooleanSupplier dropRequested;
 
     public EnchantingTableScreen(Inventory inventory) {
+        this(inventory, null, null);
+    }
+
+    public EnchantingTableScreen(Inventory inventory, BooleanSupplier inventoryCloseRequested) {
+        this(inventory, inventoryCloseRequested, null);
+    }
+
+    public EnchantingTableScreen(Inventory inventory, BooleanSupplier inventoryCloseRequested,
+            BooleanSupplier dropRequested) {
         this.inventory = inventory;
+        this.inventoryCloseRequested = ContainerScreenControls.closeRequester(inventoryCloseRequested);
+        this.dropRequested = ContainerScreenControls.dropRequester(dropRequested);
     }
 
     public void open(World world, Vector3i tablePos, PlayerProgression progression, int screenWidth, int screenHeight) {
@@ -72,6 +107,8 @@ public class EnchantingTableScreen {
         this.windowY = (screenHeight - WINDOW_HEIGHT) / 2;
         this.hoveredSlot = -1;
         this.hoveredOffer = -1;
+        this.lastEnchantAction = null;
+        rerollOfferSeed();
         updateOffers(true);
         Input.setCursorLocked(false);
     }
@@ -80,7 +117,7 @@ public class EnchantingTableScreen {
         if (!open) {
             return;
         }
-        if (tableItem != null && !tableItem.isEmpty() && !inventory.addItem(tableItem)) {
+        if (tableItem != null && !tableItem.isEmpty()) {
             itemsToThrow.add(tableItem);
         }
         tableItem = null;
@@ -94,6 +131,7 @@ public class EnchantingTableScreen {
         tablePos = null;
         hoveredSlot = -1;
         hoveredOffer = -1;
+        lastEnchantAction = null;
         Input.setCursorLocked(true);
     }
 
@@ -101,26 +139,123 @@ public class EnchantingTableScreen {
         if (!open) {
             return;
         }
-        if (Input.isKeyPressed(GLFW_KEY_ESCAPE) || Input.isKeyPressed(GLFW_KEY_E)) {
+        if (ContainerScreenControls.shouldClose(inventoryCloseRequested)) {
             close();
             return;
         }
         hoveredSlot = getSlotAtPosition((int) Input.getMouseX(), (int) Input.getMouseY());
         hoveredOffer = getOfferAtPosition((int) Input.getMouseX(), (int) Input.getMouseY());
         updateOffers(false);
-        if (Input.isButtonPressed(GLFW_MOUSE_BUTTON_LEFT)) {
-            if (hoveredOffer >= 0) {
-                enchant(hoveredOffer);
-            } else if (hoveredSlot == -1 && inventory.getCursorItem() != null) {
-                itemsToThrow.add(inventory.getCursorItem());
+        if (ContainerKeyboardDrop.dropOne(dropRequested, inventory, dragSlotAccess(), hoveredSlot,
+                itemsToThrow).dropped()) {
+            updateOffers(true);
+            return;
+        }
+        if (ContainerHotbarSwap.trySwapWithHotbar(inventory, dragSlotAccess(), hoveredSlot,
+                1 + Inventory.MAIN_SIZE)) {
+            return;
+        }
+        if (Input.isButtonPressed(GLFW_MOUSE_BUTTON_LEFT) && hoveredOffer >= 0) {
+            enchant(hoveredOffer);
+        } else {
+            handleMouseButton(GLFW_MOUSE_BUTTON_LEFT, false);
+        }
+        handleMouseButton(GLFW_MOUSE_BUTTON_RIGHT, true);
+    }
+
+    private void handleMouseButton(int button, boolean rightClick) {
+        if (Input.isButtonPressed(button)) {
+            startMouseDrag(rightClick);
+        }
+        if (isMouseDragging && mouseDragRightClick == rightClick && Input.isButtonDown(button)) {
+            continueMouseDrag();
+        }
+        if (isMouseDragging && mouseDragRightClick == rightClick && Input.isButtonReleased(button)) {
+            finishMouseDrag();
+        }
+    }
+
+    private void startMouseDrag(boolean rightClick) {
+        if (hoveredSlot == -1) {
+            doubleClickTracker.reset();
+            ContainerCursorDrop.dropOutside(inventory, itemsToThrow, rightClick);
+            return;
+        }
+        if (isShiftDown()) {
+            doubleClickTracker.recordClick(hoveredSlot, rightClick);
+            handleClick(hoveredSlot, rightClick);
+            return;
+        }
+        if (doubleClickTracker.isDoubleLeftClick(hoveredSlot, rightClick) && canHandleDoubleClick(hoveredSlot)) {
+            handleDoubleClick(hoveredSlot);
+            return;
+        }
+        ItemStack cursorItem = inventory.getCursorItem();
+        if (ItemStackOps.isEmpty(cursorItem) || !ContainerDragDistributor.canDragInto(dragSlotAccess(), hoveredSlot,
+                cursorItem)) {
+            handleClick(hoveredSlot, rightClick);
+            return;
+        }
+        isMouseDragging = true;
+        mouseDragRightClick = rightClick;
+        dragStartSlot = hoveredSlot;
+        draggedSlots.clear();
+        draggedSlots.add(hoveredSlot);
+    }
+
+    private boolean handleDoubleClick(int slotIndex) {
+        if (!canHandleDoubleClick(slotIndex)) {
+            return false;
+        }
+        return ContainerDoubleClickCollector.collectMatching(dragSlotAccess(), doubleClickCollectSlots(slotIndex),
+                inventory.getCursorItem());
+    }
+
+    private boolean canHandleDoubleClick(int slotIndex) {
+        return !ItemStackOps.isEmpty(inventory.getCursorItem())
+                && slotIndex >= 0 && slotIndex <= Inventory.MAIN_SIZE + Inventory.HOTBAR_SIZE;
+    }
+
+    private int[] doubleClickCollectSlots(int clickedSlot) {
+        int[] tableSlot = ContainerSlotOrder.range(0, 1);
+        int[] playerSlots = ContainerSlotOrder.range(1, 1 + Inventory.MAIN_SIZE + Inventory.HOTBAR_SIZE);
+        return ContainerSlotOrder.clickedGroupFirst(clickedSlot, 0, 1, tableSlot, playerSlots);
+    }
+
+    private void continueMouseDrag() {
+        ItemStack cursorItem = inventory.getCursorItem();
+        if (hoveredSlot != -1 && !draggedSlots.contains(hoveredSlot)
+                && ContainerDragDistributor.canDragInto(dragSlotAccess(), hoveredSlot, cursorItem)) {
+            draggedSlots.add(hoveredSlot);
+        }
+    }
+
+    private void finishMouseDrag() {
+        if (draggedSlots.size() <= 1) {
+            handleClick(dragStartSlot, mouseDragRightClick);
+        } else {
+            ItemStack cursorItem = inventory.getCursorItem();
+            int moved = ContainerDragDistributor.distribute(dragSlotAccess(), draggedSlots, cursorItem,
+                    mouseDragRightClick);
+            if (moved == 0) {
+                handleClick(dragStartSlot, mouseDragRightClick);
+            } else if (ItemStackOps.isEmpty(cursorItem)) {
                 inventory.setCursorItem(null);
-            } else {
-                handleClick(hoveredSlot, false);
             }
         }
-        if (Input.isButtonPressed(GLFW_MOUSE_BUTTON_RIGHT)) {
-            handleClick(hoveredSlot, true);
-        }
+        clearMouseDrag();
+    }
+
+    private void clearMouseDrag() {
+        isMouseDragging = false;
+        mouseDragRightClick = false;
+        dragStartSlot = -1;
+        draggedSlots.clear();
+    }
+
+    public boolean isStillUsable(Player player) {
+        return open && BlockContainerValidity.sameBlockWithinUseDistance(world, tablePos, player,
+                BlockType.ENCHANTING_TABLE);
     }
 
     private void handleClick(int slotIndex, boolean rightClick) {
@@ -129,7 +264,7 @@ public class EnchantingTableScreen {
         }
         ItemStack cursorItem = inventory.getCursorItem();
         ItemStack slotItem = getItemInSlot(slotIndex);
-        if (Input.isKeyDown(GLFW_KEY_LEFT_SHIFT) || Input.isKeyDown(GLFW_KEY_RIGHT_SHIFT)) {
+        if (isShiftDown()) {
             shiftClick(slotIndex, slotItem);
             return;
         }
@@ -144,7 +279,7 @@ public class EnchantingTableScreen {
                 if (cursorItem.isEmpty()) {
                     inventory.setCursorItem(null);
                 }
-            } else if (ItemStackOps.mergeAmountInto(slotItem, cursorItem, 1) > 0) {
+            } else if (canPlace(slotIndex, cursorItem) && mergeIntoSlot(slotIndex, slotItem, cursorItem, 1) > 0) {
                 if (cursorItem.isEmpty()) {
                     inventory.setCursorItem(null);
                 }
@@ -155,14 +290,13 @@ public class EnchantingTableScreen {
             inventory.setCursorItem(slotItem);
             setItemInSlot(slotIndex, null);
         } else if (cursorItem != null && slotItem == null && canPlace(slotIndex, cursorItem)) {
-            setItemInSlot(slotIndex, cursorItem);
-            inventory.setCursorItem(null);
-        } else if (ItemStackOps.canMerge(slotItem, cursorItem)) {
-            ItemStackOps.mergeInto(slotItem, cursorItem);
+            placeCursorIntoEmptySlot(slotIndex, cursorItem);
+        } else if (canPlace(slotIndex, cursorItem) && mergeIntoSlot(slotIndex, slotItem, cursorItem, Integer.MAX_VALUE) > 0) {
             if (cursorItem.isEmpty()) {
                 inventory.setCursorItem(null);
             }
-        } else if (cursorItem != null && canPlace(slotIndex, cursorItem)) {
+        } else if (cursorItem != null && canPlace(slotIndex, cursorItem)
+                && cursorItem.getCount() <= maxStackSizeForSlot(slotIndex, cursorItem)) {
             setItemInSlot(slotIndex, cursorItem);
             inventory.setCursorItem(slotItem);
         }
@@ -173,21 +307,80 @@ public class EnchantingTableScreen {
             return;
         }
         if (slotIndex == 0) {
-            if (inventory.addItem(slotItem)) {
-                tableItem = null;
+            if (ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex, playerInventoryShiftClickDestinations())) {
+                updateOffers(true);
             }
             return;
         }
-        if (tableItem == null && EnchantmentResolver.isEnchantable(slotItem)) {
-            tableItem = ItemStackOps.split(slotItem, 1);
-            if (slotItem.isEmpty()) {
-                setItemInSlot(slotIndex, null);
-            }
+        if (ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex, new int[] { 0 })) {
+            return;
         }
+        moveWithinPlayerInventory(slotIndex);
+    }
+
+    private boolean moveWithinPlayerInventory(int slotIndex) {
+        int playerIndex = slotIndex - 1;
+        if (playerIndex < 0) {
+            return false;
+        }
+        if (playerIndex < Inventory.MAIN_SIZE) {
+            return ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex,
+                    ContainerSlotOrder.range(1 + Inventory.MAIN_SIZE,
+                            1 + Inventory.MAIN_SIZE + Inventory.HOTBAR_SIZE));
+        }
+        int hotbarIndex = playerIndex - Inventory.MAIN_SIZE;
+        if (hotbarIndex >= 0 && hotbarIndex < Inventory.HOTBAR_SIZE) {
+            return ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex,
+                    ContainerSlotOrder.range(1, 1 + Inventory.MAIN_SIZE));
+        }
+        return false;
+    }
+
+    private int[] playerInventoryShiftClickDestinations() {
+        return ContainerSlotOrder.playerInventoryReverse(1, Inventory.MAIN_SIZE, Inventory.HOTBAR_SIZE);
     }
 
     private boolean canPlace(int slotIndex, ItemStack stack) {
-        return slotIndex != 0 || EnchantmentResolver.isEnchantable(stack);
+        return slotIndex != 0 || (stack != null && !stack.isEmpty());
+    }
+
+    private boolean isShiftDown() {
+        return Input.isKeyDown(GLFW_KEY_LEFT_SHIFT) || Input.isKeyDown(GLFW_KEY_RIGHT_SHIFT);
+    }
+
+    private void placeCursorIntoEmptySlot(int slotIndex, ItemStack cursorItem) {
+        int amount = Math.min(maxStackSizeForSlot(slotIndex, cursorItem), cursorItem.getCount());
+        if (amount == cursorItem.getCount()) {
+            setItemInSlot(slotIndex, cursorItem);
+            inventory.setCursorItem(null);
+            return;
+        }
+        setItemInSlot(slotIndex, ItemStackOps.split(cursorItem, amount));
+        if (cursorItem.isEmpty()) {
+            inventory.setCursorItem(null);
+        }
+    }
+
+    private int mergeIntoSlot(int slotIndex, ItemStack target, ItemStack source, int amount) {
+        if (amount <= 0 || !ItemStackOps.canMerge(target, source)) {
+            return 0;
+        }
+        int max = Math.min(target.getMaxStackSize(), maxStackSizeForSlot(slotIndex, source));
+        int space = max - target.getCount();
+        if (space <= 0) {
+            return 0;
+        }
+        int moved = Math.min(Math.min(space, source.getCount()), amount);
+        target.add(moved);
+        source.remove(moved);
+        return moved;
+    }
+
+    private int maxStackSizeForSlot(int slotIndex, ItemStack stack) {
+        if (slotIndex == 0) {
+            return 1;
+        }
+        return stack == null || stack.isEmpty() ? 0 : stack.getMaxStackSize();
     }
 
     private void enchant(int offerSlot) {
@@ -199,6 +392,8 @@ public class EnchantingTableScreen {
         if (cost <= 0 || progression.getLevel() < cost) {
             return;
         }
+        ItemStack inputItem = tableItem.copy();
+        long seed = offerSeed;
         Random random = offerRandom(offerSlot);
         List<EnchantmentInstance> enchantments = EnchantmentResolver.generate(random, tableItem, cost);
         if (enchantments.isEmpty()) {
@@ -208,16 +403,18 @@ public class EnchantingTableScreen {
             return;
         }
         tableItem.setEnchantments(enchantments);
+        lastEnchantAction = new EnchantAction(tablePos, offerSlot, cost, seed, inputItem, tableItem);
         updateOffers(true);
     }
 
     private void updateOffers(boolean force) {
         if (world == null || tablePos == null) {
             offers = new int[] { 0, 0, 0 };
+            clearOfferPhrases();
             return;
         }
         bookshelfPower = BookshelfPower.count(world, tablePos.x, tablePos.y, tablePos.z);
-        int hash = Objects.hash(stackOfferKey(tableItem), bookshelfPower);
+        int hash = Objects.hash(stackOfferKey(tableItem), bookshelfPower, offerSeed);
         if (!force && hash == lastOfferHash) {
             return;
         }
@@ -225,10 +422,11 @@ public class EnchantingTableScreen {
         for (int i = 0; i < offers.length; i++) {
             offers[i] = EnchantmentResolver.offerCost(offerRandom(i), i, bookshelfPower, tableItem);
         }
+        updateOfferPhrases();
     }
 
     private Random offerRandom(int slot) {
-        long seed = 0x5DEECE66DL;
+        long seed = 0x5DEECE66DL ^ offerSeed;
         if (tablePos != null) {
             seed ^= tablePos.x * 341873128712L;
             seed ^= tablePos.y * 132897987541L;
@@ -237,6 +435,42 @@ public class EnchantingTableScreen {
         seed ^= (long) stackOfferKey(tableItem) * 31L;
         seed ^= slot * 0x9E3779B97F4A7C15L;
         return new Random(seed);
+    }
+
+    private void rerollOfferSeed() {
+        offerSeed = world == null ? 0L : world.getRandom().nextLong();
+    }
+
+    private void updateOfferPhrases() {
+        Random random = new Random(offerSeed);
+        for (int i = 0; i < offerPhrases.length; i++) {
+            String phrase = generateOfferPhrase(random);
+            offerPhrases[i] = offers[i] > 0 ? phrase : "";
+        }
+    }
+
+    private void clearOfferPhrases() {
+        offerPhrases = new String[] { "", "", "" };
+    }
+
+    public static String generateOfferPhrase(Random random) {
+        Random source = random == null ? new Random(0L) : random;
+        int words = source.nextInt(3) + 3;
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < words; i++) {
+            if (i > 0) {
+                out.append(' ');
+            }
+            out.append(ENCHANTMENT_WORDS[source.nextInt(ENCHANTMENT_WORDS.length)]);
+        }
+        return out.toString();
+    }
+
+    public static int offerTextureV(int cost, int playerLevel, boolean hovered) {
+        if (cost <= 0 || playerLevel < cost) {
+            return TEX_OFFER_DISABLED_V;
+        }
+        return hovered ? TEX_OFFER_HOVER_V : TEX_OFFER_NORMAL_V;
     }
 
     private int stackOfferKey(ItemStack stack) {
@@ -305,6 +539,7 @@ public class EnchantingTableScreen {
     private void setItemInSlot(int slotIndex, ItemStack stack) {
         if (slotIndex == 0) {
             tableItem = stack;
+            rerollOfferSeed();
             updateOffers(true);
             return;
         }
@@ -317,6 +552,31 @@ public class EnchantingTableScreen {
                 inventory.getHotbar()[hotbarIndex] = stack;
             }
         }
+    }
+
+    private ContainerDragDistributor.Slots dragSlotAccess() {
+        return new ContainerDragDistributor.Slots() {
+            @Override
+            public ItemStack get(int slotIndex) {
+                return getItemInSlot(slotIndex);
+            }
+
+            @Override
+            public void set(int slotIndex, ItemStack stack) {
+                setItemInSlot(slotIndex, stack);
+            }
+
+            @Override
+            public boolean canPlace(int slotIndex, ItemStack stack) {
+                return slotIndex >= 0 && slotIndex <= Inventory.MAIN_SIZE + Inventory.HOTBAR_SIZE
+                        && EnchantingTableScreen.this.canPlace(slotIndex, stack);
+            }
+
+            @Override
+            public int maxStackSize(int slotIndex, ItemStack stack) {
+                return maxStackSizeForSlot(slotIndex, stack);
+            }
+        };
     }
 
     public List<ItemStack> getAndClearItemsToThrow() {
@@ -349,6 +609,14 @@ public class EnchantingTableScreen {
         return offers;
     }
 
+    public String[] getOfferPhrases() {
+        return offerPhrases.clone();
+    }
+
+    public String getOfferPhrase(int slot) {
+        return slot >= 0 && slot < offerPhrases.length ? offerPhrases[slot] : "";
+    }
+
     public int getBookshelfPower() {
         return bookshelfPower;
     }
@@ -359,5 +627,32 @@ public class EnchantingTableScreen {
 
     public PlayerProgression getProgression() {
         return progression;
+    }
+
+    public EnchantAction drainEnchantAction() {
+        EnchantAction action = lastEnchantAction;
+        lastEnchantAction = null;
+        return action;
+    }
+
+    public boolean isAtTable(int x, int y, int z) {
+        return tablePos != null && tablePos.x == x && tablePos.y == y && tablePos.z == z;
+    }
+
+    public void applyRemoteEnchantResult(int x, int y, int z, ItemStack resultItem) {
+        if (!open || !isAtTable(x, y, z)) {
+            return;
+        }
+        tableItem = resultItem == null ? null : resultItem.copy();
+        updateOffers(true);
+    }
+
+    public record EnchantAction(Vector3i tablePos, int offerSlot, int cost, long offerSeed,
+            ItemStack inputItem, ItemStack resultItem) {
+        public EnchantAction {
+            tablePos = tablePos == null ? null : new Vector3i(tablePos);
+            inputItem = inputItem == null ? null : inputItem.copy();
+            resultItem = resultItem == null ? null : resultItem.copy();
+        }
     }
 }

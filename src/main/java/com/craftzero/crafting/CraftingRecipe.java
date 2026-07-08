@@ -1,93 +1,142 @@
 package com.craftzero.crafting;
 
-import com.craftzero.inventory.ItemType;
 import com.craftzero.inventory.ItemStack;
+import com.craftzero.inventory.ItemType;
+
+import java.util.Arrays;
+import java.util.List;
 
 /**
- * Represents a crafting recipe.
- * Supports both 2x2 (4 slots) and 3x3 (9 slots) grid patterns.
+ * Represents one Release 1.0 crafting recipe.
  */
 public class CraftingRecipe {
+    public static final class Ingredient {
+        private final ItemType[] acceptedTypes;
 
-    // Pattern: null = empty slot, ItemType = required item
-    // 2x2 Layout: [0][1] 3x3 Layout: [0][1][2]
-    // [2][3] [3][4][5]
-    // [6][7][8]
-    private final ItemType[] pattern;
-    private final ItemType outputType;
-    private final int outputCount;
-    private final boolean shapeless;
-    private final int gridSize; // 2 or 3
+        private Ingredient(ItemType[] acceptedTypes) {
+            if (acceptedTypes == null || acceptedTypes.length == 0) {
+                throw new IllegalArgumentException("ingredient must accept at least one item type");
+            }
+            this.acceptedTypes = acceptedTypes.clone();
+        }
 
-    /**
-     * Create a shaped 2x2 recipe.
-     */
-    public CraftingRecipe(ItemType[] pattern, ItemType outputType, int outputCount) {
-        this.pattern = pattern;
-        this.outputType = outputType;
-        this.outputCount = outputCount;
-        this.shapeless = false;
-        this.gridSize = 2;
-    }
+        public static Ingredient of(ItemType type) {
+            return new Ingredient(new ItemType[] { type });
+        }
 
-    /**
-     * Create a shapeless recipe (any arrangement works).
-     */
-    public CraftingRecipe(ItemType[] ingredients, ItemType outputType, int outputCount, boolean shapeless) {
-        this.pattern = ingredients;
-        this.outputType = outputType;
-        this.outputCount = outputCount;
-        this.shapeless = shapeless;
-        this.gridSize = ingredients.length == 9 ? 3 : 2;
-    }
+        public static Ingredient anyOf(ItemType... types) {
+            return new Ingredient(types);
+        }
 
-    /**
-     * Create a shaped 3x3 recipe.
-     */
-    public static CraftingRecipe create3x3(ItemType[] pattern, ItemType outputType, int outputCount) {
-        return new CraftingRecipe(pattern, outputType, outputCount, false, 3);
-    }
-
-    /**
-     * Full constructor with all options.
-     */
-    public CraftingRecipe(ItemType[] pattern, ItemType outputType, int outputCount, boolean shapeless,
-            int gridSize) {
-        this.pattern = pattern;
-        this.outputType = outputType;
-        this.outputCount = outputCount;
-        this.shapeless = shapeless;
-        this.gridSize = gridSize;
-    }
-
-    /**
-     * Check if this recipe matches the given crafting grid.
-     * 
-     * @param grid Array of ItemTypes (4 for 2x2, 9 for 3x3)
-     */
-    public boolean matches(ItemType[] grid) {
-        // Grid size must match recipe size
-        int expectedSize = gridSize == 3 ? 9 : 4;
-        if (grid.length != expectedSize) {
+        public boolean matches(ItemType type) {
+            if (type == null) {
+                return false;
+            }
+            for (ItemType accepted : acceptedTypes) {
+                if (accepted == type) {
+                    return true;
+                }
+            }
             return false;
         }
 
-        if (shapeless) {
-            return matchesShapeless(grid);
-        } else {
-            return matchesShaped(grid);
+        List<ItemType> acceptedTypes() {
+            return List.of(acceptedTypes);
         }
     }
 
-    private boolean matchesShaped(ItemType[] grid) {
-        // Direct match
-        if (matchesPatternAt(grid, pattern)) {
-            return true;
+    private final Ingredient[] pattern;
+    private final ItemType outputType;
+    private final int outputCount;
+    private final boolean shapeless;
+    private final int width;
+    private final int height;
+    private final ItemStack outputStack;
+
+    /**
+     * Compatibility constructor for a shaped 2x2 recipe.
+     */
+    public CraftingRecipe(ItemType[] pattern, ItemType outputType, int outputCount) {
+        this(toIngredients(pattern), outputType, outputCount, false, 2, 2);
+    }
+
+    /**
+     * Compatibility constructor for shapeless recipes.
+     */
+    public CraftingRecipe(ItemType[] ingredients, ItemType outputType, int outputCount, boolean shapeless) {
+        this(toIngredients(ingredients), outputType, outputCount, shapeless,
+                ingredients.length == 9 ? 3 : 2,
+                ingredients.length == 9 ? 3 : 2);
+    }
+
+    /**
+     * Compatibility constructor with an explicit grid size.
+     */
+    public CraftingRecipe(ItemType[] pattern, ItemType outputType, int outputCount, boolean shapeless, int gridSize) {
+        this(toIngredients(pattern), outputType, outputCount, shapeless, gridSize, gridSize);
+    }
+
+    private CraftingRecipe(Ingredient[] pattern, ItemType outputType, int outputCount, boolean shapeless,
+            int width, int height) {
+        this(pattern, outputType, outputCount, shapeless, width, height, null);
+    }
+
+    private CraftingRecipe(Ingredient[] pattern, ItemType outputType, int outputCount, boolean shapeless,
+            int width, int height, ItemStack outputStack) {
+        this.pattern = pattern;
+        this.outputType = outputType;
+        this.outputCount = outputCount;
+        this.shapeless = shapeless;
+        this.width = width;
+        this.height = height;
+        this.outputStack = outputStack == null ? null : outputStack.copy();
+    }
+
+    public static CraftingRecipe shaped(int width, int height, Ingredient[] pattern, ItemType outputType,
+            int outputCount) {
+        if (width <= 0 || height <= 0 || pattern.length != width * height) {
+            throw new IllegalArgumentException("invalid shaped recipe dimensions");
         }
-        // Try all positions for single-item recipes (2x2 only)
-        if (gridSize == 2 && isSingleItemPattern()) {
-            for (int i = 0; i < 4; i++) {
-                if (grid[i] == pattern[0] && countNonNull(grid) == 1) {
+        return new CraftingRecipe(pattern.clone(), outputType, outputCount, false, width, height);
+    }
+
+    public static CraftingRecipe shapeless(Ingredient[] ingredients, ItemType outputType, int outputCount) {
+        return new CraftingRecipe(Arrays.stream(ingredients)
+                .filter(ingredient -> ingredient != null)
+                .toArray(Ingredient[]::new), outputType, outputCount, true, 0, 0);
+    }
+
+    public static CraftingRecipe shapelessWithOutputStack(Ingredient[] ingredients, ItemStack output) {
+        if (output == null || output.isEmpty()) {
+            throw new IllegalArgumentException("dynamic recipe output must not be empty");
+        }
+        return new CraftingRecipe(Arrays.stream(ingredients)
+                .filter(ingredient -> ingredient != null)
+                .toArray(Ingredient[]::new), output.getType(), output.getCount(), true, 0, 0, output);
+    }
+
+    /**
+     * Compatibility helper for old shaped 3x3 registrations.
+     */
+    public static CraftingRecipe create3x3(ItemType[] pattern, ItemType outputType, int outputCount) {
+        return new CraftingRecipe(toIngredients(pattern), outputType, outputCount, false, 3, 3);
+    }
+
+    public boolean matches(ItemType[] grid) {
+        int gridSize = gridSize(grid);
+        if (gridSize == 0) {
+            return false;
+        }
+        return shapeless ? matchesShapeless(grid) : matchesShaped(grid, gridSize);
+    }
+
+    private boolean matchesShaped(ItemType[] grid, int gridSize) {
+        if (width > gridSize || height > gridSize) {
+            return false;
+        }
+        for (int y = 0; y <= gridSize - height; y++) {
+            for (int x = 0; x <= gridSize - width; x++) {
+                if (matchesAt(grid, gridSize, x, y, false) || matchesAt(grid, gridSize, x, y, true)) {
                     return true;
                 }
             }
@@ -95,62 +144,62 @@ public class CraftingRecipe {
         return false;
     }
 
-    private boolean matchesPatternAt(ItemType[] grid, ItemType[] pat) {
-        int size = pat.length;
-        if (grid.length != size)
-            return false;
+    private boolean matchesAt(ItemType[] grid, int gridSize, int offsetX, int offsetY, boolean mirrored) {
+        for (int y = 0; y < gridSize; y++) {
+            for (int x = 0; x < gridSize; x++) {
+                int recipeX = x - offsetX;
+                int recipeY = y - offsetY;
+                Ingredient expected = null;
+                if (recipeX >= 0 && recipeY >= 0 && recipeX < width && recipeY < height) {
+                    int sourceX = mirrored ? width - recipeX - 1 : recipeX;
+                    expected = pattern[sourceX + recipeY * width];
+                }
 
-        for (int i = 0; i < size; i++) {
-            if (pat[i] == null) {
-                if (grid[i] != null)
+                ItemType actual = grid[x + y * gridSize];
+                if (expected == null) {
+                    if (actual != null) {
+                        return false;
+                    }
+                } else if (!expected.matches(actual)) {
                     return false;
-            } else {
-                if (grid[i] != pat[i])
-                    return false;
+                }
             }
         }
         return true;
     }
 
     private boolean matchesShapeless(ItemType[] grid) {
-        // Count required ingredients
-        int[] required = new int[ItemType.values().length];
-        for (ItemType b : pattern) {
-            if (b != null)
-                required[b.ordinal()]++;
-        }
+        boolean[] used = new boolean[pattern.length];
+        int providedCount = 0;
 
-        // Count provided
-        int[] provided = new int[ItemType.values().length];
-        for (ItemType b : grid) {
-            if (b != null)
-                provided[b.ordinal()]++;
-        }
-
-        // Must match exactly
-        for (int i = 0; i < required.length; i++) {
-            if (required[i] != provided[i])
+        for (ItemType actual : grid) {
+            if (actual == null) {
+                continue;
+            }
+            providedCount++;
+            boolean matched = false;
+            for (int i = 0; i < pattern.length; i++) {
+                if (!used[i] && pattern[i].matches(actual)) {
+                    used[i] = true;
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
                 return false;
+            }
         }
-        return true;
+        return providedCount == pattern.length;
     }
 
-    private boolean isSingleItemPattern() {
-        int count = 0;
-        for (ItemType b : pattern) {
-            if (b != null)
-                count++;
+    public ItemType[] getRemainingItems(ItemType[] grid) {
+        ItemType[] remaining = new ItemType[grid.length];
+        for (int i = 0; i < grid.length; i++) {
+            if (grid[i] != null) {
+                remaining[i] = grid[i].getCraftingRemainder();
+            }
         }
-        return count == 1;
-    }
-
-    private int countNonNull(ItemType[] arr) {
-        int c = 0;
-        for (ItemType b : arr) {
-            if (b != null)
-                c++;
-        }
-        return c;
+        return remaining;
     }
 
     public ItemType getOutputType() {
@@ -162,10 +211,47 @@ public class CraftingRecipe {
     }
 
     public int getGridSize() {
-        return gridSize;
+        return Math.max(width, height) <= 2 ? 2 : 3;
+    }
+
+    public int getIngredientCount() {
+        int count = 0;
+        for (Ingredient ingredient : pattern) {
+            if (ingredient != null) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public int getRecipeSize() {
+        return shapeless ? pattern.length : width * height;
+    }
+
+    public boolean isShapeless() {
+        return shapeless;
     }
 
     public ItemStack getOutput() {
+        if (outputStack != null) {
+            return outputStack.copy();
+        }
         return new ItemStack(outputType, outputCount);
+    }
+
+    private static Ingredient[] toIngredients(ItemType[] itemTypes) {
+        Ingredient[] ingredients = new Ingredient[itemTypes.length];
+        for (int i = 0; i < itemTypes.length; i++) {
+            ingredients[i] = itemTypes[i] == null ? null : Ingredient.of(itemTypes[i]);
+        }
+        return ingredients;
+    }
+
+    private static int gridSize(ItemType[] grid) {
+        return switch (grid.length) {
+            case 4 -> 2;
+            case 9 -> 3;
+            default -> 0;
+        };
     }
 }

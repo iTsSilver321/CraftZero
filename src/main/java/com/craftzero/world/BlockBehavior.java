@@ -45,7 +45,7 @@ public enum BlockBehavior {
             case CHEST, FURNACE, LIT_FURNACE, DISPENSER, NOTE_BLOCK, JUKEBOX,
                     BREWING_STAND, CAULDRON, ENCHANTING_TABLE, MOB_SPAWNER -> CONTAINER;
             case PORTAL, END_PORTAL, END_PORTAL_FRAME -> PORTAL;
-            case BED, CAKE, DRAGON_EGG -> SPECIAL;
+            case BED, CAKE, DRAGON_EGG, LOCKED_CHEST -> SPECIAL;
             default -> NORMAL;
         };
     }

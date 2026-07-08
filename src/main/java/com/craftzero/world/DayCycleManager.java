@@ -13,7 +13,7 @@ import org.joml.Vector3f;
  */
 public class DayCycleManager {
 
-    private static final int TICKS_PER_DAY = 24000;
+    public static final int TICKS_PER_DAY = 24000;
     private static final float TICKS_PER_SECOND = 20.0f;
 
     // Time tracking
@@ -50,9 +50,10 @@ public class DayCycleManager {
         // Increment time
         time += deltaTime * TICKS_PER_SECOND * timeScale;
         if (time >= TICKS_PER_DAY) {
-            time -= TICKS_PER_DAY;
-            days++;
-            moonPhase = days % 8;
+            int elapsedDays = (int) (time / TICKS_PER_DAY);
+            time = time % TICKS_PER_DAY;
+            days += elapsedDays;
+            moonPhase = Math.floorMod(days, 8);
         }
 
         updateLighting();
@@ -164,8 +165,24 @@ public class DayCycleManager {
         return time;
     }
 
+    public long getWorldTime() {
+        return (long) days * TICKS_PER_DAY + (long) Math.floor(time);
+    }
+
+    public int getDayCount() {
+        return days;
+    }
+
     public void setTime(float time) {
         this.time = ((time % TICKS_PER_DAY) + TICKS_PER_DAY) % TICKS_PER_DAY;
+        updateLighting();
+    }
+
+    public void setWorldTime(long worldTime) {
+        long clamped = Math.max(0L, worldTime);
+        this.days = (int) Math.min(Integer.MAX_VALUE, clamped / TICKS_PER_DAY);
+        this.time = clamped % TICKS_PER_DAY;
+        this.moonPhase = Math.floorMod(days, 8);
         updateLighting();
     }
 

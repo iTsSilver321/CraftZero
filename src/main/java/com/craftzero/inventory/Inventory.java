@@ -1,5 +1,9 @@
 package com.craftzero.inventory;
 
+import com.craftzero.crafting.CraftingRecipe;
+
+import java.util.function.Consumer;
+
 public class Inventory {
     public static final int HOTBAR_SIZE = 9;
     public static final int MAIN_SIZE = 27;
@@ -13,6 +17,10 @@ public class Inventory {
 
     // Item currently being dragged by the mouse cursor
     private ItemStack cursorItem;
+    private Consumer<ItemStack> itemAddedListener = stack -> {
+    };
+    private Consumer<ItemStack> craftedItemListener = stack -> {
+    };
 
     public Inventory() {
         this.hotbar = new ItemStack[HOTBAR_SIZE];
@@ -91,14 +99,11 @@ public class Inventory {
      * Consume one item from each crafting slot (after crafting).
      */
     public void consumeCraftingIngredients() {
-        for (int i = 0; i < CRAFTING_SIZE; i++) {
-            if (craftingGrid[i] != null && !craftingGrid[i].isEmpty()) {
-                craftingGrid[i].remove(1);
-                if (craftingGrid[i].isEmpty()) {
-                    craftingGrid[i] = null;
-                }
-            }
-        }
+        consumeCraftingIngredients(null);
+    }
+
+    public void consumeCraftingIngredients(CraftingRecipe recipe) {
+        CraftingGridOps.consumeIngredients(this, craftingGrid, recipe, null);
     }
 
     public ItemStack getCursorItem() {
@@ -107,6 +112,22 @@ public class Inventory {
 
     public void setCursorItem(ItemStack item) {
         this.cursorItem = item;
+    }
+
+    public void setItemAddedListener(Consumer<ItemStack> listener) {
+        this.itemAddedListener = listener == null ? stack -> {
+        } : listener;
+    }
+
+    public void setCraftedItemListener(Consumer<ItemStack> listener) {
+        this.craftedItemListener = listener == null ? stack -> {
+        } : listener;
+    }
+
+    void notifyCrafted(ItemStack stack) {
+        if (stack != null && !stack.isEmpty()) {
+            craftedItemListener.accept(stack.copy());
+        }
     }
 
     /**
@@ -125,6 +146,8 @@ public class Inventory {
         if (item == null || item.isEmpty())
             return true;
 
+        ItemStack original = item.copy();
+        int originalCount = item.getCount();
         ItemStackOps.mergeIntoSlots(SlotAccess.of(hotbar), item);
         if (!item.isEmpty()) {
             ItemStackOps.mergeIntoSlots(SlotAccess.of(mainInventory), item);
@@ -135,6 +158,11 @@ public class Inventory {
         if (!item.isEmpty()) {
             ItemStackOps.placeIntoEmptySlots(SlotAccess.of(mainInventory), item);
         }
+        int added = originalCount - item.getCount();
+        if (added > 0) {
+            original.setCount(added);
+            itemAddedListener.accept(original);
+        }
         return item.isEmpty();
     }
 
@@ -144,6 +172,14 @@ public class Inventory {
         }
         SlotAccess playerSlots = SlotAccess.concat(SlotAccess.of(hotbar), SlotAccess.of(mainInventory));
         return ItemStackOps.canFullyMoveInto(playerSlots, item);
+    }
+
+    public int countAddable(ItemStack item) {
+        if (item == null || item.isEmpty()) {
+            return 0;
+        }
+        SlotAccess playerSlots = SlotAccess.concat(SlotAccess.of(hotbar), SlotAccess.of(mainInventory));
+        return ItemStackOps.countAddable(playerSlots, item);
     }
 
     /**

@@ -2,10 +2,14 @@ package com.craftzero.graphics;
 
 import com.craftzero.entity.DroppedItem;
 import com.craftzero.inventory.ItemRenderProfile;
+import com.craftzero.inventory.ItemStack;
 import com.craftzero.inventory.ItemType;
 import com.craftzero.world.Block;
 import com.craftzero.world.BlockType;
+import com.craftzero.world.World;
 import org.joml.Matrix4f;
+import org.joml.Vector3f;
+import org.joml.Vector4f;
 
 import java.util.EnumMap;
 import java.util.List;
@@ -23,10 +27,14 @@ import static org.lwjgl.opengl.GL30.*;
  */
 public class DroppedItemRenderer {
     private static final float ITEM_RENDER_DISTANCE = 128.0f;
+    private static final float DYNAMIC_ITEM_OVERLAY_Z = 0.016f;
+    static final int ITEM_VERTEX_FLOATS = 11;
 
     private ShaderProgram shader;
     private Matrix4f modelMatrix;
     private final Map<ItemType, CachedMesh> meshCache = new EnumMap<>(ItemType.class);
+    private CachedMesh dynamicItemOverlayMesh;
+    private boolean anaglyphColorCorrection;
 
     private static class CachedMesh {
         final int vao;
@@ -66,6 +74,15 @@ public class DroppedItemRenderer {
         shader.createUniform("lightColor");
         shader.createUniform("sunBrightness");
         shader.createUniform("alphaCutoff");
+        shader.createUniform("glintSampler");
+        shader.createUniform("glintMode");
+        shader.createUniform("glintPass");
+        shader.createUniform("glintPhase");
+        shader.createUniform("glintColor");
+        shader.createUniform("glintAlpha");
+        shader.createUniform("anaglyphColorCorrection");
+        shader.createUniform("solidColorMode");
+        shader.createUniform("solidColor");
 
     }
 
@@ -74,8 +91,10 @@ public class DroppedItemRenderer {
      * Returns vertex data interleaved: pos(3) + uv(2) + normal(3) + color(3) = 11
      * floats per vertex
      */
-    private float[] buildCubeVertices(BlockType type) {
-        float[] vertices = new float[6 * 4 * 11]; // 6 faces * 4 verts * 11 floats
+    static float[] blockCubeVertices(ItemType type) {
+        BlockType block = type.getPlacedBlock();
+        int metadata = type.getPlacedBlockMetadata();
+        float[] vertices = new float[6 * 4 * ITEM_VERTEX_FLOATS];
         int idx = 0;
 
         // Half size for centering at origin
@@ -83,7 +102,7 @@ public class DroppedItemRenderer {
 
         for (int face = 0; face < 6; face++) {
             float[] faceVerts = Block.getFaceVertices(face, 0, 0, 0);
-            float[] faceUVs = Block.getFaceTexCoords(type, face);
+            float[] faceUVs = Block.getFaceTexCoords(block, face, metadata);
             float[] faceNormals = Block.getFaceNormals(face);
 
             for (int v = 0; v < 4; v++) {
@@ -132,7 +151,7 @@ public class DroppedItemRenderer {
      * Render all dropped items in the world.
      */
     public void render(Camera camera, List<DroppedItem> items, Texture atlas, Texture itemsTexture,
-            com.craftzero.world.DayCycleManager dayCycle, com.craftzero.world.World world) {
+            com.craftzero.world.DayCycleManager dayCycle, World world) {
         if (items.isEmpty()) {
             return;
         }
@@ -148,6 +167,13 @@ public class DroppedItemRenderer {
         shader.setUniform("projectionMatrix", camera.getProjectionMatrix());
         shader.setUniform("viewMatrix", camera.getViewMatrix());
         shader.setUniform("textureSampler", 0);
+        shader.setUniform("glintSampler", 1);
+        shader.setUniform("glintMode", false);
+        shader.setUniform("glintPass", 0);
+        shader.setUniform("glintPhase", 0.0f);
+        shader.setUniform("anaglyphColorCorrection", anaglyphColorCorrection);
+        shader.setUniform("solidColorMode", false);
+        shader.setUniform("solidColor", new Vector4f(1.0f, 1.0f, 1.0f, 1.0f));
 
         // Fog settings from day cycle
         shader.setUniform("fogEnabled", true);
@@ -193,14 +219,15 @@ public class DroppedItemRenderer {
 
             ItemRenderProfile profile = type.getRenderProfile();
             CachedMesh mesh = meshCache.computeIfAbsent(type, this::createCachedMesh);
+            float alphaCutoff;
             if (profile.modelKind() == ItemRenderProfile.ModelKind.BLOCK) {
-                shader.setUniform("alphaCutoff",
-                        type.getPlacedBlock().getRenderLayer() == com.craftzero.world.BlockRenderLayer.CUTOUT
-                                ? 0.1f
-                                : 0.0f);
+                alphaCutoff = type.getPlacedBlock().getRenderLayer() == com.craftzero.world.BlockRenderLayer.CUTOUT
+                        ? 0.1f
+                        : 0.0f;
             } else {
-                shader.setUniform("alphaCutoff", 0.1f);
+                alphaCutoff = 0.1f;
             }
+            shader.setUniform("alphaCutoff", alphaCutoff);
 
             // Determine how many overlapping blocks to show based on count
             // 1 = 1 block, 2-9 = 2 blocks, 10-31 = 3 blocks, 32+ = 4 blocks
@@ -223,6 +250,8 @@ public class DroppedItemRenderer {
             float scale = item.getScale() * (profile.modelKind() == ItemRenderProfile.ModelKind.SPRITE
                     ? Math.max(0.8f, profile.thirdPersonScale() / 0.375f)
                     : 1.0f);
+            ItemStack stack = item.getStack();
+            boolean enchanted = EnchantedItemVisuals.shouldDrawGlint(stack);
 
             glBindVertexArray(mesh.vao);
 
@@ -241,6 +270,11 @@ public class DroppedItemRenderer {
 
                 shader.setUniform("modelMatrix", modelMatrix);
                 glDrawElements(GL_TRIANGLES, mesh.vertexCount, GL_UNSIGNED_INT, 0);
+                if (enchanted) {
+                    renderEnchantedGlint(mesh, currentTexture, alphaCutoff);
+                }
+                renderDynamicItemOverlay(type, world, camera, modelMatrix);
+                glBindVertexArray(mesh.vao);
             }
         }
 
@@ -251,12 +285,100 @@ public class DroppedItemRenderer {
         glEnable(GL_CULL_FACE);
     }
 
+    private void renderDynamicItemOverlay(ItemType type, World world, Camera camera, Matrix4f baseMatrix) {
+        if (baseMatrix == null || camera == null) {
+            return;
+        }
+        Vector3f viewer = camera.getPosition();
+        ItemTextureResolver.DynamicItemState state = ItemTextureResolver.dynamicItemState(
+                type, world, viewer.x, viewer.z, camera.getYaw());
+        if (!state.active()) {
+            return;
+        }
+
+        shader.setUniform("solidColorMode", true);
+        shader.setUniform("alphaCutoff", 0.0f);
+        if (type == ItemType.COMPASS) {
+            renderDynamicOverlayNeedle(baseMatrix, state.angleRadians() + (float) Math.PI,
+                    0.16f, 0.020f, new Vector4f(0.82f, 0.82f, 0.82f, 0.94f));
+            renderDynamicOverlayNeedle(baseMatrix, state.angleRadians(),
+                    0.34f, 0.030f, new Vector4f(0.92f, 0.06f, 0.04f, 0.98f));
+        } else if (type == ItemType.CLOCK) {
+            renderDynamicOverlayNeedle(baseMatrix, state.angleRadians(),
+                    0.30f, 0.030f, new Vector4f(1.0f, 0.78f, 0.18f, 0.98f));
+        }
+        renderDynamicOverlayHub(baseMatrix);
+        shader.setUniform("solidColorMode", false);
+        shader.setUniform("solidColor", new Vector4f(1.0f, 1.0f, 1.0f, 1.0f));
+    }
+
+    private void renderDynamicOverlayNeedle(Matrix4f baseMatrix, float angleRadians, float length, float width,
+            Vector4f color) {
+        Matrix4f needleMatrix = new Matrix4f(baseMatrix)
+                .translate(0.0f, 0.0f, DYNAMIC_ITEM_OVERLAY_Z)
+                .rotateZ(-angleRadians)
+                .translate(0.0f, length * 0.5f, 0.0f)
+                .scale(width, length, 1.0f);
+        drawDynamicOverlayMesh(needleMatrix, color);
+    }
+
+    private void renderDynamicOverlayHub(Matrix4f baseMatrix) {
+        Matrix4f hubMatrix = new Matrix4f(baseMatrix)
+                .translate(0.0f, 0.0f, DYNAMIC_ITEM_OVERLAY_Z + 0.0015f)
+                .scale(0.085f, 0.085f, 1.0f);
+        drawDynamicOverlayMesh(hubMatrix, new Vector4f(0.08f, 0.06f, 0.04f, 0.92f));
+    }
+
+    private void drawDynamicOverlayMesh(Matrix4f overlayMatrix, Vector4f color) {
+        CachedMesh overlay = dynamicItemOverlayMesh();
+        shader.setUniform("solidColor", color);
+        shader.setUniform("modelMatrix", overlayMatrix);
+        glBindVertexArray(overlay.vao);
+        glDrawElements(GL_TRIANGLES, overlay.vertexCount, GL_UNSIGNED_INT, 0);
+    }
+
+    private void renderEnchantedGlint(CachedMesh mesh, Texture baseTexture, float alphaCutoff) {
+        Texture glint = GuiTexture.getGlintTexture();
+        if (glint == null || mesh == null || baseTexture == null) {
+            return;
+        }
+
+        glint.bind(1);
+        shader.setUniform("glintMode", true);
+        shader.setUniform("glintPhase", EnchantedItemVisuals.glintPhase());
+        float[] color = EnchantedItemVisuals.glintColor();
+        shader.setUniform("glintColor", new Vector3f(color[0], color[1], color[2]));
+        shader.setUniform("glintAlpha", color.length >= 4 ? color[3] : 0.58f);
+        shader.setUniform("alphaCutoff", alphaCutoff);
+
+        glDepthMask(false);
+        glDepthFunc(GL_EQUAL);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        for (int pass = 0; pass < 2; pass++) {
+            shader.setUniform("glintPass", pass);
+            glDrawElements(GL_TRIANGLES, mesh.vertexCount, GL_UNSIGNED_INT, 0);
+        }
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthFunc(GL_LESS);
+        glDepthMask(true);
+
+        shader.setUniform("glintMode", false);
+        shader.setUniform("glintPass", 0);
+        shader.setUniform("alphaCutoff", alphaCutoff);
+        glint.unbind();
+        baseTexture.bind(0);
+    }
+
+    public void setAnaglyphColorCorrection(boolean enabled) {
+        anaglyphColorCorrection = enabled;
+    }
+
     private static boolean isTooFar(Camera camera, DroppedItem item) {
-        float dx = item.getX() - camera.getPosition().x;
-        float dy = item.getY() - camera.getPosition().y;
-        float dz = item.getZ() - camera.getPosition().z;
-        float max = Math.min(camera.getFarPlane(), ITEM_RENDER_DISTANCE);
-        return dx * dx + dy * dy + dz * dz > max * max;
+        if (item == null) {
+            return true;
+        }
+        return RenderDistanceCulling.isPointTooFar(camera, item.getX(), item.getY(), item.getZ(),
+                ITEM_RENDER_DISTANCE);
     }
 
     /**
@@ -264,7 +386,7 @@ public class DroppedItemRenderer {
      * Vertex format: pos(3) + uv(2) + normal(3) + color(3) = 11 floats per vertex
      */
     private float[] buildItemSpriteVertices(ItemType type) {
-        float[] vertices = new float[4 * 11]; // 1 quad * 4 verts * 11 floats
+        float[] vertices = new float[4 * ITEM_VERTEX_FLOATS];
         float h = 0.5f;
 
         // Get texture coordinates
@@ -329,15 +451,38 @@ public class DroppedItemRenderer {
         return vertices;
     }
 
+    private CachedMesh dynamicItemOverlayMesh() {
+        if (dynamicItemOverlayMesh == null) {
+            dynamicItemOverlayMesh = createDynamicOverlayMesh();
+        }
+        return dynamicItemOverlayMesh;
+    }
+
+    private CachedMesh createDynamicOverlayMesh() {
+        float h = 0.5f;
+        float[] vertices = {
+                -h, h, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                -h, -h, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                h, -h, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+                h, h, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        };
+        int[] indices = { 0, 1, 2, 2, 3, 0 };
+        return uploadMesh(vertices, indices);
+    }
+
     private CachedMesh createCachedMesh(ItemType type) {
         ItemRenderProfile profile = type.getRenderProfile();
         float[] vertices = profile.modelKind() == ItemRenderProfile.ModelKind.BLOCK
-                ? buildCubeVertices(type.getPlacedBlock())
+                ? blockCubeVertices(type)
                 : buildItemSpriteVertices(type);
         int[] indices = profile.modelKind() == ItemRenderProfile.ModelKind.BLOCK
                 ? buildCubeIndices()
                 : new int[] { 0, 1, 2, 2, 3, 0 };
 
+        return uploadMesh(vertices, indices);
+    }
+
+    private CachedMesh uploadMesh(float[] vertices, int[] indices) {
         int vao = glGenVertexArrays();
         int vbo = glGenBuffers();
         int ebo = glGenBuffers();
@@ -346,7 +491,7 @@ public class DroppedItemRenderer {
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
         glBufferData(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
 
-        int stride = 11 * Float.BYTES;
+        int stride = ITEM_VERTEX_FLOATS * Float.BYTES;
         glVertexAttribPointer(0, 3, GL_FLOAT, false, stride, 0);
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(1, 2, GL_FLOAT, false, stride, 3 * Float.BYTES);
@@ -373,5 +518,11 @@ public class DroppedItemRenderer {
             glDeleteVertexArrays(mesh.vao);
         }
         meshCache.clear();
+        if (dynamicItemOverlayMesh != null) {
+            glDeleteBuffers(dynamicItemOverlayMesh.vbo);
+            glDeleteBuffers(dynamicItemOverlayMesh.ebo);
+            glDeleteVertexArrays(dynamicItemOverlayMesh.vao);
+            dynamicItemOverlayMesh = null;
+        }
     }
 }

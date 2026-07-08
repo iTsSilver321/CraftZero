@@ -7,6 +7,7 @@ import com.google.gson.GsonBuilder;
 
 import java.io.IOException;
 import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
@@ -16,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Properties;
 import java.util.stream.Stream;
 
 /**
@@ -26,6 +28,8 @@ public final class WorldManager {
     public static final String DEFAULT_WORLD_ID = "default";
     public static final String DEFAULT_WORLD_NAME = "Default World";
     public static final String METADATA_FILE = "world.json";
+    private static final String LEVEL_FILE = "level.json";
+    private static final String SERVER_PROPERTIES_FILE = "server.properties";
 
     private final Path savesRoot;
     private final Gson gson = new GsonBuilder().setPrettyPrinting().create();
@@ -141,26 +145,37 @@ public final class WorldManager {
     private WorldInfo readWorldInfo(Path worldPath) throws IOException {
         String id = worldPath.getFileName().toString();
         Path metadataPath = worldPath.resolve(METADATA_FILE);
-        Path levelPath = worldPath.resolve("level.json");
+        Path levelPath = worldPath.resolve(LEVEL_FILE);
+        Path levelBackupPath = SafeFiles.backupPath(levelPath);
+        Path releaseLevelPath = worldPath.resolve(ReleaseLevelDat.FILE_NAME);
+        Path releaseLevelOldPath = worldPath.resolve(ReleaseLevelDat.OLD_FILE_NAME);
+        Path serverPropertiesPath = worldPath.resolve(SERVER_PROPERTIES_FILE);
         boolean hasMetadata = Files.isRegularFile(metadataPath);
-        boolean hasLevelData = Files.isRegularFile(levelPath);
+        boolean hasLevelData = Files.isRegularFile(levelPath)
+                || Files.isRegularFile(levelBackupPath)
+                || Files.isRegularFile(releaseLevelPath)
+                || Files.isRegularFile(releaseLevelOldPath)
+                || Files.isRegularFile(serverPropertiesPath);
         boolean legacyDefault = DEFAULT_WORLD_ID.equals(id) && !hasMetadata;
 
         WorldMetadata metadata = readMetadata(worldPath);
-        SaveManager.LevelData levelData = readLevelData(levelPath);
-        String displayName = displayNameFor(id, metadata, levelData);
-        long seed = levelData != null ? levelData.seed : metadata != null ? metadata.seed : 0L;
-        GameMode gameMode = levelData != null ? levelData.getGameMode()
-                : metadata != null ? GameMode.fromName(metadata.gameMode) : GameMode.SURVIVAL;
-        Difficulty difficulty = levelData != null ? levelData.getDifficulty()
-                : metadata != null ? Difficulty.fromName(metadata.difficulty) : Difficulty.EASY;
+        SaveManager.LevelData levelData = readLevelData(worldPath);
+        Properties serverProperties = readServerProperties(worldPath);
+        String displayName = displayNameFor(id, metadata, levelData, serverProperties);
+        long seed = seedFor(metadata, levelData, serverProperties);
+        GameMode gameMode = gameModeFor(metadata, levelData, serverProperties);
+        Difficulty difficulty = difficultyFor(metadata, levelData, serverProperties, gameMode);
         Instant createdAt = parseInstant(metadata == null ? null : metadata.createdAt, fileInstant(worldPath));
         Instant lastModified = latestInstant(
                 parseInstantOrNull(metadata == null ? null : metadata.lastPlayed),
                 millisInstant(levelData == null ? 0L : levelData.lastPlayed),
                 fileInstantIfExists(worldPath),
                 fileInstantIfExists(metadataPath),
-                fileInstantIfExists(levelPath));
+                fileInstantIfExists(levelPath),
+                fileInstantIfExists(levelBackupPath),
+                fileInstantIfExists(releaseLevelPath),
+                fileInstantIfExists(releaseLevelOldPath),
+                fileInstantIfExists(serverPropertiesPath));
 
         return new WorldInfo(id, displayName, worldPath, seed, gameMode, difficulty,
                 legacyDefault, hasLevelData, hasMetadata, createdAt, lastModified);
@@ -179,13 +194,70 @@ public final class WorldManager {
         }
     }
 
-    private SaveManager.LevelData readLevelData(Path levelPath) {
+    private SaveManager.LevelData readLevelData(Path worldPath) {
+        Path levelPath = worldPath.resolve(LEVEL_FILE);
         if (!Files.isRegularFile(levelPath)) {
-            return null;
+            SaveManager.LevelData backupData = readSupportedCatalogLevelData(SafeFiles.backupPath(levelPath));
+            if (backupData != null) {
+                return backupData;
+            }
+            return readReleaseLevelData(worldPath);
         }
 
-        try (Reader reader = Files.newBufferedReader(levelPath)) {
-            return gson.fromJson(reader, SaveManager.LevelData.class);
+        SaveManager.LevelData data = readSupportedCatalogLevelData(levelPath);
+        if (data != null) {
+            return data;
+        }
+        SaveManager.LevelData backupData = readSupportedCatalogLevelData(SafeFiles.backupPath(levelPath));
+        return backupData != null ? backupData : readReleaseLevelData(worldPath);
+    }
+
+    private SaveManager.LevelData readSupportedCatalogLevelData(Path path) {
+        if (path == null || !Files.isRegularFile(path)) {
+            return null;
+        }
+        try (Reader reader = Files.newBufferedReader(path)) {
+            SaveManager.LevelData data = gson.fromJson(reader, SaveManager.LevelData.class);
+            return isSupportedCatalogLevelData(data) ? data : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static boolean isSupportedCatalogLevelData(SaveManager.LevelData data) {
+        return data != null
+                && data.formatVersion >= SaveManager.MIN_SUPPORTED_FORMAT_VERSION
+                && data.formatVersion <= SaveManager.FORMAT_VERSION;
+    }
+
+    private SaveManager.LevelData readReleaseLevelData(Path worldPath) {
+        Path releaseLevelPath = worldPath.resolve(ReleaseLevelDat.FILE_NAME);
+        if (Files.isRegularFile(releaseLevelPath)) {
+            try {
+                return ReleaseLevelDat.read(releaseLevelPath);
+            } catch (Exception ignored) {
+            }
+        }
+
+        Path releaseLevelOldPath = worldPath.resolve(ReleaseLevelDat.OLD_FILE_NAME);
+        if (Files.isRegularFile(releaseLevelOldPath)) {
+            try {
+                return ReleaseLevelDat.read(releaseLevelOldPath);
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private Properties readServerProperties(Path worldPath) {
+        Path path = worldPath.resolve(SERVER_PROPERTIES_FILE);
+        if (!Files.isRegularFile(path)) {
+            return null;
+        }
+        Properties properties = new Properties();
+        try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+            properties.load(reader);
+            return properties;
         } catch (Exception ignored) {
             return null;
         }
@@ -221,9 +293,14 @@ public final class WorldManager {
         return id;
     }
 
-    private static String displayNameFor(String id, WorldMetadata metadata, SaveManager.LevelData levelData) {
+    private static String displayNameFor(String id, WorldMetadata metadata, SaveManager.LevelData levelData,
+            Properties serverProperties) {
         if (metadata != null && metadata.displayName != null && !metadata.displayName.isBlank()) {
             return metadata.displayName.trim();
+        }
+        String serverLevelName = serverPropertyText(serverProperties, "level-name");
+        if (serverLevelName != null) {
+            return serverLevelName;
         }
         if (levelData != null && levelData.levelName != null && !levelData.levelName.isBlank()) {
             return levelData.levelName.trim();
@@ -232,6 +309,80 @@ public final class WorldManager {
             return DEFAULT_WORLD_NAME;
         }
         return humanizeId(id);
+    }
+
+    private static long seedFor(WorldMetadata metadata, SaveManager.LevelData levelData, Properties serverProperties) {
+        long seed = levelData != null ? levelData.seed : metadata != null ? metadata.seed : 0L;
+        return serverPropertySeed(serverProperties, seed);
+    }
+
+    private static GameMode gameModeFor(WorldMetadata metadata, SaveManager.LevelData levelData,
+            Properties serverProperties) {
+        GameMode gameMode = levelData != null ? levelData.getGameMode()
+                : metadata != null ? GameMode.fromName(metadata.gameMode) : GameMode.SURVIVAL;
+        gameMode = serverPropertyGameMode(serverProperties, gameMode);
+        return serverPropertyBoolean(serverProperties, "hardcore", false) || gameMode == GameMode.HARDCORE
+                ? GameMode.HARDCORE
+                : gameMode;
+    }
+
+    private static Difficulty difficultyFor(WorldMetadata metadata, SaveManager.LevelData levelData,
+            Properties serverProperties, GameMode gameMode) {
+        Difficulty difficulty = levelData != null ? levelData.getDifficulty()
+                : metadata != null ? Difficulty.fromName(metadata.difficulty) : Difficulty.EASY;
+        difficulty = serverPropertyDifficulty(serverProperties, difficulty);
+        return serverPropertyBoolean(serverProperties, "hardcore", false) || gameMode == GameMode.HARDCORE
+                ? Difficulty.HARD
+                : difficulty;
+    }
+
+    private static String serverPropertyText(Properties properties, String key) {
+        if (properties == null || key == null) {
+            return null;
+        }
+        String value = properties.getProperty(key);
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String cleaned = value.replace('\r', ' ').replace('\n', ' ').trim();
+        return cleaned.isEmpty() ? null : cleaned;
+    }
+
+    private static long serverPropertySeed(Properties properties, long fallback) {
+        String seedText = serverPropertyText(properties, "level-seed");
+        if (seedText == null) {
+            return fallback;
+        }
+        try {
+            return Long.parseLong(seedText);
+        } catch (NumberFormatException ignored) {
+            return seedText.hashCode();
+        }
+    }
+
+    private static GameMode serverPropertyGameMode(Properties properties, GameMode fallback) {
+        String value = serverPropertyText(properties, "gamemode");
+        if (value == null) {
+            value = serverPropertyText(properties, "game-mode");
+        }
+        return value == null ? (fallback == null ? GameMode.SURVIVAL : fallback) : GameMode.fromName(value);
+    }
+
+    private static Difficulty serverPropertyDifficulty(Properties properties, Difficulty fallback) {
+        String value = serverPropertyText(properties, "difficulty");
+        return value == null ? (fallback == null ? Difficulty.EASY : fallback) : Difficulty.fromName(value);
+    }
+
+    private static boolean serverPropertyBoolean(Properties properties, String key, boolean fallback) {
+        String value = serverPropertyText(properties, key);
+        if (value == null) {
+            return fallback;
+        }
+        return switch (value.toLowerCase(Locale.ROOT)) {
+            case "true", "yes", "1", "on" -> true;
+            case "false", "no", "0", "off" -> false;
+            default -> fallback;
+        };
     }
 
     private static String cleanDisplayName(String displayName) {

@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -114,7 +115,7 @@ class MultiplayerLoopbackTest {
                 assertNotNull(hello);
                 assertNotNull(client.awaitWorldState(TIMEOUT));
 
-                client.sendChat("", "hello typed chat");
+                client.sendChat("hello typed chat");
 
                 ProtocolMessage.Chat chat = client.waitForMessage(ProtocolMessage.Chat.class, TIMEOUT);
                 assertNotNull(chat);
@@ -142,6 +143,106 @@ class MultiplayerLoopbackTest {
                         "Alex",
                         server.playerStates().get(client.clientId()).get("username").getAsString()
                 );
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Legacy server facade should broadcast addressed command actions")
+    void legacyFacadeBroadcastsAddressedCommandActions() throws Exception {
+        try (MultiplayerServer server = new MultiplayerServer(0, 13579L, 0.0f)) {
+            server.start();
+            CountDownLatch received = new CountDownLatch(1);
+            AtomicReference<NetworkMessage> actionMessage = new AtomicReference<>();
+
+            try (MultiplayerClient client = new MultiplayerClient()) {
+                client.addListener(message -> {
+                    if ("clientAction".equals(message.type())
+                            && MultiplayerProtocol.ACTION_COMMAND_GIVE.equals(message.data().get("action").getAsString())) {
+                        actionMessage.set(message);
+                        received.countDown();
+                    }
+                });
+                client.connect("127.0.0.1", server.getPort(), "Alex");
+                assertEventually(() -> client.clientId() > 0);
+
+                com.google.gson.JsonObject payload = NetworkMessage.object();
+                payload.addProperty("playerId", "player-" + client.clientId());
+                payload.addProperty("action", MultiplayerProtocol.ACTION_COMMAND_GIVE);
+                payload.addProperty("itemId", "264");
+                payload.addProperty("itemData", "0");
+                payload.addProperty("count", "2");
+                server.broadcast(NetworkMessage.of("clientAction", payload));
+
+                assertTrue(received.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+                assertEquals(client.clientId(), actionMessage.get().data().get("clientId").getAsInt());
+                assertEquals("player-" + client.clientId(), actionMessage.get().data().get("playerId").getAsString());
+                assertEquals("264", actionMessage.get().data().get("itemId").getAsString());
+                assertEquals("2", actionMessage.get().data().get("count").getAsString());
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Hosted bed sleep should wait for the host and every connected player")
+    void hostedBedSleepRequiresEveryConnectedPlayer() throws Exception {
+        try (MultiplayerServer server = new MultiplayerServer(0, 24680L, 18000.0f)) {
+            server.start();
+
+            try (ProtocolClient alex = ProtocolClient.connect("127.0.0.1", server.getPort(), "Alex");
+                    ProtocolClient steve = ProtocolClient.connect("127.0.0.1", server.getPort(), "Steve")) {
+                assertNotNull(alex.awaitHello(TIMEOUT));
+                assertNotNull(alex.awaitWorldState(TIMEOUT));
+                assertNotNull(steve.awaitHello(TIMEOUT));
+                assertNotNull(steve.awaitWorldState(TIMEOUT));
+
+                alex.sendClientAction(MultiplayerProtocol.ACTION_BED_SLEEP_START, Map.of());
+                assertNull(alex.waitForMessage(ProtocolMessage.ClientAction.class, Duration.ofMillis(150)));
+                assertFalse(server.hasPendingSleepCompletion());
+
+                assertFalse(server.beginHostSleep());
+                assertNull(alex.waitForMessage(ProtocolMessage.ClientAction.class, Duration.ofMillis(150)));
+
+                steve.sendClientAction(MultiplayerProtocol.ACTION_BED_SLEEP_START, Map.of());
+
+                ProtocolMessage.WorldState morning = waitForWorldTime(alex, 0.0);
+                assertNotNull(morning);
+                assertEquals(0.0, morning.timeOfDay(), 0.0001);
+                ProtocolMessage.ClientAction completion =
+                        alex.waitForMessage(ProtocolMessage.ClientAction.class, TIMEOUT);
+                assertNotNull(completion);
+                assertEquals(MultiplayerProtocol.ACTION_BED_SLEEP_COMPLETE, completion.action());
+                assertEquals("0.0", completion.data().get("time"));
+                assertTrue(server.hasPendingSleepCompletion());
+                assertTrue(server.consumePendingSleepCompletion());
+                assertFalse(server.hasPendingSleepCompletion());
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Stopping bed sleep should remove the client from the sleep quorum")
+    void stoppedBedSleepNoLongerCountsTowardAllPlayerSleep() throws Exception {
+        try (MultiplayerServer server = new MultiplayerServer(0, 24681L, 18000.0f)) {
+            server.start();
+
+            try (ProtocolClient alex = ProtocolClient.connect("127.0.0.1", server.getPort(), "Alex");
+                    ProtocolClient steve = ProtocolClient.connect("127.0.0.1", server.getPort(), "Steve")) {
+                assertNotNull(alex.awaitHello(TIMEOUT));
+                assertNotNull(alex.awaitWorldState(TIMEOUT));
+                assertNotNull(steve.awaitHello(TIMEOUT));
+                assertNotNull(steve.awaitWorldState(TIMEOUT));
+
+                alex.sendClientAction(MultiplayerProtocol.ACTION_BED_SLEEP_START, Map.of());
+                alex.sendClientAction(MultiplayerProtocol.ACTION_BED_SLEEP_STOP, Map.of());
+                assertFalse(server.beginHostSleep());
+
+                steve.sendClientAction(MultiplayerProtocol.ACTION_BED_SLEEP_START, Map.of());
+
+                assertNull(alex.waitForMessage(ProtocolMessage.ClientAction.class, Duration.ofMillis(150)));
+                assertFalse(server.hasPendingSleepCompletion());
+                assertEquals(3, server.sleepEligiblePlayerCount());
+                assertEquals(2, server.sleepingPlayerCount());
             }
         }
     }
@@ -241,10 +342,10 @@ class MultiplayerLoopbackTest {
                         received.countDown();
                     }
                 });
-                client.connect("127.0.0.1", server.getPort());
+                client.connect("127.0.0.1", server.getPort(), "Alex");
                 assertEventually(() -> client.clientId() > 0);
 
-                client.sendChat("Alex", "hello world");
+                client.sendChat("hello world");
 
                 assertTrue(received.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
                 assertEquals("Alex", chatMessage.get().data().get("sender").getAsString());
@@ -262,5 +363,20 @@ class MultiplayerLoopbackTest {
             Thread.sleep(10L);
         }
         assertTrue(condition.getAsBoolean());
+    }
+
+    private static ProtocolMessage.WorldState waitForWorldTime(ProtocolClient client, double expectedTime)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TIMEOUT.toNanos();
+        while (System.nanoTime() < deadline) {
+            ProtocolMessage.WorldState state = client.waitForMessage(
+                    ProtocolMessage.WorldState.class,
+                    Duration.ofMillis(100)
+            );
+            if (state != null && Math.abs(state.timeOfDay() - expectedTime) < 0.0001) {
+                return state;
+            }
+        }
+        return null;
     }
 }

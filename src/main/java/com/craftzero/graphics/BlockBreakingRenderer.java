@@ -4,6 +4,9 @@ import org.joml.Matrix4f;
 import org.joml.Vector3i;
 import org.lwjgl.system.MemoryUtil;
 
+import com.craftzero.world.BlockType;
+import com.craftzero.world.World;
+
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 
@@ -327,7 +330,7 @@ public class BlockBreakingRenderer {
      * @param progress break progress from 0.0 to 1.0
      * @param world    the world to check for adjacent blocks
      */
-    public void render(Camera camera, Vector3i blockPos, float progress, com.craftzero.world.World world) {
+    public void render(Camera camera, Vector3i blockPos, float progress, World world) {
         if (blockPos == null || progress <= 0) {
             return;
         }
@@ -376,27 +379,27 @@ public class BlockBreakingRenderer {
         int bx = blockPos.x, by = blockPos.y, bz = blockPos.z;
 
         // Front face (Z+) - check if z+1 is air/transparent
-        if (world == null || !world.getBlock(bx, by, bz + 1).isSolid()) {
+        if (shouldDrawFace(world, bx, by, bz + 1)) {
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
         }
         // Back face (Z-) - check if z-1 is air/transparent
-        if (world == null || !world.getBlock(bx, by, bz - 1).isSolid()) {
+        if (shouldDrawFace(world, bx, by, bz - 1)) {
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 6 * Integer.BYTES);
         }
         // Top face (Y+) - check if y+1 is air/transparent
-        if (world == null || !world.getBlock(bx, by + 1, bz).isSolid()) {
+        if (shouldDrawFace(world, bx, by + 1, bz)) {
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 12 * Integer.BYTES);
         }
         // Bottom face (Y-) - check if y-1 is air/transparent
-        if (world == null || !world.getBlock(bx, by - 1, bz).isSolid()) {
+        if (shouldDrawFace(world, bx, by - 1, bz)) {
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 18 * Integer.BYTES);
         }
         // Right face (X+) - check if x+1 is air/transparent
-        if (world == null || !world.getBlock(bx + 1, by, bz).isSolid()) {
+        if (shouldDrawFace(world, bx + 1, by, bz)) {
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 24 * Integer.BYTES);
         }
         // Left face (X-) - check if x-1 is air/transparent
-        if (world == null || !world.getBlock(bx - 1, by, bz).isSolid()) {
+        if (shouldDrawFace(world, bx - 1, by, bz)) {
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 30 * Integer.BYTES);
         }
 
@@ -409,6 +412,10 @@ public class BlockBreakingRenderer {
         // glEnable(GL_CULL_FACE);
         glDisable(GL_BLEND);
         glDepthMask(true); // Restore depth writing
+    }
+
+    private static boolean shouldDrawFace(World world, int x, int y, int z) {
+        return world == null || !world.getBlockIfLoaded(x, y, z, BlockType.AIR).isSolid();
     }
 
     public void cleanup() {

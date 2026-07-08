@@ -23,11 +23,15 @@ public final class BrewingRecipeRegistry {
         };
     }
 
+    public static boolean isBottleSlotItem(ItemStack stack) {
+        return stack != null && !stack.isEmpty() && stack.getType() == ItemType.POTION;
+    }
+
     public static ItemStack brew(ItemStack bottle, ItemStack ingredient) {
         if (bottle == null || bottle.isEmpty() || ingredient == null || ingredient.isEmpty()) {
             return null;
         }
-        if (bottle.getType() != ItemType.POTION) {
+        if (!isBottleSlotItem(bottle)) {
             return null;
         }
         PotionData current = bottle.getPotionData();
@@ -51,14 +55,12 @@ public final class BrewingRecipeRegistry {
         if (ingredient == ItemType.GUNPOWDER) {
             return current.splash() ? null : new PotionData(current.type(), true, current.extended(), current.enhanced());
         }
-        if (current.splash()) {
-            return null;
-        }
+        boolean splash = current.splash();
         if (ingredient == ItemType.REDSTONE && canExtend(current)) {
-            return new PotionData(current.type(), false, true, false);
+            return new PotionData(current.type(), splash, true, false);
         }
         if (ingredient == ItemType.GLOWSTONE_DUST && canEnhance(current)) {
-            return new PotionData(current.type(), false, false, true);
+            return new PotionData(current.type(), splash, false, true);
         }
         if (ingredient == ItemType.FERMENTED_SPIDER_EYE) {
             PotionType corrupt = corrupt(current.type());
@@ -66,29 +68,30 @@ public final class BrewingRecipeRegistry {
                 boolean keepExtended = current.extended()
                         && (corrupt == PotionType.SLOWNESS || corrupt == PotionType.WEAKNESS);
                 boolean keepEnhanced = current.enhanced() && corrupt == PotionType.HARMING;
-                return new PotionData(corrupt, false, keepExtended, keepEnhanced);
+                return new PotionData(corrupt, splash, keepExtended, keepEnhanced);
             }
         }
 
         if (current.type() == PotionType.WATER) {
             return switch (ingredient) {
-                case NETHER_WART -> new PotionData(PotionType.AWKWARD, false, false, false);
-                case GLOWSTONE_DUST -> new PotionData(PotionType.THICK, false, false, false);
-                case FERMENTED_SPIDER_EYE -> new PotionData(PotionType.WEAKNESS, false, false, false);
-                case SUGAR, MAGMA_CREAM, GHAST_TEAR, SPIDER_EYE, BLAZE_POWDER, GLISTERING_MELON, REDSTONE ->
-                    new PotionData(PotionType.MUNDANE, false, false, false);
+                case NETHER_WART -> new PotionData(PotionType.AWKWARD, splash, false, false);
+                case GLOWSTONE_DUST -> new PotionData(PotionType.THICK, splash, false, false);
+                case FERMENTED_SPIDER_EYE -> new PotionData(PotionType.WEAKNESS, splash, false, false);
+                case REDSTONE -> new PotionData(PotionType.MUNDANE, splash, true, false);
+                case SUGAR, MAGMA_CREAM, GHAST_TEAR, SPIDER_EYE, BLAZE_POWDER, GLISTERING_MELON ->
+                    new PotionData(PotionType.MUNDANE, splash, false, false);
                 default -> null;
             };
         }
 
         if (current.type() == PotionType.AWKWARD) {
             return switch (ingredient) {
-                case SUGAR -> new PotionData(PotionType.SWIFTNESS, false, false, false);
-                case MAGMA_CREAM -> new PotionData(PotionType.FIRE_RESISTANCE, false, false, false);
-                case GHAST_TEAR -> new PotionData(PotionType.REGENERATION, false, false, false);
-                case SPIDER_EYE -> new PotionData(PotionType.POISON, false, false, false);
-                case GLISTERING_MELON -> new PotionData(PotionType.HEALING, false, false, false);
-                case BLAZE_POWDER -> new PotionData(PotionType.STRENGTH, false, false, false);
+                case SUGAR -> new PotionData(PotionType.SWIFTNESS, splash, false, false);
+                case MAGMA_CREAM -> new PotionData(PotionType.FIRE_RESISTANCE, splash, false, false);
+                case GHAST_TEAR -> new PotionData(PotionType.REGENERATION, splash, false, false);
+                case SPIDER_EYE -> new PotionData(PotionType.POISON, splash, false, false);
+                case GLISTERING_MELON -> new PotionData(PotionType.HEALING, splash, false, false);
+                case BLAZE_POWDER -> new PotionData(PotionType.STRENGTH, splash, false, false);
                 default -> null;
             };
         }
@@ -101,6 +104,7 @@ public final class BrewingRecipeRegistry {
         add(potions, new PotionData(PotionType.AWKWARD, false, false, false));
         add(potions, new PotionData(PotionType.THICK, false, false, false));
         add(potions, new PotionData(PotionType.MUNDANE, false, false, false));
+        add(potions, new PotionData(PotionType.MUNDANE, false, true, false));
         for (PotionType type : List.of(PotionType.REGENERATION, PotionType.SWIFTNESS, PotionType.FIRE_RESISTANCE,
                 PotionType.POISON, PotionType.HEALING, PotionType.WEAKNESS, PotionType.STRENGTH,
                 PotionType.SLOWNESS, PotionType.HARMING)) {
@@ -150,7 +154,7 @@ public final class BrewingRecipeRegistry {
         return switch (type) {
             case HEALING, POISON -> PotionType.HARMING;
             case SWIFTNESS, FIRE_RESISTANCE -> PotionType.SLOWNESS;
-            case STRENGTH, REGENERATION, WATER -> PotionType.WEAKNESS;
+            case STRENGTH, REGENERATION, WATER, AWKWARD, THICK, MUNDANE -> PotionType.WEAKNESS;
             default -> null;
         };
     }

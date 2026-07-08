@@ -25,8 +25,15 @@ public final class GameSettings {
     public static final String DEFAULT_TEXTURE_PACK = "Default";
     public static final String DEFAULT_LANGUAGE = "en_US";
     public static final int MIN_RENDER_DISTANCE_CHUNKS = 2;
-    public static final int MAX_RENDER_DISTANCE_CHUNKS = 16;
+    public static final int MAX_RENDER_DISTANCE_CHUNKS = 12;
     public static final int DEFAULT_RENDER_DISTANCE_CHUNKS = 8;
+    public static final int EFFECTIVE_MIN_RENDER_DISTANCE_CHUNKS = MIN_RENDER_DISTANCE_CHUNKS;
+    public static final int EFFECTIVE_MAX_RENDER_DISTANCE_CHUNKS = MAX_RENDER_DISTANCE_CHUNKS;
+
+    private static final int RENDER_DISTANCE_FAR = 0;
+    private static final int RENDER_DISTANCE_NORMAL = 1;
+    private static final int RENDER_DISTANCE_SHORT = 2;
+    private static final int RENDER_DISTANCE_TINY = 3;
 
     private static final Map<String, KeyBinding> KEY_BINDINGS_BY_OPTION = createKeyBindingLookup();
 
@@ -47,6 +54,7 @@ public final class GameSettings {
     private boolean fancyGraphics = true;
     private boolean smoothLighting = true;
     private boolean clouds = true;
+    private boolean anaglyph3d;
     private boolean fullscreen;
     private boolean vsync;
     private boolean advancedOpenGl;
@@ -103,28 +111,28 @@ public final class GameSettings {
         List<String> lines = new ArrayList<>();
         add(lines, "playerName", playerName);
         add(lines, "gameMode", gameMode.optionName());
-        add(lines, "difficulty", difficulty.optionName());
+        add(lines, "difficulty", Integer.toString(difficulty.id()));
         add(lines, "music", Float.toString(musicVolume));
         add(lines, "sound", Float.toString(soundVolume));
         add(lines, "invertYMouse", Boolean.toString(invertYMouse));
         add(lines, "mouseSensitivity", Float.toString(mouseSensitivity));
         add(lines, "fov", Float.toString(fov));
         add(lines, "gamma", Float.toString(gamma));
-        add(lines, "renderDistance", Integer.toString(renderDistance));
-        add(lines, "renderDistanceChunks", Integer.toString(renderDistance));
+        add(lines, "viewDistance", Integer.toString(renderDistanceOptionValue(renderDistance)));
         add(lines, "guiScale", Integer.toString(guiScale));
         add(lines, "particles", Integer.toString(particles));
-        add(lines, "framerateLimit", Integer.toString(framerateLimit));
-        add(lines, "viewBobbing", Boolean.toString(viewBobbing));
+        add(lines, "bobView", Boolean.toString(viewBobbing));
         add(lines, "fancyGraphics", Boolean.toString(fancyGraphics));
-        add(lines, "smoothLighting", Boolean.toString(smoothLighting));
+        add(lines, "ao", Boolean.toString(smoothLighting));
         add(lines, "clouds", Boolean.toString(clouds));
+        add(lines, "anaglyph3d", Boolean.toString(anaglyph3d));
         add(lines, "fullscreen", Boolean.toString(fullscreen));
         add(lines, "vsync", Boolean.toString(vsync));
-        add(lines, "advancedOpenGL", Boolean.toString(advancedOpenGl));
-        add(lines, "texturePack", selectedTexturePack);
+        add(lines, "advancedOpengl", Boolean.toString(advancedOpenGl));
+        add(lines, "fpsLimit", Integer.toString(framerateLimitOptionValue(framerateLimit)));
+        add(lines, "skin", selectedTexturePack);
         add(lines, "lastServer", lastServer);
-        add(lines, "language", language);
+        add(lines, "lang", language);
 
         for (KeyBinding binding : KeyBinding.values()) {
             add(lines, binding.optionName(), Integer.toString(getKeyBinding(binding)));
@@ -180,11 +188,13 @@ public final class GameSettings {
             case "renderDistanceChunks" -> setRenderDistance(parseInt(value, renderDistance));
             case "guiScale" -> setGuiScale(parseInt(value, guiScale));
             case "particles" -> setParticles(parseInt(value, particles));
-            case "framerateLimit", "fpsLimit" -> setFramerateLimit(parseInt(value, framerateLimit));
+            case "framerateLimit" -> setFramerateLimit(parseInt(value, framerateLimit));
+            case "fpsLimit" -> setFramerateLimit(parseLegacyFramerateLimit(value));
             case "viewBobbing", "bobView" -> setViewBobbing(parseBoolean(value, viewBobbing));
             case "fancyGraphics" -> setFancyGraphics(parseBoolean(value, fancyGraphics));
             case "smoothLighting", "ao", "ambientOcclusion" -> setSmoothLighting(parseBoolean(value, smoothLighting));
             case "clouds" -> setClouds(parseBoolean(value, clouds));
+            case "anaglyph3d", "anaglyph", "anaglyph3D" -> setAnaglyph3d(parseBoolean(value, anaglyph3d));
             case "fullscreen" -> setFullscreen(parseBoolean(value, fullscreen));
             case "vsync" -> setVsync(parseBoolean(value, vsync));
             case "advancedOpenGL", "advancedOpengl" -> setAdvancedOpenGl(parseBoolean(value, advancedOpenGl));
@@ -283,12 +293,33 @@ public final class GameSettings {
         this.renderDistance = clamp(renderDistance, MIN_RENDER_DISTANCE_CHUNKS, MAX_RENDER_DISTANCE_CHUNKS);
     }
 
+    public void cycleRenderDistance() {
+        setRenderDistance(chunksForRenderDistanceOption((renderDistanceOptionValue(renderDistance) + 1) & 3));
+    }
+
+    public int effectiveRenderDistanceChunks() {
+        return effectiveRenderDistanceChunks(renderDistance);
+    }
+
+    public static int effectiveRenderDistanceChunks(int chunks) {
+        return clamp(chunks, EFFECTIVE_MIN_RENDER_DISTANCE_CHUNKS, EFFECTIVE_MAX_RENDER_DISTANCE_CHUNKS);
+    }
+
+    public static String renderDistanceDisplayName(int chunks) {
+        return switch (renderDistanceOptionValue(chunks)) {
+            case RENDER_DISTANCE_FAR -> "Far";
+            case RENDER_DISTANCE_NORMAL -> "Normal";
+            case RENDER_DISTANCE_SHORT -> "Short";
+            default -> "Tiny";
+        };
+    }
+
     public int getGuiScale() {
         return guiScale;
     }
 
     public void setGuiScale(int guiScale) {
-        this.guiScale = clamp(guiScale, 0, 4);
+        this.guiScale = clamp(guiScale, 0, 3);
     }
 
     public int getParticles() {
@@ -304,7 +335,7 @@ public final class GameSettings {
     }
 
     public void setFramerateLimit(int framerateLimit) {
-        this.framerateLimit = clamp(framerateLimit, 0, 1000);
+        this.framerateLimit = framerateLimit <= 0 ? 0 : framerateLimit <= 40 ? 40 : 120;
     }
 
     public boolean isViewBobbing() {
@@ -337,6 +368,14 @@ public final class GameSettings {
 
     public void setClouds(boolean clouds) {
         this.clouds = clouds;
+    }
+
+    public boolean isAnaglyph3d() {
+        return anaglyph3d;
+    }
+
+    public void setAnaglyph3d(boolean anaglyph3d) {
+        this.anaglyph3d = anaglyph3d;
     }
 
     public boolean isFullscreen() {
@@ -441,6 +480,12 @@ public final class GameSettings {
     }
 
     private static float parseFloat(String value, float fallback) {
+        if ("true".equalsIgnoreCase(value)) {
+            return 1.0f;
+        }
+        if ("false".equalsIgnoreCase(value)) {
+            return 0.0f;
+        }
         try {
             return Float.parseFloat(value);
         } catch (NumberFormatException ignored) {
@@ -460,11 +505,52 @@ public final class GameSettings {
         int parsed = parseInt(value, renderDistance);
         return switch (parsed) {
             case 0 -> 12; // Old Far option
-            case 1 -> DEFAULT_RENDER_DISTANCE_CHUNKS; // Old Normal option
+            case 1 -> 8; // Old Normal option
             case 2 -> 4; // Old Short option
-            case 3 -> MIN_RENDER_DISTANCE_CHUNKS; // Old Tiny option
+            case 3 -> 2; // Old Tiny option
             default -> parsed;
         };
+    }
+
+    private static int renderDistanceOptionValue(int chunks) {
+        if (chunks >= 10) {
+            return RENDER_DISTANCE_FAR;
+        }
+        if (chunks >= 6) {
+            return RENDER_DISTANCE_NORMAL;
+        }
+        if (chunks > 2) {
+            return RENDER_DISTANCE_SHORT;
+        }
+        return RENDER_DISTANCE_TINY;
+    }
+
+    private static int chunksForRenderDistanceOption(int optionValue) {
+        return switch (optionValue & 3) {
+            case RENDER_DISTANCE_FAR -> 12;
+            case RENDER_DISTANCE_NORMAL -> 8;
+            case RENDER_DISTANCE_SHORT -> 4;
+            default -> 2;
+        };
+    }
+
+    private int parseLegacyFramerateLimit(String value) {
+        int parsed = parseInt(value, framerateLimitOptionValue(framerateLimit));
+        return switch (Math.floorMod(parsed, 3)) {
+            case 0 -> 0;
+            case 2 -> 40;
+            default -> 120;
+        };
+    }
+
+    private static int framerateLimitOptionValue(int framerateLimit) {
+        if (framerateLimit <= 0) {
+            return 0;
+        }
+        if (framerateLimit <= 40) {
+            return 2;
+        }
+        return 1;
     }
 
     private static boolean parseBoolean(String value, boolean fallback) {

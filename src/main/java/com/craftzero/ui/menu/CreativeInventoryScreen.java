@@ -6,6 +6,9 @@ import com.craftzero.inventory.ItemType;
 import com.craftzero.inventory.SlotAccess;
 
 import java.util.List;
+import java.util.function.BooleanSupplier;
+
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_1;
 
 public class CreativeInventoryScreen implements Screen, ScreenManager.EscapeHandler {
     public static final int TEX_WIDTH = 176;
@@ -27,6 +30,7 @@ public class CreativeInventoryScreen implements Screen, ScreenManager.EscapeHand
 
     private final Inventory inventory;
     private final Runnable closeAction;
+    private final BooleanSupplier dropRequested;
     private final List<CreativeCatalogEntry> items;
     private int width;
     private int height;
@@ -39,8 +43,14 @@ public class CreativeInventoryScreen implements Screen, ScreenManager.EscapeHand
     private boolean draggingScrollbar;
 
     public CreativeInventoryScreen(Inventory inventory, int width, int height, Runnable closeAction) {
+        this(inventory, width, height, closeAction, null);
+    }
+
+    public CreativeInventoryScreen(Inventory inventory, int width, int height, Runnable closeAction,
+            BooleanSupplier dropRequested) {
         this.inventory = inventory;
         this.closeAction = closeAction;
+        this.dropRequested = dropRequested == null ? () -> false : dropRequested;
         this.items = CreativeCatalog.entries();
         resize(width, height);
     }
@@ -66,6 +76,15 @@ public class CreativeInventoryScreen implements Screen, ScreenManager.EscapeHand
         }
 
         boolean leftPressed = input.leftPressed();
+        if (handleKeyboardDrop()) {
+            wasLeftPressed = leftPressed;
+            return;
+        }
+        if (handleHotbarShortcut(input)) {
+            wasLeftPressed = leftPressed;
+            return;
+        }
+
         if (leftPressed) {
             if (draggingScrollbar || (!wasLeftPressed && scrollbarAt(mouseX, mouseY))) {
                 draggingScrollbar = true;
@@ -80,6 +99,67 @@ public class CreativeInventoryScreen implements Screen, ScreenManager.EscapeHand
         if (clicked) {
             handleLeftClick(mouseX, mouseY);
         }
+    }
+
+    private boolean handleKeyboardDrop() {
+        if (!dropRequested.getAsBoolean()) {
+            return false;
+        }
+        ItemStack cursor = inventory.getCursorItem();
+        if (cursor != null && !cursor.isEmpty()) {
+            inventory.setCursorItem(null);
+            return true;
+        }
+        if (hoveredHotbarSlot >= 0 && hoveredHotbarSlot < Inventory.HOTBAR_SIZE
+                && inventory.getHotbar()[hoveredHotbarSlot] != null) {
+            inventory.getHotbar()[hoveredHotbarSlot] = null;
+            return true;
+        }
+        return false;
+    }
+
+    private boolean handleHotbarShortcut(MenuInput input) {
+        int hotbarSlot = pressedHotbarSlot(input);
+        if (hotbarSlot < 0 || hotbarSlot >= Inventory.HOTBAR_SIZE) {
+            return false;
+        }
+
+        ItemStack creativeStack = stackAtVisibleSlot(hoveredCreativeSlot);
+        if (creativeStack != null && !creativeStack.isEmpty()) {
+            inventory.getHotbar()[hotbarSlot] = creativeStack.copy();
+            inventory.setSelectedSlot(hotbarSlot);
+            return true;
+        }
+
+        ItemStack cursor = inventory.getCursorItem();
+        if (cursor != null && !cursor.isEmpty()) {
+            inventory.getHotbar()[hotbarSlot] = cursor.copy();
+            inventory.setSelectedSlot(hotbarSlot);
+            return true;
+        }
+
+        if (hoveredHotbarSlot >= 0 && hoveredHotbarSlot < Inventory.HOTBAR_SIZE
+                && hoveredHotbarSlot != hotbarSlot) {
+            ItemStack[] hotbar = inventory.getHotbar();
+            ItemStack hovered = hotbar[hoveredHotbarSlot];
+            hotbar[hoveredHotbarSlot] = hotbar[hotbarSlot];
+            hotbar[hotbarSlot] = hovered;
+            inventory.setSelectedSlot(hotbarSlot);
+            return true;
+        }
+        return false;
+    }
+
+    private int pressedHotbarSlot(MenuInput input) {
+        if (input == null) {
+            return -1;
+        }
+        for (int i = 0; i < Inventory.HOTBAR_SIZE; i++) {
+            if (input.keyPressed(GLFW_KEY_1 + i)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     @Override

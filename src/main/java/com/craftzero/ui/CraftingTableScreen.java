@@ -1,17 +1,22 @@
 package com.craftzero.ui;
 
 import com.craftzero.engine.Input;
+import com.craftzero.inventory.CraftingGridOps;
 import com.craftzero.inventory.Inventory;
 import com.craftzero.inventory.ItemStack;
 import com.craftzero.inventory.ItemStackOps;
-import com.craftzero.inventory.ItemType;
 import com.craftzero.crafting.CraftingRecipe;
 import com.craftzero.crafting.CraftingRegistry;
+import com.craftzero.main.Player;
+import com.craftzero.world.BlockType;
+import com.craftzero.world.World;
+import org.joml.Vector3i;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.HashSet;
+import java.util.function.BooleanSupplier;
 
 import static org.lwjgl.glfw.GLFW.*;
 
@@ -83,6 +88,8 @@ public class CraftingTableScreen {
 
     private boolean isOpen = false;
     private Inventory inventory;
+    private World boundWorld;
+    private Vector3i tablePos;
 
     // 3x3 crafting grid
     private ItemStack[] craftingGrid = new ItemStack[9];
@@ -96,20 +103,41 @@ public class CraftingTableScreen {
 
     // Items to throw when closing
     private List<ItemStack> itemsToThrow = new ArrayList<>();
+    private final List<CraftAction> craftActions = new ArrayList<>();
 
     // Flag to open inventory after closing
     // Flag to open inventory after closing
     private boolean openInventoryAfterClose = false;
 
     // Dragging state
-    private boolean isRightClickDragging = false;
-    private Set<Integer> draggedSlots = new HashSet<>();
+    private boolean isMouseDragging = false;
+    private boolean mouseDragRightClick = false;
+    private int dragStartSlot = -1;
+    private final Set<Integer> draggedSlots = new LinkedHashSet<>();
+    private final ContainerDoubleClickTracker doubleClickTracker = new ContainerDoubleClickTracker();
+    private final BooleanSupplier inventoryCloseRequested;
+    private final BooleanSupplier dropRequested;
 
     public CraftingTableScreen(Inventory inventory) {
+        this(inventory, null, null);
+    }
+
+    public CraftingTableScreen(Inventory inventory, BooleanSupplier inventoryCloseRequested) {
+        this(inventory, inventoryCloseRequested, null);
+    }
+
+    public CraftingTableScreen(Inventory inventory, BooleanSupplier inventoryCloseRequested,
+            BooleanSupplier dropRequested) {
         this.inventory = inventory;
+        this.inventoryCloseRequested = ContainerScreenControls.closeRequester(inventoryCloseRequested);
+        this.dropRequested = ContainerScreenControls.dropRequester(dropRequested);
     }
 
     public void open(int screenWidth, int screenHeight) {
+        open(null, null, screenWidth, screenHeight);
+    }
+
+    public void open(World world, Vector3i tablePos, int screenWidth, int screenHeight) {
         if (!isOpen) {
             isOpen = true;
             windowX = (screenWidth - WINDOW_WIDTH) / 2;
@@ -117,6 +145,8 @@ public class CraftingTableScreen {
             Input.setCursorLocked(false);
             hoveredSlot = -1;
         }
+        this.boundWorld = world;
+        this.tablePos = tablePos == null ? null : new Vector3i(tablePos);
     }
 
     public void close() {
@@ -124,6 +154,8 @@ public class CraftingTableScreen {
             isOpen = false;
             Input.setCursorLocked(true);
             hoveredSlot = -1;
+            boundWorld = null;
+            tablePos = null;
 
             // Drop all items in crafting grid
             for (int i = 0; i < 9; i++) {
@@ -161,14 +193,7 @@ public class CraftingTableScreen {
         if (!isOpen)
             return;
 
-        // Handle ESC to close
-        if (Input.isKeyPressed(GLFW_KEY_ESCAPE)) {
-            close();
-            return;
-        }
-
-        // Handle E to close (E opens inventory, not crafting table)
-        if (Input.isKeyPressed(GLFW_KEY_E)) {
+        if (ContainerScreenControls.shouldClose(inventoryCloseRequested)) {
             close();
             return;
         }
@@ -179,37 +204,119 @@ public class CraftingTableScreen {
 
         hoveredSlot = getSlotAtPosition((int) mx, (int) my);
 
-        // Handle clicks
-        if (Input.isButtonPressed(GLFW_MOUSE_BUTTON_LEFT)) {
-            if (hoveredSlot == -1 && inventory.getCursorItem() != null) {
-                itemsToThrow.add(inventory.getCursorItem());
-                inventory.setCursorItem(null);
-            } else {
-                handleClick(hoveredSlot, false);
-            }
+        if (ContainerKeyboardDrop.dropOne(dropRequested, inventory, dragSlotAccess(), hoveredSlot,
+                itemsToThrow).dropped()) {
+            return;
         }
 
-        // Handle Right-Click (Single & Drag)
-        if (Input.isButtonDown(GLFW_MOUSE_BUTTON_RIGHT)) {
-            if (!isRightClickDragging) {
-                // Just started clicking/dragging
-                isRightClickDragging = true;
-                draggedSlots.clear();
-                handleClick(hoveredSlot, true);
-                if (hoveredSlot != -1)
-                    draggedSlots.add(hoveredSlot);
-            } else {
-                // Continuing to drag
-                if (hoveredSlot != -1 && !draggedSlots.contains(hoveredSlot)) {
-                    handleClick(hoveredSlot, true); // distribute item
-                    draggedSlots.add(hoveredSlot);
-                }
-            }
-        } else {
-            // Released right click
-            isRightClickDragging = false;
-            draggedSlots.clear();
+        if (ContainerHotbarSwap.trySwapWithHotbar(inventory, dragSlotAccess(), hoveredSlot,
+                10 + Inventory.MAIN_SIZE)) {
+            return;
         }
+
+        handleMouseButton(GLFW_MOUSE_BUTTON_LEFT, false);
+        handleMouseButton(GLFW_MOUSE_BUTTON_RIGHT, true);
+    }
+
+    public boolean isStillUsable(Player player) {
+        if (!isOpen) {
+            return false;
+        }
+        if (boundWorld == null || tablePos == null) {
+            return true;
+        }
+        return BlockContainerValidity.sameBlockWithinUseDistance(boundWorld, tablePos, player,
+                BlockType.CRAFTING_TABLE);
+    }
+
+    private void handleMouseButton(int button, boolean rightClick) {
+        if (Input.isButtonPressed(button)) {
+            startMouseDrag(rightClick);
+        }
+        if (isMouseDragging && mouseDragRightClick == rightClick && Input.isButtonDown(button)) {
+            continueMouseDrag();
+        }
+        if (isMouseDragging && mouseDragRightClick == rightClick && Input.isButtonReleased(button)) {
+            finishMouseDrag();
+        }
+    }
+
+    private void startMouseDrag(boolean rightClick) {
+        if (hoveredSlot == -1) {
+            doubleClickTracker.reset();
+            ContainerCursorDrop.dropOutside(inventory, itemsToThrow, rightClick);
+            return;
+        }
+        if (isShiftDown()) {
+            doubleClickTracker.recordClick(hoveredSlot, rightClick);
+            handleClick(hoveredSlot, rightClick);
+            return;
+        }
+        if (doubleClickTracker.isDoubleLeftClick(hoveredSlot, rightClick) && canHandleDoubleClick(hoveredSlot)) {
+            handleDoubleClick(hoveredSlot);
+            return;
+        }
+        ItemStack cursorItem = inventory.getCursorItem();
+        if (ItemStackOps.isEmpty(cursorItem) || !ContainerDragDistributor.canDragInto(dragSlotAccess(), hoveredSlot,
+                cursorItem)) {
+            handleClick(hoveredSlot, rightClick);
+            return;
+        }
+        isMouseDragging = true;
+        mouseDragRightClick = rightClick;
+        dragStartSlot = hoveredSlot;
+        draggedSlots.clear();
+        draggedSlots.add(hoveredSlot);
+    }
+
+    private boolean handleDoubleClick(int slotIndex) {
+        if (!canHandleDoubleClick(slotIndex)) {
+            return false;
+        }
+        return ContainerDoubleClickCollector.collectMatching(dragSlotAccess(), doubleClickCollectSlots(slotIndex),
+                inventory.getCursorItem());
+    }
+
+    private boolean canHandleDoubleClick(int slotIndex) {
+        return !ItemStackOps.isEmpty(inventory.getCursorItem())
+                && (slotIndex >= 0 && slotIndex < 9 || slotIndex >= 10 && slotIndex <= 45);
+    }
+
+    private int[] doubleClickCollectSlots(int clickedSlot) {
+        int[] craftingSlots = ContainerSlotOrder.range(0, 9);
+        int[] playerSlots = ContainerSlotOrder.range(10, 46);
+        return ContainerSlotOrder.clickedGroupFirst(clickedSlot, 0, 9, craftingSlots, playerSlots);
+    }
+
+    private void continueMouseDrag() {
+        ItemStack cursorItem = inventory.getCursorItem();
+        if (hoveredSlot != -1 && !draggedSlots.contains(hoveredSlot)
+                && ContainerDragDistributor.canDragInto(dragSlotAccess(), hoveredSlot, cursorItem)) {
+            draggedSlots.add(hoveredSlot);
+        }
+    }
+
+    private void finishMouseDrag() {
+        if (draggedSlots.size() <= 1) {
+            handleClick(dragStartSlot, mouseDragRightClick);
+        } else {
+            ItemStack cursorItem = inventory.getCursorItem();
+            int moved = ContainerDragDistributor.distribute(dragSlotAccess(), draggedSlots, cursorItem,
+                    mouseDragRightClick);
+            if (moved == 0) {
+                handleClick(dragStartSlot, mouseDragRightClick);
+            } else if (ItemStackOps.isEmpty(cursorItem)) {
+                inventory.setCursorItem(null);
+            }
+        }
+        clearMouseDrag();
+    }
+
+    private void clearMouseDrag() {
+        isMouseDragging = false;
+        mouseDragRightClick = false;
+        dragStartSlot = -1;
+        draggedSlots.clear();
     }
 
     /**
@@ -277,59 +384,28 @@ public class CraftingTableScreen {
         ItemStack slotItem = getItemInSlot(slotIndex);
 
         // --- Handle Shift+Click ---
-        if (Input.isKeyDown(GLFW_KEY_LEFT_SHIFT)) {
+        if (isShiftDown()) {
             if (slotIndex == 9) {
-                // Shift-Click Output: Move to inventory max possible
-                // Loop until ingredients run out or inventory full
-                // Safety limiter to prevent infinite loop
-                for (int i = 0; i < 64; i++) { // Max stack size
-                    ItemStack output = getItemInSlot(9);
-                    if (output == null)
-                        break;
-
-                    // Try to add to inventory
-                    if (!inventory.canAddItem(output)) {
-                        break; // Inventory full
-                    }
-                    inventory.addItem(output);
-                    consumeCraftingIngredients();
-                    // Re-check recipe for next iteration
-                    // getItemInSlot(9) does this via findRecipe3x3
-                }
-            } else if (slotIndex >= 10 && slotIndex <= 45) {
-                // Quick Move Inventory (Hotbar <-> Main)
-                // Logic: 10-36 (Main) -> 37-45 (Hotbar) and vice versa
-                // Implementing simplified logic: just try to move within inventory
-                // For now, let's keep it simple or implement if critical.
-                // User asked for "add shift + click functionality to the crafting table too"
-                // which usually implies handling the OUTPUT slot primarily, but let's see.
-                // Since Inventory class handles add, we can try to remove from slot and add to
-                // inventory?
-                // But inventory.add() auto-merges. We need to be careful not to add to SAME
-                // slot.
-
-                // For now, focusing on Output Shift-Click as requested specifically for
-                // crafting convenience.
-                // Inventory shift-click is defined in InventoryScreen typically.
+                ItemStack[] gridBefore = snapshotCraftingGrid();
+                ItemStack cursorBefore = copyStack(inventory.getCursorItem());
+                int crafted = shiftClickOutput();
+                recordCraftAction(gridBefore, cursorBefore, true, crafted);
+            } else {
+                shiftClick(slotIndex, slotItem);
             }
             return;
         }
 
         // Handle crafting output slot (slot 9)
         if (slotIndex == 9) {
-            if (slotItem == null)
+            ItemStack[] gridBefore = snapshotCraftingGrid();
+            ItemStack cursorBefore = copyStack(inventory.getCursorItem());
+            CraftingRecipe recipe = CraftingRegistry.findRecipe3x3(craftingGrid);
+            if (slotItem == null || recipe == null)
                 return;
 
-            if (cursorItem == null) {
-                // Pick up result
-                inventory.setCursorItem(slotItem);
-                consumeCraftingIngredients();
-            } else if (ItemStackOps.canMerge(cursorItem, slotItem)) {
-                // Stack result onto cursor
-                if (cursorItem.getCount() + slotItem.getCount() <= cursorItem.getMaxStackSize()) {
-                    cursorItem.add(slotItem.getCount());
-                    consumeCraftingIngredients();
-                }
+            if (CraftingGridOps.takeOutputToCursor(inventory, craftingGrid, recipe, itemsToThrow)) {
+                recordCraftAction(gridBefore, cursorBefore, false, 1);
             }
             return;
         }
@@ -393,7 +469,7 @@ public class CraftingTableScreen {
         if (slotIndex >= 0 && slotIndex < 9) {
             return craftingGrid[slotIndex];
         } else if (slotIndex == 9) {
-            CraftingRecipe recipe = CraftingRegistry.findRecipe3x3(getCraftingPattern());
+            CraftingRecipe recipe = CraftingRegistry.findRecipe3x3(craftingGrid);
             return recipe != null ? recipe.getOutput() : null;
         } else if (slotIndex >= 10 && slotIndex <= 36) {
             // Main inventory (10-36 maps to mainInventory 0-26)
@@ -403,6 +479,34 @@ public class CraftingTableScreen {
             return inventory.getHotbar()[slotIndex - 37];
         }
         return null;
+    }
+
+    private boolean isShiftDown() {
+        return Input.isKeyDown(GLFW_KEY_LEFT_SHIFT) || Input.isKeyDown(GLFW_KEY_RIGHT_SHIFT);
+    }
+
+    private int shiftClickOutput() {
+        return CraftingGridOps.quickMoveOutputToInventory(inventory, craftingGrid,
+                () -> CraftingRegistry.findRecipe3x3(craftingGrid), itemsToThrow);
+    }
+
+    private void shiftClick(int slotIndex, ItemStack slotItem) {
+        if (slotItem == null || slotItem.isEmpty()) {
+            return;
+        }
+        if (slotIndex >= 0 && slotIndex < 9) {
+            ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex, playerInventoryShiftClickDestinations());
+            return;
+        }
+        if (slotIndex >= 10 && slotIndex <= 36) {
+            ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex, ContainerSlotOrder.range(37, 46));
+        } else if (slotIndex >= 37 && slotIndex <= 45) {
+            ContainerQuickMove.moveSlot(dragSlotAccess(), slotIndex, ContainerSlotOrder.range(10, 37));
+        }
+    }
+
+    private int[] playerInventoryShiftClickDestinations() {
+        return ContainerSlotOrder.playerInventoryReverse(10, Inventory.MAIN_SIZE, Inventory.HOTBAR_SIZE);
     }
 
     private void setItemInSlot(int slotIndex, ItemStack item) {
@@ -415,25 +519,29 @@ public class CraftingTableScreen {
         }
     }
 
-    private ItemType[] getCraftingPattern() {
-        ItemType[] pattern = new ItemType[9];
-        for (int i = 0; i < 9; i++) {
-            pattern[i] = (craftingGrid[i] != null && !craftingGrid[i].isEmpty())
-                    ? craftingGrid[i].getType()
-                    : null;
-        }
-        return pattern;
-    }
-
-    private void consumeCraftingIngredients() {
-        for (int i = 0; i < 9; i++) {
-            if (craftingGrid[i] != null && !craftingGrid[i].isEmpty()) {
-                craftingGrid[i].remove(1);
-                if (craftingGrid[i].isEmpty()) {
-                    craftingGrid[i] = null;
-                }
+    private ContainerDragDistributor.Slots dragSlotAccess() {
+        return new ContainerDragDistributor.Slots() {
+            @Override
+            public ItemStack get(int slotIndex) {
+                return getItemInSlot(slotIndex);
             }
-        }
+
+            @Override
+            public void set(int slotIndex, ItemStack stack) {
+                setItemInSlot(slotIndex, stack);
+            }
+
+            @Override
+            public boolean canPlace(int slotIndex, ItemStack stack) {
+                return slotIndex >= 0 && slotIndex < 9
+                        || slotIndex >= 10 && slotIndex <= 45;
+            }
+
+            @Override
+            public int maxStackSize(int slotIndex, ItemStack stack) {
+                return stack.getMaxStackSize();
+            }
+        };
     }
 
     // Getters for renderer
@@ -455,5 +563,39 @@ public class CraftingTableScreen {
 
     public Inventory getInventory() {
         return inventory;
+    }
+
+    public List<CraftAction> drainCraftActions() {
+        List<CraftAction> actions = new ArrayList<>(craftActions);
+        craftActions.clear();
+        return actions;
+    }
+
+    public void applyRemoteCraftingGrid(int x, int y, int z, ItemStack[] grid) {
+        if (!isOpen || tablePos == null || tablePos.x != x || tablePos.y != y || tablePos.z != z
+                || grid == null) {
+            return;
+        }
+        for (int i = 0; i < craftingGrid.length; i++) {
+            craftingGrid[i] = i < grid.length && grid[i] != null ? grid[i].copy() : null;
+        }
+    }
+
+    private ItemStack[] snapshotCraftingGrid() {
+        ItemStack[] snapshot = new ItemStack[craftingGrid.length];
+        for (int i = 0; i < snapshot.length; i++) {
+            snapshot[i] = craftingGrid[i] == null ? null : craftingGrid[i].copy();
+        }
+        return snapshot;
+    }
+
+    private ItemStack copyStack(ItemStack stack) {
+        return stack == null ? null : stack.copy();
+    }
+
+    private void recordCraftAction(ItemStack[] gridBefore, ItemStack cursorBefore, boolean quickMove, int crafted) {
+        if (crafted > 0) {
+            craftActions.add(new CraftAction(3, quickMove, crafted, gridBefore, cursorBefore, tablePos));
+        }
     }
 }

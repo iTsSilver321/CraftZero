@@ -1,6 +1,7 @@
 package com.craftzero.entity;
 
 import com.craftzero.inventory.ItemStack;
+import com.craftzero.inventory.ItemType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -27,6 +28,8 @@ public class ChestMinecartEntity extends MinecartEntity {
             for (ItemStack stack : getDrops()) {
                 world.spawnThrownStack(getX(), getY() + 0.25f, getZ(), stack, 0.0f, 0.15f, 0.0f);
             }
+            world.spawnThrownStack(getX(), getY() + 0.25f, getZ(),
+                    new ItemStack(ItemType.CHEST, 1), 0.0f, 0.15f, 0.0f);
         }
         super.dropAsItem();
     }

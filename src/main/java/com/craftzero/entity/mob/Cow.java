@@ -1,7 +1,9 @@
 package com.craftzero.entity.mob;
 
+import com.craftzero.entity.Entity;
 import com.craftzero.entity.ai.*;
 import com.craftzero.inventory.ItemType;
+import com.craftzero.world.WorldSoundEvent;
 
 /**
  * Cow mob - passive, drops beef and leather.
@@ -30,6 +32,38 @@ public class Cow extends Mob {
     public void dropLoot() {
         dropItems(isOnFire() ? ItemType.STEAK : ItemType.RAW_BEEF, 1, 3);
         dropItems(ItemType.LEATHER, 0, 2);
+    }
+
+    @Override
+    protected String getAmbientSoundId() {
+        return WorldSoundEvent.COW_IDLE;
+    }
+
+    @Override
+    protected void onHurt(float amount, Entity source) {
+        super.onHurt(amount, source);
+        playMobHurtSound(WorldSoundEvent.COW_HURT);
+    }
+
+    @Override
+    protected void onDeath() {
+        playMobDeathSound(WorldSoundEvent.COW_DEATH);
+        super.onDeath();
+    }
+
+    @Override
+    protected boolean isBreedingItem(ItemType itemType) {
+        return itemType == ItemType.WHEAT;
+    }
+
+    @Override
+    protected boolean isBreedingCompatible(Mob mate) {
+        return mate instanceof Cow && mate.getClass() == getClass();
+    }
+
+    @Override
+    protected Mob createBreedingChild(Mob mate) {
+        return new Cow();
     }
 
     @Override

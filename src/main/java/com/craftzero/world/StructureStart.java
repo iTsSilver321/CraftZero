@@ -3,6 +3,7 @@ package com.craftzero.world;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Random;
 
 public final class StructureStart {
     private final StructureType type;
@@ -25,9 +26,17 @@ public final class StructureStart {
     }
 
     public void place(World world, Chunk chunk, long seed, int targetChunkX, int targetChunkZ) {
+        place(world, chunk, seed, targetChunkX, targetChunkZ, null);
+    }
+
+    public void place(World world, Chunk chunk, long seed, int targetChunkX, int targetChunkZ, Random placementRandom) {
         for (StructurePiece piece : pieces) {
             if (piece.intersectsChunk(targetChunkX, targetChunkZ)) {
-                piece.place(world, chunk, seed, targetChunkX, targetChunkZ);
+                if (placementRandom == null) {
+                    piece.place(world, chunk, seed, targetChunkX, targetChunkZ);
+                } else {
+                    piece.place(world, chunk, seed, targetChunkX, targetChunkZ, placementRandom);
+                }
             }
         }
     }

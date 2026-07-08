@@ -65,4 +65,14 @@ public class SheepFurModel extends QuadrupedModel {
         public static SheepFurModel create() {
                 return new SheepFurModel();
         }
+
+        public void animate(float limbSwing, float limbSwingAmount, float ageInTicks,
+                        float grassEatingHeadOffsetScale, float grassEatingHeadPitch) {
+                super.animate(limbSwing, limbSwingAmount, ageInTicks);
+                float offset = Math.max(0.0f, Math.min(1.0f, grassEatingHeadOffsetScale));
+                head.setOffset(0, 18.0f - 6.0f * offset, -5.9f);
+                if (offset > 0.0f) {
+                        head.setRotation(grassEatingHeadPitch, 0, 0);
+                }
+        }
 }

@@ -2,8 +2,10 @@ package com.craftzero.world.tile;
 
 import com.craftzero.inventory.ItemStack;
 import com.craftzero.inventory.ItemStackOps;
+import com.craftzero.inventory.ItemType;
 import com.craftzero.world.RedstoneEngine;
 import com.craftzero.world.World;
+import com.craftzero.world.WorldSoundEvent;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,7 +15,6 @@ public class DispenserTileEntity extends TileEntity {
     public static final int SIZE = 9;
 
     private final ItemStack[] inventory = new ItemStack[SIZE];
-    private final Random random = new Random();
 
     public DispenserTileEntity(int x, int y, int z) {
         super(x, y, z);
@@ -29,8 +30,12 @@ public class DispenserTileEntity extends TileEntity {
     }
 
     public void dispense(World world) {
-        int slot = chooseFilledSlot();
+        if (world == null) {
+            return;
+        }
+        int slot = chooseFilledSlot(world.getRandom());
         if (slot < 0) {
+            playDispenseClick(world, 1.2f);
             return;
         }
         ItemStack one = ItemStackOps.splitOne(inventory[slot]);
@@ -38,25 +43,52 @@ public class DispenserTileEntity extends TileEntity {
             inventory[slot] = null;
         }
         if (one == null || one.isEmpty()) {
+            playDispenseClick(world, 1.2f);
             return;
         }
+        playDispenseEffect(world, one);
         BlockPos pos = getPos();
         int metadata = world.getBlockMetadataIfLoaded(pos.x(), pos.y(), pos.z(), 0);
         RedstoneEngine.dropDispenserItem(world, pos.x(), pos.y(), pos.z(), metadata, one);
+        world.spawnDispenserSmokeParticles(pos.x(), pos.y(), pos.z(), metadata);
         markDirty();
     }
 
-    private int chooseFilledSlot() {
-        List<Integer> slots = new ArrayList<>();
+    private void playDispenseEffect(World world, ItemStack stack) {
+        if (usesProjectileDispenseEffect(stack)) {
+            BlockPos pos = getPos();
+            world.playSound(WorldSoundEvent.BOW,
+                    pos.x() + 0.5f, pos.y() + 0.5f, pos.z() + 0.5f, 1.0f, 1.2f);
+        } else {
+            playDispenseClick(world, 1.0f);
+        }
+    }
+
+    private boolean usesProjectileDispenseEffect(ItemStack stack) {
+        ItemType type = stack.getType();
+        return type == ItemType.ARROW
+                || type == ItemType.EGG
+                || type == ItemType.SNOWBALL
+                || (type == ItemType.POTION && stack.getPotionData() != null && stack.getPotionData().splash());
+    }
+
+    private void playDispenseClick(World world, float pitch) {
+        BlockPos pos = getPos();
+        world.playSound(WorldSoundEvent.DISPENSER_CLICK,
+                pos.x() + 0.5f, pos.y() + 0.5f, pos.z() + 0.5f, 1.0f, pitch);
+    }
+
+    private int chooseFilledSlot(Random random) {
+        int slot = -1;
+        int seen = 1;
         for (int i = 0; i < inventory.length; i++) {
             if (inventory[i] != null && !inventory[i].isEmpty()) {
-                slots.add(i);
+                if (random.nextInt(seen++) == 0) {
+                    slot = i;
+                }
             }
         }
-        if (slots.isEmpty()) {
-            return -1;
-        }
-        return slots.get(random.nextInt(slots.size()));
+        return slot;
     }
 
     @Override

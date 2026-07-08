@@ -3,165 +3,184 @@ package com.craftzero.world;
 import java.util.Random;
 
 /**
- * Handles generating cave tunnels using a "worm" / runner algorithm.
- * Simulates worms starting in nearby chunks to carve continuous tunnels.
- * Enhanced for Minecraft-like generation: "tunnels inside tunnels", surface
- * openings, and branching.
+ * Release-era overworld cave carver adapted from the old MapGenCaves flow.
  */
 public class CaveGenerator {
+    private static final int RANGE = 8;
+    private static final int MAX_CARVE_Y = 120;
+    private static final int LAVA_Y = 10;
+    private static final float SOURCE_PI = 3.141593F;
+    private static final float SOURCE_HALF_PI = 1.570796F;
 
-    // How far out to check for worm start points
-    private static final int SEARCH_RADIUS = 2;
+    private final Random rand = new Random();
 
-    // Chance a chunk starts a cave system (approx 1 in 10 for denser caves)
-    private static final int CAVE_CHANCE = 10;
-
-    private static final int SEA_LEVEL = ReleaseOneWorldGenerator.SEA_LEVEL;
-    private static final int LAVA_LEVEL = ReleaseOneWorldGenerator.LAVA_LEVEL;
-
-    /**
-     * Carve caves into the given chunk.
-     */
     public void generate(Chunk chunk, long worldSeed) {
         int chunkX = chunk.getX();
         int chunkZ = chunk.getZ();
+        rand.setSeed(worldSeed);
+        long xSeed = rand.nextLong();
+        long zSeed = rand.nextLong();
 
-        // Iterate over nearby chunks to see if a worm starts there and reaches us
-        for (int ox = chunkX - SEARCH_RADIUS; ox <= chunkX + SEARCH_RADIUS; ox++) {
-            for (int oz = chunkZ - SEARCH_RADIUS; oz <= chunkZ + SEARCH_RADIUS; oz++) {
-
-                // Seed random based on ORIGIN chunk coordinates
-                long seed = worldSeed + (long) ox * 341873128712L + (long) oz * 132897987541L;
-                Random rand = new Random(seed);
-
-                // Chance to start a cave system here
-                if (rand.nextInt(CAVE_CHANCE) == 0) {
-
-                    // "Nodes" or main worms in this system
-                    int numWorms = rand.nextInt(3) + 1; // 1 to 3 main tunnel systems
-
-                    for (int i = 0; i < numWorms; i++) {
-                        // Start position
-                        double x = ox * Chunk.WIDTH + rand.nextInt(Chunk.WIDTH);
-                        double z = oz * Chunk.DEPTH + rand.nextInt(Chunk.DEPTH);
-
-                        // Start height logic:
-                        // 1. Surface caves (openings) - High up
-                        // 2. Deep caves - Low down
-                        double y;
-                        if (rand.nextInt(4) == 0) {
-                            // 25% chance for surface start (attempt to break ground)
-                            y = rand.nextInt(40) + 60; // 60-100
-                        } else {
-                            // 75% chance for deep start
-                            y = rand.nextInt(50) + 8; // 8-58
-                        }
-
-                        // Initial direction
-                        float yaw = rand.nextFloat() * (float) Math.PI * 2.0f;
-                        float pitch = (rand.nextFloat() - 0.5f) * 0.5f;
-
-                        // Initial size (vary slightly)
-                        float radius = rand.nextFloat() * 1.5f + 1.5f; // 1.5 to 3.0 radius
-
-                        // Length
-                        int length = rand.nextInt(60) + 60; // 60-120 blocks
-
-                        // Start with branch depth 0
-                        runWorm(chunk, rand, x, y, z, yaw, pitch, length, radius, 0);
-                    }
-                }
+        for (int originX = chunkX - RANGE; originX <= chunkX + RANGE; originX++) {
+            for (int originZ = chunkZ - RANGE; originZ <= chunkZ + RANGE; originZ++) {
+                rand.setSeed((long) originX * xSeed ^ (long) originZ * zSeed ^ worldSeed);
+                recursiveGenerate(chunk, originX, originZ, chunkX, chunkZ);
             }
         }
     }
 
-    /**
-     * Simulates the worm runner recursively.
-     */
-    private void runWorm(Chunk targetChunk, Random rand, double x, double y, double z,
-            float yaw, float pitch, int length, float radius, int branchDepth) {
+    protected void generateLargeCaveNode(long seed, Chunk chunk, int targetChunkX, int targetChunkZ,
+            double x, double y, double z) {
+        generateCaveNode(seed, chunk, targetChunkX, targetChunkZ, x, y, z,
+                1.0F + rand.nextFloat() * 6.0F, 0.0F, 0.0F, -1, -1, 0.5D);
+    }
 
-        int chunkX = targetChunk.getX();
-        int chunkZ = targetChunk.getZ();
+    protected void generateCaveNode(long seed, Chunk chunk, int targetChunkX, int targetChunkZ,
+            double x, double y, double z, float radius, float yaw, float pitch,
+            int step, int maxSteps, double verticalScale) {
+        double targetCenterX = targetChunkX * 16 + 8;
+        double targetCenterZ = targetChunkZ * 16 + 8;
+        float yawVelocity = 0.0F;
+        float pitchVelocity = 0.0F;
+        Random random = new Random(seed);
 
-        // Bounds check
-        int minX = chunkX * Chunk.WIDTH;
-        int maxX = minX + Chunk.WIDTH;
-        int minZ = chunkZ * Chunk.DEPTH;
-        int maxZ = minZ + Chunk.DEPTH;
+        if (maxSteps <= 0) {
+            int fullLength = RANGE * 16 - 16;
+            maxSteps = fullLength - random.nextInt(fullLength / 4);
+        }
 
-        for (int step = 0; step < length; step++) {
-            // Move
-            float horizontalScale = (float) Math.cos(pitch);
-            x += Math.cos(yaw) * horizontalScale;
-            z += Math.sin(yaw) * horizontalScale;
-            y += Math.sin(pitch);
+        boolean largeNode = false;
+        if (step == -1) {
+            step = maxSteps / 2;
+            largeNode = true;
+        }
 
-            // Turn and curve
-            if (rand.nextBoolean()) {
-                pitch *= 0.9f; // Gravity flatten
-                pitch += (rand.nextFloat() - rand.nextFloat()) * 0.2f;
-                yaw += (rand.nextFloat() - rand.nextFloat()) * 0.4f;
+        int splitStep = random.nextInt(maxSteps / 2) + maxSteps / 4;
+        boolean slowPitch = random.nextInt(6) == 0;
+
+        for (; step < maxSteps; step++) {
+            double horizontalRadius = 1.5D
+                    + ReleaseOneMath.sin((float) step * SOURCE_PI / (float) maxSteps) * radius;
+            double verticalRadius = horizontalRadius * verticalScale;
+            float cosPitch = ReleaseOneMath.cos(pitch);
+            float sinPitch = ReleaseOneMath.sin(pitch);
+            x += ReleaseOneMath.cos(yaw) * cosPitch;
+            y += sinPitch;
+            z += ReleaseOneMath.sin(yaw) * cosPitch;
+
+            pitch *= slowPitch ? 0.92F : 0.7F;
+            pitch += pitchVelocity * 0.1F;
+            yaw += yawVelocity * 0.1F;
+            pitchVelocity *= 0.9F;
+            yawVelocity *= 0.75F;
+            pitchVelocity += (random.nextFloat() - random.nextFloat()) * random.nextFloat() * 2.0F;
+            yawVelocity += (random.nextFloat() - random.nextFloat()) * random.nextFloat() * 4.0F;
+
+            if (!largeNode && step == splitStep && radius > 1.0F && maxSteps > 0) {
+                generateCaveNode(random.nextLong(), chunk, targetChunkX, targetChunkZ, x, y, z,
+                        random.nextFloat() * 0.5F + 0.5F, yaw - SOURCE_HALF_PI,
+                        pitch / 3.0F, step, maxSteps, 1.0D);
+                generateCaveNode(random.nextLong(), chunk, targetChunkX, targetChunkZ, x, y, z,
+                        random.nextFloat() * 0.5F + 0.5F, yaw + SOURCE_HALF_PI,
+                        pitch / 3.0F, step, maxSteps, 1.0D);
+                return;
             }
 
-            // Branching Logic ("Tunnels inside tunnels")
-            // Chance to spawn a new branch at this node
-            // Only branch if we haven't gone too deep (limit 1-2 levels)
-            // And mostly in the middle of the tunnel life
-            if (branchDepth < 1 && step > length / 4 && step < length * 3 / 4 && rand.nextInt(20) == 0) {
-                // 5% chance per step in middle of worm to branch
-                float branchYaw = yaw + (rand.nextFloat() * 2f - 1f) * 1.5f; // Sharp turn
-                float branchPitch = (rand.nextFloat() - 0.5f) * 0.5f;
-                float branchRadius = radius * (0.8f + rand.nextFloat() * 0.4f);
-                int branchLength = rand.nextInt(length / 2) + length / 2;
-
-                // Recurse!
-                runWorm(targetChunk, rand, x, y, z, branchYaw, branchPitch, branchLength, branchRadius,
-                        branchDepth + 1);
-            }
-
-            // Radius variation (rooms)
-            float stepRadius = radius * (1.0f + (float) Math.sin(step * 0.1f) * 0.3f);
-
-            // Optimization: rough bounds check
-            if (x < minX - stepRadius || x > maxX + stepRadius || z < minZ - stepRadius || z > maxZ + stepRadius) {
+            if (!largeNode && random.nextInt(4) == 0) {
                 continue;
             }
 
-            carveSphere(targetChunk, (int) x, (int) y, (int) z, stepRadius);
+            double dx = x - targetCenterX;
+            double dz = z - targetCenterZ;
+            double remaining = maxSteps - step;
+            double reach = radius + 2.0F + 16.0F;
+            if (dx * dx + dz * dz - remaining * remaining > reach * reach) {
+                return;
+            }
+
+            if (x < targetCenterX - 16.0D - horizontalRadius * 2.0D
+                    || z < targetCenterZ - 16.0D - horizontalRadius * 2.0D
+                    || x > targetCenterX + 16.0D + horizontalRadius * 2.0D
+                    || z > targetCenterZ + 16.0D + horizontalRadius * 2.0D) {
+                continue;
+            }
+
+            carveEllipsoid(chunk, targetChunkX, targetChunkZ, x, y, z, horizontalRadius, verticalRadius);
+
+            if (largeNode) {
+                break;
+            }
         }
     }
 
-    private void carveSphere(Chunk chunk, int centerX, int centerY, int centerZ, float radius) {
-        int r = (int) Math.ceil(radius);
-        float radiusSq = radius * radius;
+    private void recursiveGenerate(Chunk chunk, int originChunkX, int originChunkZ,
+            int targetChunkX, int targetChunkZ) {
+        int nodeCount = rand.nextInt(rand.nextInt(rand.nextInt(40) + 1) + 1);
+        if (rand.nextInt(15) != 0) {
+            nodeCount = 0;
+        }
 
-        for (int x = centerX - r; x <= centerX + r; x++) {
-            for (int y = centerY - r; y <= centerY + r; y++) {
-                for (int z = centerZ - r; z <= centerZ + r; z++) {
+        for (int node = 0; node < nodeCount; node++) {
+            double x = originChunkX * 16 + rand.nextInt(16);
+            double y = rand.nextInt(rand.nextInt(MAX_CARVE_Y) + 8);
+            double z = originChunkZ * 16 + rand.nextInt(16);
+            int branches = 1;
 
-                    double dx = x - centerX;
-                    double dy = y - centerY;
-                    double dz = z - centerZ;
+            if (rand.nextInt(4) == 0) {
+                generateLargeCaveNode(rand.nextLong(), chunk, targetChunkX, targetChunkZ, x, y, z);
+                branches += rand.nextInt(4);
+            }
 
-                    if (dx * dx + dy * dy + dz * dz < radiusSq) {
-                        int localX = x - (chunk.getX() * Chunk.WIDTH);
-                        int localZ = z - (chunk.getZ() * Chunk.DEPTH);
+            for (int branch = 0; branch < branches; branch++) {
+                float yaw = rand.nextFloat() * SOURCE_PI * 2.0F;
+                float pitch = ((rand.nextFloat() - 0.5F) * 2.0F) / 8.0F;
+                float radius = rand.nextFloat() * 2.0F + rand.nextFloat();
+                if (rand.nextInt(10) == 0) {
+                    radius *= rand.nextFloat() * rand.nextFloat() * 3.0F + 1.0F;
+                }
+                generateCaveNode(rand.nextLong(), chunk, targetChunkX, targetChunkZ,
+                        x, y, z, radius, yaw, pitch, 0, 0, 1.0D);
+            }
+        }
+    }
 
-                        if (localX >= 0 && localX < Chunk.WIDTH &&
-                                localZ >= 0 && localZ < Chunk.DEPTH &&
-                                y >= 0 && y < Chunk.HEIGHT) {
+    private void carveEllipsoid(Chunk chunk, int chunkX, int chunkZ,
+            double x, double y, double z, double horizontalRadius, double verticalRadius) {
+        int minX = clamp((int) Math.floor(x - horizontalRadius) - chunkX * 16 - 1, 0, 16);
+        int maxX = clamp((int) Math.floor(x + horizontalRadius) - chunkX * 16 + 1, 0, 16);
+        int minY = clamp((int) Math.floor(y - verticalRadius) - 1, 1, MAX_CARVE_Y);
+        int maxY = clamp((int) Math.floor(y + verticalRadius) + 1, 1, MAX_CARVE_Y);
+        int minZ = clamp((int) Math.floor(z - horizontalRadius) - chunkZ * 16 - 1, 0, 16);
+        int maxZ = clamp((int) Math.floor(z + horizontalRadius) - chunkZ * 16 + 1, 0, 16);
 
-                            BlockType current = chunk.getBlock(localX, y, localZ);
+        if (touchesWater(chunk, minX, maxX, minY, maxY, minZ, maxZ)) {
+            return;
+        }
 
-                            if (isProtectedFromCarving(chunk, localX, y, localZ, current)) {
-                                continue;
-                            }
-
-                            if (y < LAVA_LEVEL) {
-                                chunk.setBlock(localX, y, localZ, BlockType.LAVA);
-                            } else if (current != BlockType.AIR && !current.isLava()) {
-                                chunk.setBlock(localX, y, localZ, BlockType.AIR);
+        for (int localX = minX; localX < maxX; localX++) {
+            double normX = ((localX + chunkX * 16) + 0.5D - x) / horizontalRadius;
+            for (int localZ = minZ; localZ < maxZ; localZ++) {
+                double normZ = ((localZ + chunkZ * 16) + 0.5D - z) / horizontalRadius;
+                if (normX * normX + normZ * normZ >= 1.0D) {
+                    continue;
+                }
+                boolean foundGrass = false;
+                for (int yy = maxY - 1; yy >= minY; yy--) {
+                    double normY = (yy + 0.5D - y) / verticalRadius;
+                    if (normY <= -0.7D || normX * normX + normY * normY + normZ * normZ >= 1.0D) {
+                        continue;
+                    }
+                    BlockType block = chunk.getBlock(localX, yy, localZ);
+                    if (block == BlockType.GRASS) {
+                        foundGrass = true;
+                    }
+                    if (isCarvable(block)) {
+                        if (yy < LAVA_Y) {
+                            chunk.setBlock(localX, yy, localZ, BlockType.LAVA);
+                        } else {
+                            chunk.setBlock(localX, yy, localZ, BlockType.AIR);
+                            if (foundGrass && yy > 0 && chunk.getBlock(localX, yy - 1, localZ) == BlockType.DIRT) {
+                                chunk.setBlock(localX, yy - 1, localZ, BlockType.GRASS);
                             }
                         }
                     }
@@ -170,29 +189,32 @@ public class CaveGenerator {
         }
     }
 
-    private boolean isProtectedFromCarving(Chunk chunk, int localX, int y, int localZ, BlockType current) {
-        if (current == BlockType.BEDROCK || current.isWater() || current == BlockType.ICE) {
-            return true;
-        }
-        if (y <= SEA_LEVEL) {
-            if (hasWaterAbove(chunk, localX, y, localZ)) {
-                return true;
+    private static boolean touchesWater(Chunk chunk, int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
+        for (int localX = minX; localX < maxX; localX++) {
+            for (int localZ = minZ; localZ < maxZ; localZ++) {
+                for (int y = maxY + 1; y >= minY - 1; y--) {
+                    if (y < 0 || y >= Chunk.HEIGHT) {
+                        continue;
+                    }
+                    BlockType block = chunk.getBlock(localX, y, localZ);
+                    if (block.isWater()) {
+                        return true;
+                    }
+                    if (y != minY - 1 && localX != minX && localX != maxX - 1
+                            && localZ != minZ && localZ != maxZ - 1) {
+                        y = minY;
+                    }
+                }
             }
         }
         return false;
     }
 
-    private boolean hasWaterAbove(Chunk chunk, int localX, int y, int localZ) {
-        int maxY = Math.min(Chunk.HEIGHT - 1, SEA_LEVEL + 4);
-        for (int checkY = y + 1; checkY <= maxY; checkY++) {
-            BlockType above = chunk.getBlock(localX, checkY, localZ);
-            if (above.isWater() || above == BlockType.ICE) {
-                return true;
-            }
-            if (above.isSolid() && checkY > SEA_LEVEL) {
-                return false;
-            }
-        }
-        return false;
+    private static boolean isCarvable(BlockType block) {
+        return block == BlockType.STONE || block == BlockType.DIRT || block == BlockType.GRASS;
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
     }
 }

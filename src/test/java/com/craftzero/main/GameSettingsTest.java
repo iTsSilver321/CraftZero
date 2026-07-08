@@ -51,14 +51,19 @@ class GameSettingsTest {
         Files.write(options, List.of(
                 "playerName:Alex",
                 "gameMode:creative",
-                "difficulty:hard",
-                "music:0.25",
+                "difficulty:3",
+                "music:false",
                 "sound:2.0",
-                "renderDistance:3",
+                "viewDistance:3",
                 "fancyGraphics:false",
+                "fpsLimit:2",
+                "bobView:false",
+                "ao:false",
+                "anaglyph3d:true",
                 "fullscreen:true",
-                "texturePack:Retro Pack",
+                "skin:Retro Pack",
                 "lastServer:localhost:25565",
+                "lang:en_GB",
                 "key_key.forward:73",
                 "key_key.attack:-101",
                 "moddedOption:kept"));
@@ -68,19 +73,33 @@ class GameSettingsTest {
         assertEquals("Alex", loaded.getPlayerName());
         assertSame(GameMode.CREATIVE, loaded.getGameMode());
         assertSame(Difficulty.HARD, loaded.getDifficulty());
-        assertEquals(0.25f, loaded.getMusicVolume(), 0.0001f);
+        assertEquals(0.0f, loaded.getMusicVolume(), 0.0001f);
         assertEquals(1.0f, loaded.getSoundVolume(), 0.0001f);
         assertEquals(GameSettings.MIN_RENDER_DISTANCE_CHUNKS, loaded.getRenderDistance());
         assertFalse(loaded.isFancyGraphics());
+        assertFalse(loaded.isViewBobbing());
+        assertFalse(loaded.isSmoothLighting());
+        assertEquals(40, loaded.getFramerateLimit());
+        assertTrue(loaded.isAnaglyph3d());
         assertTrue(loaded.isFullscreen());
         assertEquals("Retro Pack", loaded.getSelectedTexturePack());
         assertEquals("localhost:25565", loaded.getLastServer());
+        assertEquals("en_GB", loaded.getLanguage());
         assertEquals(73, loaded.getKeyBinding(GameSettings.KeyBinding.FORWARD));
         assertEquals(-101, loaded.getKeyBinding(GameSettings.KeyBinding.ATTACK));
         assertEquals("kept", loaded.getUnknownOptions().get("moddedOption"));
 
         Path saved = tempDir.resolve("saved-options.txt");
         loaded.save(saved);
+        List<String> savedLines = Files.readAllLines(saved);
+        assertTrue(savedLines.contains("difficulty:3"));
+        assertTrue(savedLines.contains("viewDistance:3"));
+        assertTrue(savedLines.contains("fpsLimit:2"));
+        assertTrue(savedLines.contains("bobView:false"));
+        assertTrue(savedLines.contains("ao:false"));
+        assertTrue(savedLines.contains("anaglyph3d:true"));
+        assertTrue(savedLines.contains("skin:Retro Pack"));
+        assertTrue(savedLines.contains("lang:en_GB"));
         GameSettings restored = GameSettings.load(saved);
 
         assertEquals("Alex", restored.getPlayerName());
@@ -88,26 +107,27 @@ class GameSettingsTest {
         assertSame(Difficulty.HARD, restored.getDifficulty());
         assertEquals(GameSettings.MIN_RENDER_DISTANCE_CHUNKS, restored.getRenderDistance());
         assertEquals(73, restored.getKeyBinding(GameSettings.KeyBinding.FORWARD));
+        assertEquals(40, restored.getFramerateLimit());
         assertEquals("kept", restored.getUnknownOptions().get("moddedOption"));
     }
 
     @Test
-    @DisplayName("Render distance should save chunk counts and load legacy enum options")
+    @DisplayName("Render distance should save Release presets and load chunk values")
     void renderDistanceLoadsLegacyAndChunkValues() throws Exception {
         Path legacy = tempDir.resolve("legacy-options.txt");
-        Files.write(legacy, List.of("renderDistance:1"));
-        assertEquals(8, GameSettings.load(legacy).getRenderDistance());
+        Files.write(legacy, List.of("viewDistance:1"));
+        assertEquals(GameSettings.DEFAULT_RENDER_DISTANCE_CHUNKS, GameSettings.load(legacy).getRenderDistance());
 
         Path chunks = tempDir.resolve("chunk-options.txt");
         Files.write(chunks, List.of(
                 "renderDistance:3",
                 "renderDistanceChunks:16"));
-        assertEquals(16, GameSettings.load(chunks).getRenderDistance());
+        assertEquals(GameSettings.MAX_RENDER_DISTANCE_CHUNKS, GameSettings.load(chunks).getRenderDistance());
 
         GameSettings settings = GameSettings.defaults();
         settings.setRenderDistance(99);
-        assertEquals(16, settings.getRenderDistance());
+        assertEquals(GameSettings.MAX_RENDER_DISTANCE_CHUNKS, settings.getRenderDistance());
         settings.setRenderDistance(-5);
-        assertEquals(2, settings.getRenderDistance());
+        assertEquals(GameSettings.MIN_RENDER_DISTANCE_CHUNKS, settings.getRenderDistance());
     }
 }

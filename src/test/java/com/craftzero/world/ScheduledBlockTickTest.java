@@ -84,4 +84,22 @@ class ScheduledBlockTickTest {
             world.cleanup();
         }
     }
+
+    @Test
+    @DisplayName("Block-change fluid probes should not synchronously generate unloaded neighbor chunks")
+    void blockChangeFluidProbesDoNotGenerateNeighborChunks() {
+        World world = new World(25L, WorldGenerator.LEGACY_CRAFTZERO);
+        try {
+            Chunk chunk = world.getChunk(0, 0);
+            chunk.setState(Chunk.ChunkState.GENERATED);
+
+            world.setBlock(15, 64, 0, BlockType.STONE, 0);
+
+            assertSame(BlockType.STONE, chunk.getBlock(15, 64, 0));
+            assertNull(world.getLoadedChunk(1, 0));
+            assertNull(world.getLoadedChunk(0, -1));
+        } finally {
+            world.cleanup();
+        }
+    }
 }

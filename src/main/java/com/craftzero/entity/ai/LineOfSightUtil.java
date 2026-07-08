@@ -25,16 +25,21 @@ public class LineOfSightUtil {
     public static boolean hasLineOfSight(World world,
             float x1, float y1, float z1,
             float x2, float y2, float z2) {
-        if (world == null)
+        if (world == null || !allFinite(x1, y1, z1, x2, y2, z2)) {
             return false;
+        }
 
         float dx = x2 - x1;
         float dy = y2 - y1;
         float dz = z2 - z1;
         float distance = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-        if (distance < 0.1f)
+        if (!Float.isFinite(distance)) {
+            return false;
+        }
+        if (distance < 0.1f) {
             return true; // Same position
+        }
 
         // Normalize direction
         dx /= distance;
@@ -79,8 +84,9 @@ public class LineOfSightUtil {
      * @return true if position is safe (ground nearby)
      */
     public static boolean isPositionSafe(World world, float x, float y, float z, int maxFallHeight) {
-        if (world == null)
+        if (world == null || !allFinite(x, y, z)) {
             return false;
+        }
 
         int bx = (int) Math.floor(x);
         int by = (int) Math.floor(y);
@@ -110,6 +116,9 @@ public class LineOfSightUtil {
      */
     public static boolean isCliffAhead(World world, float x, float y, float z,
             float yaw, float checkDistance) {
+        if (world == null || !allFinite(x, y, z, yaw, checkDistance)) {
+            return true;
+        }
         float rad = (float) Math.toRadians(yaw);
         float dx = (float) Math.sin(rad) * checkDistance;
         float dz = -(float) Math.cos(rad) * checkDistance;
@@ -133,8 +142,17 @@ public class LineOfSightUtil {
      */
     public static float findSafeDirection(World world, float x, float y, float z,
             float preferredYaw) {
+        return findSafeDirection(world, x, y, z, preferredYaw, 1.5f);
+    }
+
+    public static float findSafeDirection(World world, float x, float y, float z,
+            float preferredYaw, float checkDistance) {
+        if (world == null || !allFinite(x, y, z, preferredYaw)) {
+            return preferredYaw;
+        }
+        float distance = Math.max(0.5f, checkDistance);
         // Check preferred direction first
-        if (!isCliffAhead(world, x, y, z, preferredYaw, 1.5f)) {
+        if (!isCliffAhead(world, x, y, z, preferredYaw, distance)) {
             return preferredYaw;
         }
 
@@ -142,12 +160,21 @@ public class LineOfSightUtil {
         float[] offsets = { 45, -45, 90, -90, 135, -135, 180 };
         for (float offset : offsets) {
             float testYaw = preferredYaw + offset;
-            if (!isCliffAhead(world, x, y, z, testYaw, 1.5f)) {
+            if (!isCliffAhead(world, x, y, z, testYaw, distance)) {
                 return testYaw;
             }
         }
 
         // No safe direction - return preferred (mob will stop)
         return preferredYaw;
+    }
+
+    private static boolean allFinite(float... values) {
+        for (float value : values) {
+            if (!Float.isFinite(value)) {
+                return false;
+            }
+        }
+        return true;
     }
 }

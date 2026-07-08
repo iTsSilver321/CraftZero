@@ -77,6 +77,23 @@ class ItemStackTest {
     }
 
     @Test
+    @DisplayName("Maps should preserve Release-era item damage identity")
+    void mapsPreserveItemDamageIdentity() {
+        ItemStack blankMap = new ItemStack(ItemType.MAP, 1);
+        assertEquals(-1, blankMap.getDurability());
+        assertFalse(blankMap.isDamageable());
+        assertTrue(blankMap.usesItemDamageIdentity());
+
+        ItemStack filledMap = new ItemStack(ItemType.MAP, 1, 7);
+        ItemStack copy = filledMap.copy();
+
+        assertEquals(7, filledMap.getDurability());
+        assertEquals(7, copy.getDurability());
+        assertFalse(filledMap.useDurability());
+        assertEquals(7, filledMap.getDurability());
+    }
+
+    @Test
     @DisplayName("Copy and merge checks should preserve structured stack metadata")
     void copyAndMergeRespectStructuredMetadata() {
         ItemStack enchanted = new ItemStack(ItemType.DIAMOND_SWORD, 1);
@@ -113,6 +130,32 @@ class ItemStackTest {
         assertTrue(incoming.isEmpty());
         assertEquals(64, inventory.getHotbar()[0].getCount());
         assertEquals(6, inventory.getHotbar()[1].getCount());
+    }
+
+    @Test
+    @DisplayName("Inventory should split signs by their Release 1.0 stack size")
+    void inventorySplitsSignsByReleaseStackSize() {
+        Inventory inventory = new Inventory();
+        ItemStack incoming = new ItemStack(ItemType.SIGN, 17);
+
+        assertTrue(inventory.addItem(incoming));
+
+        assertTrue(incoming.isEmpty());
+        assertEquals(16, inventory.getHotbar()[0].getCount());
+        assertEquals(1, inventory.getHotbar()[1].getCount());
+    }
+
+    @Test
+    @DisplayName("Inventory should split golden apples by their Release 1.0 stack size")
+    void inventorySplitsGoldenApplesByReleaseStackSize() {
+        Inventory inventory = new Inventory();
+        ItemStack incoming = new ItemStack(ItemType.GOLDEN_APPLE, 65);
+
+        assertTrue(inventory.addItem(incoming));
+
+        assertTrue(incoming.isEmpty());
+        assertEquals(64, inventory.getHotbar()[0].getCount());
+        assertEquals(1, inventory.getHotbar()[1].getCount());
     }
 
     @Test

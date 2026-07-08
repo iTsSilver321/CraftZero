@@ -15,6 +15,8 @@ public final class ScreenManager implements MenuNavigation {
 
     private final Deque<Screen> stack = new ArrayDeque<>();
     private final Runnable onEmptyBack;
+    private Runnable buttonClickSound = () -> {
+    };
 
     public ScreenManager() {
         this(() -> {
@@ -28,8 +30,17 @@ public final class ScreenManager implements MenuNavigation {
     @Override
     public void push(Screen screen) {
         Screen next = Objects.requireNonNull(screen, "screen");
+        wireButtonClickSounds(next);
         stack.addLast(next);
         next.onOpened();
+    }
+
+    public void setButtonClickSound(Runnable buttonClickSound) {
+        this.buttonClickSound = buttonClickSound == null ? () -> {
+        } : buttonClickSound;
+        for (Screen screen : stack) {
+            wireButtonClickSounds(screen);
+        }
     }
 
     public void show(Screen screen) {
@@ -139,5 +150,16 @@ public final class ScreenManager implements MenuNavigation {
 
     public List<Screen> stackSnapshot() {
         return List.copyOf(new ArrayList<>(stack));
+    }
+
+    private void wireButtonClickSounds(Screen screen) {
+        if (screen == null) {
+            return;
+        }
+        for (MenuComponent component : screen.components()) {
+            if (component instanceof MenuButton button) {
+                button.setClickSound(buttonClickSound);
+            }
+        }
     }
 }

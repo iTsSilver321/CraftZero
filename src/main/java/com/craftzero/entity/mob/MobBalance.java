@@ -16,6 +16,8 @@ public final class MobBalance {
     public static final Spec COW = new Spec(0.9f, 1.4f, 10.0f, 0.1f, false, false, 1);
     public static final Spec SHEEP = new Spec(0.9f, 1.3f, 8.0f, 0.1f, false, false, 1);
     public static final Spec CHICKEN = new Spec(0.4f, 0.7f, 4.0f, 0.12f, false, false, 1);
+    public static final Spec WOLF = new Spec(0.6f, 0.85f, 8.0f, 0.3f, false, false, 1);
+    public static final Spec MOOSHROOM = new Spec(0.9f, 1.4f, 10.0f, 0.1f, false, false, 1);
 
     private MobBalance() {
     }

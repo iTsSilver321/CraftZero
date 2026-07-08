@@ -6,8 +6,6 @@ import java.util.List;
 import java.util.Random;
 
 final class FeaturePlanner {
-    private static final int TREE_ATTEMPTS = 8;
-    private static final int SMALL_FEATURE_ATTEMPTS = 10;
     private static final int TREE_ACCEPTANCE_RADIUS_CHUNKS = 2;
 
     private final long seed;
@@ -58,83 +56,76 @@ final class FeaturePlanner {
         return List.copyOf(intersecting);
     }
 
-    List<SmallFeature> smallFeaturesForChunk(int chunkX, int chunkZ) {
-        List<SmallFeature> features = new ArrayList<>();
-        for (SmallFeature feature : rawSmallFeaturesForOrigin(chunkX, chunkZ)) {
-            if (feature.intersectsChunk(chunkX, chunkZ)) {
-                features.add(feature);
-            }
-        }
-        features.sort(Comparator.comparingInt(SmallFeature::x).thenComparingInt(SmallFeature::z));
-        return List.copyOf(features);
-    }
-
     private List<TreeFeature.Candidate> rawTreeCandidatesForOrigin(int originChunkX, int originChunkZ) {
         Random random = populationRandom(originChunkX, originChunkZ, 0x54AEEF01L);
         List<TreeFeature.Candidate> candidates = new ArrayList<>();
         int baseX = originChunkX * Chunk.WIDTH;
         int baseZ = originChunkZ * Chunk.DEPTH;
-        for (int i = 0; i < TREE_ATTEMPTS; i++) {
-            int x = baseX + random.nextInt(Chunk.WIDTH);
-            int z = baseZ + random.nextInt(Chunk.DEPTH);
-            BiomeType biome = generator.getBiome(x, z);
-            if (!biome.isTreeBiome() || biome == BiomeType.MUSHROOM_ISLAND || biome == BiomeType.MUSHROOM_ISLAND_SHORE) {
-                random.nextInt();
-                continue;
-            }
-            if (random.nextInt(treeChanceDivisor(biome)) != 0) {
-                continue;
-            }
+        BiomeType biome = generator.getBiome(baseX + 16, baseZ + 16);
+        int attempts = treesPerChunk(biome);
+        if (attempts < 0) {
+            return candidates;
+        }
+        if (random.nextInt(10) == 0) {
+            attempts++;
+        }
+        for (int i = 0; i < attempts; i++) {
+            int x = baseX + random.nextInt(Chunk.WIDTH) + 8;
+            int z = baseZ + random.nextInt(Chunk.DEPTH) + 8;
             int y = generator.terrainTopY(x, z) + 1;
-            int height = 4 + random.nextInt(3);
+            TreeSpec spec = treeSpecForBiome(biome, random);
+            if (spec.kind() == TreeFeature.Kind.SWAMP) {
+                while (y > 1 && generator.baseBlockAt(x, y - 1, z).isWater()) {
+                    y--;
+                }
+            }
             int priority = random.nextInt();
-            candidates.add(new TreeFeature.Candidate(x, y, z, height, priority));
+            candidates.add(new TreeFeature.Candidate(x, y, z, spec.height(), priority, spec.metadata(), spec.kind(),
+                    spec.dataA(), spec.dataB(), spec.dataC(), spec.dataD()));
         }
         return candidates;
     }
 
-    private List<SmallFeature> rawSmallFeaturesForOrigin(int originChunkX, int originChunkZ) {
-        Random random = populationRandom(originChunkX, originChunkZ, 0x233715A7L);
-        List<SmallFeature> features = new ArrayList<>();
-        int baseX = originChunkX * Chunk.WIDTH;
-        int baseZ = originChunkZ * Chunk.DEPTH;
-        for (int i = 0; i < SMALL_FEATURE_ATTEMPTS; i++) {
-            int x = baseX + random.nextInt(Chunk.WIDTH);
-            int z = baseZ + random.nextInt(Chunk.DEPTH);
-            int y = generator.terrainTopY(x, z) + 1;
-            BiomeType biome = generator.getBiome(x, z);
-            BlockType type = chooseSmallFeature(biome, random);
-            if (type != null) {
-                int height = type == BlockType.CACTUS ? 2 + random.nextInt(2) : 1;
-                features.add(new SmallFeature(x, y, z, type, height));
+    private int treesPerChunk(BiomeType biome) {
+        return switch (biome) {
+            case FOREST, FOREST_HILLS, TAIGA, TAIGA_HILLS -> 10;
+            case SWAMPLAND -> 2;
+            case PLAINS, DESERT, DESERT_HILLS, BEACH,
+                    MUSHROOM_ISLAND, MUSHROOM_ISLAND_SHORE -> -999;
+            default -> 0;
+        };
+    }
+
+    private TreeSpec treeSpecForBiome(BiomeType biome, Random random) {
+        if (biome == BiomeType.TAIGA || biome == BiomeType.TAIGA_HILLS) {
+            if (random.nextInt(3) == 0) {
+                int height = random.nextInt(5) + 7;
+                int leafStart = height - random.nextInt(2) - 3;
+                int maxRadius = 1 + random.nextInt(height - leafStart + 1);
+                return new TreeSpec(height, 1, TreeFeature.Kind.TAIGA1, leafStart, maxRadius, 0, 0);
+            }
+            int height = random.nextInt(4) + 6;
+            int topOffset = 1 + random.nextInt(2);
+            int maxRadius = 2 + random.nextInt(2);
+            int initialRadius = random.nextInt(2);
+            int trunkShorten = random.nextInt(3);
+            return new TreeSpec(height, 1, TreeFeature.Kind.TAIGA2, topOffset, maxRadius, initialRadius, trunkShorten);
+        }
+        if (biome == BiomeType.FOREST || biome == BiomeType.FOREST_HILLS) {
+            if (random.nextInt(5) == 0) {
+                return TreeSpec.normal(5 + random.nextInt(3), 2, random);
+            }
+            if (random.nextInt(10) == 0) {
+                return TreeSpec.big(random);
             }
         }
-        return features;
-    }
-
-    private BlockType chooseSmallFeature(BiomeType biome, Random random) {
-        if (biome == BiomeType.DESERT || biome == BiomeType.DESERT_HILLS) {
-            return random.nextInt(5) == 0 ? BlockType.CACTUS : null;
+        if (biome == BiomeType.SWAMPLAND) {
+            return TreeSpec.swamp(5 + random.nextInt(4), random);
         }
-        if (biome == BiomeType.MUSHROOM_ISLAND || biome == BiomeType.MUSHROOM_ISLAND_SHORE) {
-            return random.nextInt(4) == 0 ? (random.nextBoolean() ? BlockType.BROWN_MUSHROOM : BlockType.RED_MUSHROOM)
-                    : null;
+        if (random.nextInt(10) == 0) {
+            return TreeSpec.big(random);
         }
-        if (biome == BiomeType.SWAMPLAND && random.nextInt(4) == 0) {
-            return random.nextBoolean() ? BlockType.BROWN_MUSHROOM : BlockType.RED_MUSHROOM;
-        }
-        if (biome.isTreeBiome() || biome == BiomeType.PLAINS) {
-            return random.nextInt(5) == 0 ? (random.nextBoolean() ? BlockType.YELLOW_FLOWER : BlockType.RED_ROSE) : null;
-        }
-        return null;
-    }
-
-    private int treeChanceDivisor(BiomeType biome) {
-        return switch (biome) {
-            case FOREST, FOREST_HILLS -> 3;
-            case TAIGA, TAIGA_HILLS, SWAMPLAND -> 6;
-            default -> 10;
-        };
+        return TreeSpec.normal(4 + random.nextInt(3), 0, random);
     }
 
     private Random populationRandom(int chunkX, int chunkZ, long salt) {
@@ -145,40 +136,36 @@ final class FeaturePlanner {
         return new Random(mixed);
     }
 
-    record SmallFeature(int x, int y, int z, BlockType type, int height) {
-        boolean intersectsChunk(int chunkX, int chunkZ) {
-            int minX = chunkX * Chunk.WIDTH;
-            int minZ = chunkZ * Chunk.DEPTH;
-            return x >= minX && x < minX + Chunk.WIDTH && z >= minZ && z < minZ + Chunk.DEPTH;
+    private record TreeSpec(int height, int metadata, TreeFeature.Kind kind, int dataA, int dataB, int dataC,
+            int dataD) {
+        private static TreeSpec normal(int height, int metadata, Random random) {
+            return new TreeSpec(height, metadata, TreeFeature.Kind.NORMAL, normalLeafCornerMask(random), 0, 0, 0);
         }
 
-        void placeInto(Chunk chunk, int chunkX, int chunkZ, TreeFeature.BlockQuery query) {
-            int localX = x - chunkX * Chunk.WIDTH;
-            int localZ = z - chunkZ * Chunk.DEPTH;
-            if (!Chunk.isInBounds(localX, y, localZ)) {
-                return;
-            }
-            BlockType support = query.getBlock(x, y - 1, z);
-            if (type == BlockType.CACTUS) {
-                if (support != BlockType.SAND) {
-                    return;
+        private static TreeSpec swamp(int height, Random random) {
+            int cornerMask = 0;
+            for (int i = 0; i < 16; i++) {
+                if (random.nextInt(2) != 0) {
+                    cornerMask |= 1 << i;
                 }
-                for (int i = 0; i < height && y + i < Chunk.HEIGHT; i++) {
-                    if (chunk.getBlock(localX, y + i, localZ) != BlockType.AIR) {
-                        return;
-                    }
+            }
+            return new TreeSpec(height, 0, TreeFeature.Kind.SWAMP, cornerMask, random.nextInt(), random.nextInt(), 0);
+        }
+
+        private static TreeSpec big(Random random) {
+            long seed = random.nextLong();
+            int height = 5 + new Random(seed).nextInt(12);
+            return new TreeSpec(height, 0, TreeFeature.Kind.BIG, (int) (seed >>> 32), (int) seed, 0, 0);
+        }
+
+        private static int normalLeafCornerMask(Random random) {
+            int mask = 0;
+            for (int i = 0; i < 16; i++) {
+                if (random.nextInt(2) == 0) {
+                    mask |= 1 << i;
                 }
-                for (int i = 0; i < height && y + i < Chunk.HEIGHT; i++) {
-                    chunk.setBlock(localX, y + i, localZ, BlockType.CACTUS);
-                }
-                return;
             }
-            if (!TreeFeature.isTreeSupport(support) && support != BlockType.MYCELIUM) {
-                return;
-            }
-            if (chunk.getBlock(localX, y, localZ) == BlockType.AIR) {
-                chunk.setBlock(localX, y, localZ, type);
-            }
+            return mask;
         }
     }
 }

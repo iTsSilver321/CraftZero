@@ -2,6 +2,7 @@ package com.craftzero.entity.ai;
 
 import com.craftzero.entity.LivingEntity;
 import com.craftzero.main.Player;
+import com.craftzero.world.World;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -9,6 +10,8 @@ import java.util.function.BooleanSupplier;
  * Requires line-of-sight if configured.
  */
 public class TargetNearestGoal implements Goal {
+    public record State(int checkCooldown, int sightLostTicks, int targetRefreshCooldown) {
+    }
 
     private final LivingEntity mob;
     private final MobAI ai;
@@ -42,6 +45,19 @@ public class TargetNearestGoal implements Goal {
         this.targetRefreshCooldown = 0;
     }
 
+    public State getState() {
+        return new State(checkCooldown, sightLostTicks, targetRefreshCooldown);
+    }
+
+    public void restoreState(State state) {
+        if (state == null) {
+            return;
+        }
+        checkCooldown = Math.max(0, state.checkCooldown());
+        sightLostTicks = Math.max(0, state.sightLostTicks());
+        targetRefreshCooldown = Math.max(0, state.targetRefreshCooldown());
+    }
+
     @Override
     public int getPriority() {
         return 2; // High priority
@@ -51,7 +67,7 @@ public class TargetNearestGoal implements Goal {
     public boolean canUse() {
         if (checkCooldown > 0) {
             checkCooldown--;
-            return ai.hasMoveTarget(); // Keep current target if we have one
+            return ai.hasMoveTarget() || ai.hasRemotePlayerTarget(); // Keep current target if we have one
         }
 
         if (!canTargetPredicate.getAsBoolean()) {
@@ -66,8 +82,13 @@ public class TargetNearestGoal implements Goal {
 
     @Override
     public boolean canContinue() {
-        if (!ai.hasMoveTarget() || !canTargetPredicate.getAsBoolean()) {
+        if ((!ai.hasMoveTarget() && !ai.hasRemotePlayerTarget()) || !canTargetPredicate.getAsBoolean()) {
             return false;
+        }
+
+        World.RemotePlayerTarget remoteTarget = ai.getRemotePlayerTarget();
+        if (remoteTarget != null) {
+            return canContinueRemote(remoteTarget);
         }
 
         Player player = mob.getWorld() != null ? mob.getWorld().getPlayer() : null;
@@ -97,7 +118,7 @@ public class TargetNearestGoal implements Goal {
         // Update target position
         targetRefreshCooldown--;
         if (targetRefreshCooldown <= 0) {
-            ai.setMoveTarget(player.getPosition().x, player.getPosition().z);
+            ai.setMoveTarget(player.getPosition().x, player.getPosition().y, player.getPosition().z);
             targetRefreshCooldown = CHECK_INTERVAL;
         }
         return true;
@@ -111,6 +132,11 @@ public class TargetNearestGoal implements Goal {
 
     @Override
     public void tick() {
+        World.RemotePlayerTarget remoteTarget = ai.getRemotePlayerTarget();
+        if (remoteTarget != null) {
+            mob.lookAt(remoteTarget.x(), remoteTarget.eyeY(), remoteTarget.z());
+            return;
+        }
         Player player = mob.getWorld() != null ? mob.getWorld().getPlayer() : null;
         if (player != null) {
             // Look at player
@@ -121,6 +147,7 @@ public class TargetNearestGoal implements Goal {
     @Override
     public void stop() {
         ai.clearMoveTarget();
+        ai.clearRemotePlayerTarget();
         sightLostTicks = 0;
     }
 
@@ -135,26 +162,61 @@ public class TargetNearestGoal implements Goal {
             return false;
         }
 
+        World.RemotePlayerTarget assignedRemoteTarget = ai.getRemotePlayerTarget();
+        if (assignedRemoteTarget != null
+                && distanceToRemoteTarget(assignedRemoteTarget) <= range
+                && (!requireSight || hasLineOfSight(assignedRemoteTarget))) {
+            ai.setMoveTarget(assignedRemoteTarget.x(), assignedRemoteTarget.y(), assignedRemoteTarget.z());
+            return true;
+        }
+
         Player player = mob.getWorld().getPlayer();
-        if (player == null)
-            return false;
+        boolean localValid = isValidLocalTarget(player);
+        float localDist = localValid ? distanceToPlayer(player) : Float.MAX_VALUE;
+        if (localDist > range) {
+            localValid = false;
+        }
 
-        // Check if player is in range
-        float dist = distanceToPlayer(player);
-        if (dist > range)
-            return false;
+        World.RemotePlayerTarget remoteTarget = mob.getWorld().nearestRemotePlayerTarget(
+                mob.getX(), mob.getY(), mob.getZ(), range, requireSight);
+        if (remoteTarget != null && remoteTarget.valid() && (!localValid || remoteTarget.distance() <= localDist)) {
+            ai.setRemotePlayerTarget(remoteTarget);
+            ai.setMoveTarget(remoteTarget.x(), remoteTarget.y(), remoteTarget.z());
+            return true;
+        }
 
-        // Check if player is alive
-        if (player.getStats().getHealth() <= 0 || player.isCreative() || !player.getDifficulty().allowsHostileSpawns())
-            return false;
-
-        // Check line of sight if required
-        if (requireSight && !hasLineOfSight(player)) {
+        if (!localValid || (requireSight && !hasLineOfSight(player))) {
             return false;
         }
 
-        // Set as target
-        ai.setMoveTarget(player.getPosition().x, player.getPosition().z);
+        ai.clearRemotePlayerTarget();
+        ai.setMoveTarget(player.getPosition().x, player.getPosition().y, player.getPosition().z);
+        return true;
+    }
+
+    private boolean canContinueRemote(World.RemotePlayerTarget target) {
+        if (target == null || !target.valid()) {
+            return false;
+        }
+        float dist = distanceToRemoteTarget(target);
+        if (dist > range * 1.5f) {
+            return false;
+        }
+        if (requireSight) {
+            if (hasLineOfSight(target)) {
+                sightLostTicks = 0;
+            } else {
+                sightLostTicks++;
+                if (sightLostTicks > SIGHT_MEMORY) {
+                    return false;
+                }
+            }
+        }
+        targetRefreshCooldown--;
+        if (targetRefreshCooldown <= 0) {
+            ai.setMoveTarget(target.x(), target.y(), target.z());
+            targetRefreshCooldown = CHECK_INTERVAL;
+        }
         return true;
     }
 
@@ -177,11 +239,34 @@ public class TargetNearestGoal implements Goal {
                 player.getPosition().x, targetY, player.getPosition().z);
     }
 
+    private boolean hasLineOfSight(World.RemotePlayerTarget target) {
+        return target != null && mob.getWorld() != null
+                && LineOfSightUtil.hasLineOfSight(
+                        mob.getWorld(),
+                        mob.getX(), mob.getY() + mob.getHeight() * 0.85f, mob.getZ(),
+                        target.x(), target.eyeY(), target.z());
+    }
+
     private float distanceToPlayer(Player player) {
         float dx = player.getPosition().x - mob.getX();
         float dy = player.getPosition().y - mob.getY();
         float dz = player.getPosition().z - mob.getZ();
         return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    private float distanceToRemoteTarget(World.RemotePlayerTarget target) {
+        float dx = target.x() - mob.getX();
+        float dy = target.y() - mob.getY();
+        float dz = target.z() - mob.getZ();
+        return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    private boolean isValidLocalTarget(Player player) {
+        return player != null
+                && player.getStats().getHealth() > 0.0f
+                && !player.isCreative()
+                && player.getDifficulty().allowsHostileSpawns()
+                && (!requireSight || hasLineOfSight(player));
     }
 
     @Override
